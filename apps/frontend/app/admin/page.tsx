@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { useAppStore } from "@/store";
 import { useSocket } from "@/lib/socket/useSocket";
-import { tablesApi, queueApi, ordersApi, playbackApi } from "@/lib/api/services";
-import type { QueueItem, Table, Order, PlaybackState } from "@coffee-bar/shared";
+import {
+  tablesApi,
+  queueApi,
+  ordersApi,
+  playbackApi,
+} from "@/lib/api/services";
+import type {
+  QueueItem,
+  Table,
+  Order,
+  PlaybackState,
+} from "@coffee-bar/shared";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
@@ -372,6 +382,7 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function AdminPage() {
+  const actionRef = useRef(false);
   const {
     allTables,
     setAllTables,
@@ -416,11 +427,42 @@ export default function AdminPage() {
     playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
   }, []);
 
+  const handleSkipCurrent = useCallback(async () => {
+    if (actionRef.current || !currentPlayback?.queue_item_id) return;
+
+    actionRef.current = true;
+
+    try {
+      await queueApi.skip(currentPlayback.queue_item_id);
+      await queueApi.playNext();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      actionRef.current = false;
+    }
+  }, [currentPlayback]);
+
+  const handlePlayNext = useCallback(async () => {
+    if (actionRef.current) return;
+
+    actionRef.current = true;
+
+    try {
+      await queueApi.playNext();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      actionRef.current = false;
+    }
+  }, []);
+
   const activeOrders = orders.filter(
     (o) => o.status === "pending" || o.status === "preparing",
   );
   const revenue = allTables.reduce((a, t) => a + t.total_consumption, 0);
-  const isPlaying = currentPlayback?.status === "playing" && currentPlayback.song;
+  const isPlaying =
+    currentPlayback?.status === "playing" && Boolean(currentPlayback.song);
+  const hasPendingSongs = queue.some((item) => item.status === "pending");
 
   return (
     <>
@@ -558,28 +600,71 @@ export default function AdminPage() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              color: isPlaying ? "#22c55e" : "#666",
+              gap: 10,
               flexShrink: 0,
             }}
           >
             <div
               style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: isPlaying ? "#22c55e" : "#666",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: isPlaying ? "#22c55e" : "#666",
+                marginRight: 10,
               }}
-            />
-            <span
+            >
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: isPlaying ? "#22c55e" : "#666",
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: "'Bebas Neue',Impact,sans-serif",
+                  fontSize: 12,
+                  letterSpacing: 2,
+                }}
+              >
+                {isPlaying ? "ACTIVA" : "IDLE"}
+              </span>
+            </div>
+
+            <button
+              onClick={() => void handleSkipCurrent()}
+              disabled={!isPlaying}
               style={{
+                padding: "8px 12px",
+                background: isPlaying ? "#FFDC32" : "transparent",
+                border: `1px solid ${isPlaying ? "#FFDC32" : "#202020"}`,
+                color: isPlaying ? "#0a0a0a" : "#555",
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 12,
                 letterSpacing: 2,
+                cursor: isPlaying ? "pointer" : "not-allowed",
               }}
             >
-              {isPlaying ? "ACTIVA" : "IDLE"}
-            </span>
+              SALTAR CANCION
+            </button>
+            <a
+              href="/player"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                padding: "8px 12px",
+                background: "transparent",
+                border: "1px solid #202020",
+                color: "#888",
+                fontFamily: "'Bebas Neue',Impact,sans-serif",
+                fontSize: 12,
+                letterSpacing: 2,
+                textDecoration: "none",
+              }}
+            >
+              ABRIR PLAYER
+            </a>
           </div>
         </div>
 

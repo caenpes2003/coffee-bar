@@ -37,6 +37,10 @@ export const queueApi = {
     table_id: number;
   }): Promise<QueueItem> =>
     api.post<QueueItem>("/queue", payload).then((r) => r.data),
+  playNext: (): Promise<QueueItem | null> =>
+    api.post<QueueItem | null>("/queue/play-next").then((r) => r.data),
+  finishCurrent: (): Promise<QueueItem | null> =>
+    api.post<QueueItem | null>("/queue/finish-current").then((r) => r.data),
   skip: (itemId: number): Promise<QueueItem> =>
     api.patch<QueueItem>(`/queue/${itemId}/skip`).then((r) => r.data),
 };

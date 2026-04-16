@@ -7,9 +7,24 @@ import type { SocketEvents } from "@coffee-bar/shared";
 // ─── Singleton ────────────────────────────────────────────────────────────────
 let socket: Socket | null = null;
 
+function resolveSocketUrl() {
+  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
+    return process.env.NEXT_PUBLIC_SOCKET_URL;
+  }
+
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+
+    return `${protocol}//${hostname}:3001`;
+  }
+
+  return "http://localhost:3001";
+}
+
 function getSocket(): Socket {
   if (!socket) {
-    socket = io(process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001", {
+    socket = io(resolveSocketUrl(), {
       transports: ["websocket"],
       autoConnect: false,
     });

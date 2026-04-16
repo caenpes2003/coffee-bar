@@ -1,7 +1,22 @@
 import axios from "axios";
 
+function resolveApiBaseUrl() {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+
+    return `${protocol}//${hostname}:3001/api`;
+  }
+
+  return "http://localhost:3001/api";
+}
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api",
+  baseURL: resolveApiBaseUrl(),
   timeout: 10_000,
   headers: {
     "Content-Type": "application/json",
