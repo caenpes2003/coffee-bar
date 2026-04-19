@@ -24,7 +24,7 @@ export interface Song {
   youtube_id: string;
   title: string;
   duration: number;
-  requested_by_table: number;
+  requested_by_table: number | null;
   created_at: string;
 }
 
@@ -37,17 +37,21 @@ export interface YouTubeSearchResult {
 
 export type QueueStatus = "pending" | "playing" | "played" | "skipped";
 
-export type PlaybackStatus = "idle" | "playing" | "paused";
+export type PlaybackStatus = "idle" | "buffering" | "playing" | "paused";
 
 export interface QueueItem {
   id: number;
   song_id: number;
-  table_id: number;
+  table_id: number | null;
   priority_score: number;
   status: QueueStatus;
   position: number;
+  queued_at: string;
   created_at: string;
   updated_at: string;
+  started_playing_at: string | null;
+  finished_at: string | null;
+  skipped_at: string | null;
   song?: Song;
   table?: Table;
 }

@@ -30,8 +30,6 @@ api.interceptors.request.use(
       const tableId = sessionStorage.getItem("table_id");
       if (tableId) {
         config.headers["x-table-id"] = tableId;
-      } else {
-        console.warn("[API] No table_id found en sessionStorage");
       }
     }
     return config;
@@ -43,12 +41,6 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 404) {
-      console.warn("[API] 404 →", error.config?.url);
-    }
-    if (error.response?.status >= 500) {
-      console.error("[API] Server error →", error.response?.data);
-    }
     return Promise.reject(error);
   },
 );

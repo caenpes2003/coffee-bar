@@ -28,6 +28,10 @@ export const queueApi = {
     api.get<QueueItem[]>("/queue/global").then((r) => r.data),
   getByTable: (tableId: number): Promise<QueueItem[]> =>
     api.get<QueueItem[]>(`/queue?table_id=${tableId}`).then((r) => r.data),
+  getByTableWithHistory: (tableId: number): Promise<QueueItem[]> =>
+    api
+      .get<QueueItem[]>(`/queue?table_id=${tableId}&include_history=true`)
+      .then((r) => r.data),
   getCurrent: (): Promise<QueueItem | null> =>
     api.get<QueueItem | null>("/queue/current").then((r) => r.data),
   addSong: (payload: {
@@ -43,11 +47,51 @@ export const queueApi = {
     api.post<QueueItem | null>("/queue/finish-current").then((r) => r.data),
   skip: (itemId: number): Promise<QueueItem> =>
     api.patch<QueueItem>(`/queue/${itemId}/skip`).then((r) => r.data),
+  /** Atomic: finish current + start next in a single call */
+  advanceToNext: (): Promise<QueueItem | null> =>
+    api.post<QueueItem | null>("/queue/next").then((r) => r.data),
+  /** Atomic: skip current + start next in a single call */
+  skipAndAdvance: (): Promise<QueueItem | null> =>
+    api.post<QueueItem | null>("/queue/skip-and-advance").then((r) => r.data),
+  /** Admin: add song without restrictions, optionally at specific position */
+  adminCreate: (payload: {
+    youtube_id: string;
+    title: string;
+    duration: number;
+    position?: number;
+  }): Promise<QueueItem> =>
+    api.post<QueueItem>("/queue/admin", payload).then((r) => r.data),
+  /** Admin: interrupt current and play this song immediately */
+  adminPlayNow: (payload: {
+    youtube_id: string;
+    title: string;
+    duration: number;
+  }): Promise<QueueItem> =>
+    api.post<QueueItem>("/queue/admin/play-now", payload).then((r) => r.data),
+  getStats: (): Promise<{
+    songs_played_today: number;
+    songs_skipped_today: number;
+    songs_pending: number;
+    total_songs_today: number;
+    avg_wait_seconds: number | null;
+    tables_participating: number;
+    top_table: { table_id: number; count: number } | null;
+  }> => api.get("/queue/stats").then((r) => r.data),
 };
 
 export const playbackApi = {
   getCurrent: (): Promise<PlaybackState> =>
     api.get<PlaybackState>("/playback/current").then((r) => r.data),
+  /** Notify backend that the player started playing (buffering → playing) */
+  setPlaying: (): Promise<PlaybackState> =>
+    api.patch<PlaybackState>("/playback/playing").then((r) => r.data),
+  /** Sync current playback position */
+  updateProgress: (positionSeconds: number): Promise<PlaybackState> =>
+    api
+      .patch<PlaybackState>("/playback/progress", {
+        position_seconds: positionSeconds,
+      })
+      .then((r) => r.data),
 };
 
 // ─── Orders ───────────────────────────────────────────────────────────────────

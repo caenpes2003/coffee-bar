@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { PlaybackState } from "@coffee-bar/shared";
+import { playbackApi } from "@/lib/api/services";
 
 type YouTubePlayerInstance = {
   destroy: () => Promise<void> | void;
@@ -9,7 +10,8 @@ type YouTubePlayerInstance = {
   pauseVideo: () => Promise<void>;
   playVideo: () => Promise<void>;
   stopVideo: () => Promise<void>;
-  on: (eventName: string, listener: () => void) => void;
+  getCurrentTime: () => Promise<number>;
+  on: (eventName: string, listener: (event?: { data?: number }) => void) => void;
 };
 
 type YouTubePlayerFactory = (
@@ -58,11 +60,16 @@ export function AdminPlaybackPlayer({
   const loadedVideoIdRef = useRef<string | null>(null);
   const playbackRef = useRef<PlaybackState | null>(playback);
   const endedCallbackRef = useRef<typeof onPlaybackEnded>(onPlaybackEnded);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [isBuffering, setIsBuffering] = useState(false);
 
   const currentSong = playback?.song ?? null;
   const youtubeId = currentSong?.youtube_id ?? null;
+  const isActive =
+    (playback?.status === "playing" || playback?.status === "buffering") &&
+    Boolean(youtubeId);
   const isPlaying = playback?.status === "playing" && Boolean(youtubeId);
 
   useEffect(() => {
@@ -110,7 +117,23 @@ export function AdminPlaybackPlayer({
       });
 
       player.on("stateChange", (event?: { data?: number }) => {
-        if (event?.data !== 0) return;
+        const state = event?.data;
+
+        // YouTube states: 3 = buffering, 1 = playing, 0 = ended
+        if (state === 3) {
+          setIsBuffering(true);
+        }
+
+        if (state === 1) {
+          // Video started playing — notify backend
+          setIsBuffering(false);
+          const pb = playbackRef.current;
+          if (pb?.status === "buffering") {
+            playbackApi.setPlaying().catch(console.error);
+          }
+        }
+
+        if (state !== 0) return;
 
         const currentPlayback = playbackRef.current;
         if (currentPlayback?.status !== "playing") return;
@@ -127,6 +150,11 @@ export function AdminPlaybackPlayer({
       cancelled = true;
       setIsReady(false);
 
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+
       if (playerRef.current) {
         void Promise.resolve(playerRef.current.destroy()).catch(() => undefined);
         playerRef.current = null;
@@ -135,6 +163,46 @@ export function AdminPlaybackPlayer({
       loadedVideoIdRef.current = null;
     };
   }, []);
+
+  // Buffering timeout: if stuck in buffering >30s, force transition to playing
+  useEffect(() => {
+    if (playback?.status !== "buffering") return;
+
+    const timeout = setTimeout(() => {
+      playbackApi.setPlaying().catch(console.error);
+    }, 30_000);
+
+    return () => clearTimeout(timeout);
+  }, [playback?.status]);
+
+  // Sync position_seconds to backend every 10s while playing
+  useEffect(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+
+    if (!isPlaying || !isReady || !playerRef.current) return;
+
+    const player = playerRef.current;
+    progressIntervalRef.current = setInterval(async () => {
+      try {
+        // Guard: only sync if still playing (avoid race with state changes)
+        if (playbackRef.current?.status !== "playing") return;
+        const time = await player.getCurrentTime();
+        playbackApi.updateProgress(time).catch(() => undefined);
+      } catch {
+        // player may be destroyed
+      }
+    }, 10_000);
+
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+    };
+  }, [isPlaying, isReady]);
 
   useEffect(() => {
     const player = playerRef.current;
@@ -157,7 +225,7 @@ export function AdminPlaybackPlayer({
         loadedVideoIdRef.current = youtubeId;
       }
 
-      if (isPlaying) {
+      if (isActive) {
         await readyPlayer.playVideo().catch(() => undefined);
         return;
       }
@@ -166,15 +234,15 @@ export function AdminPlaybackPlayer({
     }
 
     syncPlayback().catch(console.error);
-  }, [isPlaying, isReady, youtubeId]);
+  }, [isActive, isReady, youtubeId]);
 
   return (
     <section
       className={mode === "screen" ? "playback-shell playback-shell-screen" : "playback-shell"}
       style={{
         padding: mode === "screen" ? "20px 28px 28px" : "16px 20px 20px",
-        borderBottom: mode === "screen" ? "none" : "1px solid #161616",
-        background: "#0b0b0b",
+        borderBottom: mode === "screen" ? "none" : "1px solid #e5e7eb",
+        background: "#fff",
         display: "grid",
         gap: mode === "screen" ? 20 : 16,
         gridTemplateColumns:
@@ -239,13 +307,14 @@ export function AdminPlaybackPlayer({
         className="playback-video-frame"
         style={{
           minHeight: mode === "screen" ? undefined : PLAYER_HEIGHT,
-          border: "1px solid #1f1f1f",
-          background: "#050505",
+          border: "1px solid #e5e7eb",
+          background: "#f9fafb",
           position: "relative",
           overflow: "hidden",
+          borderRadius: 6,
           boxShadow:
             mode === "screen"
-              ? "0 24px 90px rgba(0,0,0,0.45)"
+              ? "0 10px 40px rgba(0,0,0,0.1)"
               : undefined,
         }}
       >
@@ -267,12 +336,11 @@ export function AdminPlaybackPlayer({
               justifyContent: "center",
               padding: 24,
               textAlign: "center",
-              color: "#4a4a4a",
+              color: "#9ca3af",
               fontFamily: "monospace",
               fontSize: 11,
               letterSpacing: 2,
-              background:
-                "linear-gradient(135deg, rgba(255,220,50,0.05), rgba(0,0,0,0.9))",
+              background: "#f3f4f6",
             }}
           >
             {playerError ?? "SIN VIDEO ACTIVO"}
@@ -283,8 +351,9 @@ export function AdminPlaybackPlayer({
       <div
         className="playback-meta-panel"
         style={{
-          border: "1px solid #1f1f1f",
-          background: "#0f0f0f",
+          border: "1px solid #e5e7eb",
+          background: "#f9fafb",
+          borderRadius: 6,
           padding: mode === "screen" ? 24 : 18,
           display: "flex",
           flexDirection: "column",
@@ -296,7 +365,7 @@ export function AdminPlaybackPlayer({
           <div
             style={{
               fontSize: 9,
-              color: "#555",
+              color: "#9ca3af",
               letterSpacing: 2,
               fontFamily: "monospace",
               marginBottom: 8,
@@ -309,7 +378,7 @@ export function AdminPlaybackPlayer({
             style={{
               fontFamily: "'Bebas Neue',Impact,sans-serif",
               fontSize: mode === "screen" ? 32 : 22,
-              color: "#f5f5f5",
+              color: "#111",
               lineHeight: 1.05,
             }}
           >
@@ -329,7 +398,7 @@ export function AdminPlaybackPlayer({
             <div
               style={{
                 fontSize: 9,
-                color: "#444",
+                color: "#9ca3af",
                 letterSpacing: 2,
                 fontFamily: "monospace",
               }}
@@ -341,10 +410,14 @@ export function AdminPlaybackPlayer({
                 marginTop: 4,
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 18,
-                color: isPlaying ? "#22c55e" : "#777",
+                color: isPlaying ? "#16a34a" : "#9ca3af",
               }}
             >
-              {isPlaying ? "SONANDO AHORA" : "EN ESPERA"}
+              {isBuffering
+                ? "CARGANDO..."
+                : isPlaying
+                  ? "SONANDO AHORA"
+                  : "EN ESPERA"}
             </div>
           </div>
 
@@ -352,7 +425,7 @@ export function AdminPlaybackPlayer({
             <div
               style={{
                 fontSize: 9,
-                color: "#444",
+                color: "#9ca3af",
                 letterSpacing: 2,
                 fontFamily: "monospace",
               }}
@@ -364,7 +437,7 @@ export function AdminPlaybackPlayer({
                 marginTop: 4,
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 18,
-                color: "#FFDC32",
+                color: "#ca8a04",
               }}
             >
               {formatDuration(currentSong?.duration)}
@@ -375,7 +448,7 @@ export function AdminPlaybackPlayer({
             <div
               style={{
                 fontSize: 9,
-                color: "#444",
+                color: "#9ca3af",
                 letterSpacing: 2,
                 fontFamily: "monospace",
               }}
@@ -387,10 +460,10 @@ export function AdminPlaybackPlayer({
                 marginTop: 4,
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 18,
-                color: "#f5f5f5",
+                color: "#111",
               }}
             >
-              {playback?.table_id ? `Mesa ${String(playback.table_id).padStart(2, "0")}` : "--"}
+              {playback?.table_id ? `Mesa ${String(playback.table_id).padStart(2, "0")}` : "ADMIN"}
             </div>
           </div>
 
@@ -398,7 +471,7 @@ export function AdminPlaybackPlayer({
             <div
               style={{
                 fontSize: 9,
-                color: "#444",
+                color: "#9ca3af",
                 letterSpacing: 2,
                 fontFamily: "monospace",
               }}
@@ -410,7 +483,7 @@ export function AdminPlaybackPlayer({
                 marginTop: 4,
                 fontFamily: "monospace",
                 fontSize: 11,
-                color: "#777",
+                color: "#888",
                 wordBreak: "break-all",
               }}
             >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, use, useCallback } from "react";
+import { useEffect, use, useCallback, useState } from "react";
 import {
   useAppStore,
   selectCurrentPlayback,
@@ -20,10 +20,11 @@ import type {
   PlaybackState,
 } from "@coffee-bar/shared";
 import {
-  MAX_SONGS_PER_TABLE,
   SCOREBOARD_MAX_CONSUMPTION,
+  MAX_SONGS_PER_TABLE,
 } from "@coffee-bar/shared";
 import SongSearch from "@/components/music/SongSearch";
+import { MySongsPanel } from "@/components/music/MySongsPanel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
@@ -34,7 +35,6 @@ const fmt = (n: number) =>
   }).format(n);
 
 const pad = (n: number) => String(n).padStart(2, "0");
-
 const secToMin = (s: number) => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 
 function buildMesaQueue(tableQueue: QueueItem[], tableId: number) {
@@ -54,42 +54,18 @@ function Scoreboard({
   const MAX = SCOREBOARD_MAX_CONSUMPTION;
   const pct = Math.min(100, Math.round((table.total_consumption / MAX) * 100));
   const isPlaying = playback?.status === "playing" && playback.song;
-  const playbackColor = isPlaying ? "#22c55e" : "#666";
-  const playbackLabel = isPlaying ? "SONANDO AHORA" : "SIN REPRODUCCION";
+  const playbackColor = isPlaying ? "#16a34a" : "#9ca3af";
+  const playbackLabel = isPlaying ? "SONANDO AHORA" : "SIN REPRODUCCIÓN";
 
   return (
     <div
       style={{
-        background: "#0a0a0a",
-        borderBottom: "1px solid #1a1a1a",
+        background: "#f9fafb",
+        borderBottom: "1px solid #e5e7eb",
         padding: "20px 20px 16px",
         position: "relative",
-        overflow: "hidden",
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: 70,
-          height: 70,
-          background:
-            "radial-gradient(circle at 0 0,rgba(255,220,50,0.13) 0%,transparent 70%)",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          width: 70,
-          height: 70,
-          background:
-            "radial-gradient(circle at 100% 0,rgba(255,220,50,0.13) 0%,transparent 70%)",
-        }}
-      />
-
       <div
         style={{
           display: "flex",
@@ -103,7 +79,7 @@ function Scoreboard({
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 11,
             letterSpacing: 3,
-            color: "#555",
+            color: "#9ca3af",
           }}
         >
           MESA
@@ -144,7 +120,7 @@ function Scoreboard({
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 86,
             lineHeight: 1,
-            color: "#f5f5f5",
+            color: "#111",
             letterSpacing: -3,
           }}
         >
@@ -155,7 +131,7 @@ function Scoreboard({
             style={{
               fontFamily: "'Bebas Neue',Impact,sans-serif",
               fontSize: 22,
-              color: "#FFDC32",
+              color: "#ca8a04",
             }}
           >
             {fmt(table.total_consumption)}
@@ -174,7 +150,7 @@ function Scoreboard({
           <span
             style={{
               fontSize: 10,
-              color: "#444",
+              color: "#9ca3af",
               letterSpacing: 2,
               fontFamily: "monospace",
             }}
@@ -182,17 +158,24 @@ function Scoreboard({
             CONSUMO
           </span>
           <span
-            style={{ fontSize: 10, color: "#FFDC32", fontFamily: "monospace" }}
+            style={{ fontSize: 10, color: "#ca8a04", fontFamily: "monospace" }}
           >
             {pct}%
           </span>
         </div>
-        <div style={{ height: 4, background: "#1a1a1a", overflow: "hidden" }}>
+        <div
+          style={{
+            height: 4,
+            background: "#e5e7eb",
+            overflow: "hidden",
+            borderRadius: 2,
+          }}
+        >
           <div
             style={{
               height: "100%",
               width: `${pct}%`,
-              background: "linear-gradient(90deg,#FFDC32,#FF8C00)",
+              background: "linear-gradient(90deg,#ca8a04,#ea580c)",
               transition: "width 0.8s ease",
             }}
           />
@@ -203,14 +186,15 @@ function Scoreboard({
         style={{
           marginTop: 16,
           padding: "10px 12px",
-          border: "1px solid #1a1a1a",
-          background: isPlaying ? "rgba(255,220,50,0.06)" : "#0d0d0d",
+          border: "1px solid #e5e7eb",
+          background: isPlaying ? "#f0fdf4" : "#fff",
+          borderRadius: 6,
         }}
       >
         <div
           style={{
             fontSize: 9,
-            color: "#555",
+            color: "#9ca3af",
             letterSpacing: 2,
             fontFamily: "monospace",
             marginBottom: 6,
@@ -224,7 +208,7 @@ function Scoreboard({
               style={{
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 16,
-                color: "#f5f5f5",
+                color: "#111",
                 lineHeight: 1.1,
               }}
             >
@@ -233,25 +217,25 @@ function Scoreboard({
             <div
               style={{
                 fontSize: 10,
-                color: "#777",
+                color: "#888",
                 fontFamily: "monospace",
                 marginTop: 4,
               }}
             >
               {secToMin(playback.song?.duration ?? 0)} · Mesa{" "}
-              {pad(playback.table_id ?? 0)}
+              {playback.table_id ? pad(playback.table_id) : "ADMIN"}
             </div>
           </>
         ) : (
           <div
             style={{
               fontSize: 10,
-              color: "#444",
+              color: "#9ca3af",
               fontFamily: "monospace",
               letterSpacing: 1,
             }}
           >
-            AUN NO HAY UNA CANCION REPRODUCIENDOSE
+            AÚN NO HAY UNA CANCIÓN REPRODUCIÉNDOSE
           </div>
         )}
       </div>
@@ -279,8 +263,8 @@ function QueueRow({
         alignItems: "center",
         gap: 14,
         padding: "12px 0",
-        borderBottom: "1px solid #111",
-        opacity: playing ? 1 : 0.72,
+        borderBottom: "1px solid #f3f4f6",
+        background: playing ? "#f0fdf4" : "transparent",
       }}
     >
       <div
@@ -289,7 +273,7 @@ function QueueRow({
           minWidth: 26,
           fontFamily: "'Bebas Neue',Impact,sans-serif",
           fontSize: playing ? 20 : 15,
-          color: playing ? "#FFDC32" : "#383838",
+          color: playing ? "#16a34a" : "#d1d5db",
           textAlign: "center",
         }}
       >
@@ -300,7 +284,7 @@ function QueueRow({
           style={{
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 14,
-            color: playing ? "#f5f5f5" : "#aaa",
+            color: playing ? "#111" : "#555",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -311,12 +295,12 @@ function QueueRow({
         <div
           style={{
             fontSize: 10,
-            color: "#444",
+            color: "#9ca3af",
             fontFamily: "monospace",
             marginTop: 2,
           }}
         >
-          {secToMin(item.song?.duration ?? 0)} · Mesa {pad(item.table_id)}
+          {secToMin(item.song?.duration ?? 0)}
         </div>
       </div>
       <div
@@ -333,17 +317,18 @@ function QueueRow({
               fontSize: 9,
               fontFamily: "monospace",
               letterSpacing: 1,
-              color: "#FFDC32",
-              background: "rgba(255,220,50,0.08)",
-              border: "1px solid rgba(255,220,50,0.18)",
+              color: "#ca8a04",
+              background: "#fffbeb",
+              border: "1px solid #fde68a",
               padding: "2px 6px",
+              borderRadius: 3,
             }}
           >
             TU MESA
           </div>
         )}
-        <div style={{ fontSize: 10, color: "#444", fontFamily: "monospace" }}>
-          {playing ? "AHORA" : `pos. ${item.position}`}
+        <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>
+          {playing ? "AHORA" : ""}
         </div>
       </div>
     </div>
@@ -358,6 +343,7 @@ export default function MesaPage({
 }) {
   const { id } = use(params);
   const tableId = parseInt(id, 10);
+  const [globalQueue, setGlobalQueue] = useState<QueueItem[]>([]);
 
   const {
     currentTable,
@@ -366,6 +352,8 @@ export default function MesaPage({
     updateFromSocket,
     orders,
     setOrders,
+    mySongs,
+    setMySongs,
     isSearchOpen,
     setSearchOpen,
     activeTab,
@@ -378,8 +366,17 @@ export default function MesaPage({
   const myQueueCount = useAppStore(selectMyQueueCount(tableId));
 
   const handleQueueUpdated = useCallback(
-    (q: QueueItem[]) => updateFromSocket(buildMesaQueue(q, tableId)),
-    [tableId, updateFromSocket],
+    (q: QueueItem[]) => {
+      updateFromSocket(buildMesaQueue(q, tableId));
+      setGlobalQueue(q);
+      const prev = useAppStore.getState().mySongs;
+      const history = prev.filter(
+        (s) => s.status === "played" || s.status === "skipped",
+      );
+      const freshActive = q.filter((item) => item.table_id === tableId);
+      setMySongs([...freshActive, ...history]);
+    },
+    [tableId, updateFromSocket, setMySongs],
   );
   const handleTableUpdated = useCallback(
     (t: Table) => {
@@ -418,6 +415,11 @@ export default function MesaPage({
         updateFromSocket(buildMesaQueue(tableQueue, tableId));
       })
       .catch(console.error);
+    queueApi
+      .getByTableWithHistory(tableId)
+      .then(setMySongs)
+      .catch(console.error);
+    queueApi.getGlobal().then(setGlobalQueue).catch(console.error);
   }, [tableId]);
 
   const myOrders = orders.filter((o) => o.table_id === tableId);
@@ -428,10 +430,10 @@ export default function MesaPage({
     padding: "13px 0",
     border: "none",
     cursor: "pointer",
-    background: activeTab === tab ? "#FFDC32" : "#0f0f0f",
-    color: activeTab === tab ? "#0a0a0a" : "#444",
+    background: activeTab === tab ? "#2563eb" : "#fff",
+    color: activeTab === tab ? "#fff" : "#888",
     borderBottom:
-      activeTab === tab ? "2px solid #FFDC32" : "2px solid transparent",
+      activeTab === tab ? "2px solid #2563eb" : "2px solid transparent",
     fontFamily: "'Bebas Neue',Impact,sans-serif",
     fontSize: 13,
     letterSpacing: 3,
@@ -442,7 +444,7 @@ export default function MesaPage({
       <div
         style={{
           minHeight: "100dvh",
-          background: "#0a0a0a",
+          background: "#fff",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -450,7 +452,7 @@ export default function MesaPage({
       >
         <span
           style={{
-            color: "#333",
+            color: "#9ca3af",
             fontFamily: "monospace",
             letterSpacing: 3,
             fontSize: 11,
@@ -475,22 +477,28 @@ export default function MesaPage({
           maxWidth: 480,
           margin: "0 auto",
           minHeight: "100dvh",
-          background: "#0a0a0a",
+          background: "#fff",
           display: "flex",
           flexDirection: "column",
         }}
       >
         <Scoreboard table={currentTable} playback={currentPlayback} />
 
-        <div style={{ display: "flex", borderBottom: "1px solid #141414" }}>
+        <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
           <button style={tabStyle("cola")} onClick={() => setActiveTab("cola")}>
-            COLA MUSICAL
+            COLA
+          </button>
+          <button
+            style={tabStyle("canciones")}
+            onClick={() => setActiveTab("canciones")}
+          >
+            MIS CANCIONES
           </button>
           <button
             style={tabStyle("pedidos")}
             onClick={() => setActiveTab("pedidos")}
           >
-            MIS PEDIDOS
+            PEDIDOS
           </button>
         </div>
 
@@ -502,31 +510,31 @@ export default function MesaPage({
                   display: "flex",
                   justifyContent: "space-between",
                   padding: "12px 0 4px",
-                  borderBottom: "1px solid #141414",
+                  borderBottom: "1px solid #f3f4f6",
                   marginBottom: 4,
                 }}
               >
                 <span
                   style={{
                     fontSize: 10,
-                    color: "#383838",
+                    color: "#9ca3af",
                     fontFamily: "monospace",
                     letterSpacing: 2,
                   }}
                 >
-                  {queue.length} EN COLA
+                  {globalQueue.length} EN COLA
                 </span>
                 <span
                   style={{
                     fontSize: 10,
-                    color: "#383838",
+                    color: "#9ca3af",
                     fontFamily: "monospace",
                   }}
                 >
-                  TU MESA: {myQueueCount}/2
+                  TU MESA: {myQueueCount}/{MAX_SONGS_PER_TABLE}
                 </span>
               </div>
-              {queue.map((item, i) => (
+              {globalQueue.map((item, i) => (
                 <QueueRow
                   key={item.id}
                   item={item}
@@ -534,12 +542,12 @@ export default function MesaPage({
                   myTableId={tableId}
                 />
               ))}
-              {queue.length === 0 && (
+              {globalQueue.length === 0 && (
                 <p
                   style={{
                     textAlign: "center",
                     padding: "40px 0",
-                    color: "#333",
+                    color: "#9ca3af",
                     fontFamily: "monospace",
                     fontSize: 11,
                     letterSpacing: 2,
@@ -551,6 +559,10 @@ export default function MesaPage({
             </>
           )}
 
+          {activeTab === "canciones" && (
+            <MySongsPanel mySongs={mySongs} globalQueue={queue} />
+          )}
+
           {activeTab === "pedidos" && (
             <div style={{ padding: "16px 0 8px" }}>
               <div
@@ -558,7 +570,7 @@ export default function MesaPage({
                   fontFamily: "'Bebas Neue',Impact,sans-serif",
                   fontSize: 11,
                   letterSpacing: 3,
-                  color: "#383838",
+                  color: "#9ca3af",
                   marginBottom: 12,
                 }}
               >
@@ -569,7 +581,7 @@ export default function MesaPage({
                   style={{
                     textAlign: "center",
                     padding: "40px 0",
-                    color: "#333",
+                    color: "#9ca3af",
                     fontFamily: "monospace",
                     fontSize: 11,
                     letterSpacing: 2,
@@ -591,7 +603,7 @@ export default function MesaPage({
                       fontFamily: "'Bebas Neue',Impact,sans-serif",
                       fontSize: 13,
                       letterSpacing: 3,
-                      color: "#555",
+                      color: "#9ca3af",
                     }}
                   >
                     TOTAL MESA
@@ -600,7 +612,7 @@ export default function MesaPage({
                     style={{
                       fontFamily: "'Bebas Neue',Impact,sans-serif",
                       fontSize: 20,
-                      color: "#FFDC32",
+                      color: "#ca8a04",
                     }}
                   >
                     {fmt(total)}
@@ -612,7 +624,7 @@ export default function MesaPage({
         </div>
 
         <div
-          style={{ padding: "16px 20px 28px", borderTop: "1px solid #161616" }}
+          style={{ padding: "16px 20px 28px", borderTop: "1px solid #e5e7eb" }}
         >
           <button
             onClick={() => setSearchOpen(true)}
@@ -620,22 +632,31 @@ export default function MesaPage({
             style={{
               width: "100%",
               padding: 16,
-              background:
-                myQueueCount >= MAX_SONGS_PER_TABLE ? "#1a1a1a" : "#FFDC32",
+              background: myQueueCount >= MAX_SONGS_PER_TABLE ? "#f3f4f6" : "#2563eb",
               border: "none",
-              color:
-                myQueueCount >= MAX_SONGS_PER_TABLE ? "#383838" : "#0a0a0a",
+              color: myQueueCount >= MAX_SONGS_PER_TABLE ? "#9ca3af" : "#fff",
               fontFamily: "'Bebas Neue',Impact,sans-serif",
               fontSize: 18,
               letterSpacing: 4,
-              cursor:
-                myQueueCount >= MAX_SONGS_PER_TABLE ? "not-allowed" : "pointer",
+              cursor: myQueueCount >= MAX_SONGS_PER_TABLE ? "not-allowed" : "pointer",
+              borderRadius: 6,
             }}
           >
             {myQueueCount >= MAX_SONGS_PER_TABLE
-              ? `LÍMITE DE ${MAX_SONGS_PER_TABLE} CANCIONES`
-              : "♪ PEDIR CANCIÓN"}
+              ? "LÍMITE ALCANZADO"
+              : "PEDIR CANCIÓN"}
           </button>
+          {myQueueCount >= MAX_SONGS_PER_TABLE && (
+            <p style={{
+              textAlign: "center",
+              marginTop: 8,
+              fontSize: 10,
+              color: "#9ca3af",
+              fontFamily: "monospace",
+            }}>
+              Espera 15 min o consume $20 mil más para agregar otra canción
+            </p>
+          )}
         </div>
 
         <SongSearch
@@ -649,7 +670,13 @@ export default function MesaPage({
                 updateFromSocket(buildMesaQueue(tableQueue, tableId));
               })
               .catch(console.error);
+            queueApi
+              .getByTableWithHistory(tableId)
+              .then(setMySongs)
+              .catch(console.error);
           }}
+          myQueue={queue}
+          globalQueue={globalQueue}
         />
       </div>
     </>

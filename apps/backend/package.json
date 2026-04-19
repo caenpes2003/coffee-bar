@@ -7,7 +7,9 @@
     "start": "node dist/main.js",
     "dev": "nest start --watch",
     "start:dev": "nest start --watch",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@coffee-bar/shared": "*",

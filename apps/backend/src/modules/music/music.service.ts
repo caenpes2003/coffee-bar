@@ -1,51 +1,62 @@
-import { Injectable, Logger } from "@nestjs/common";
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const ytsr = require("ytsr");
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  MUSIC_SEARCH_PROVIDER,
+  type MusicSearchProvider,
+  type MusicSearchResult,
+} from "./music-search.provider";
 
 @Injectable()
 export class MusicService {
   private readonly logger = new Logger(MusicService.name);
 
-  async search(query: string, limit = 10) {
-    try {
-
-      const results = await ytsr(query, {
-        limit,
-        safeSearch: false,
-      });
-
-      return results.items
-        .filter((item: Record<string, unknown>) => item.type === "video")
-        .map((item: Record<string, unknown>) => {
-          const thumbnails = item.thumbnails as
-            | { url: string | null }[]
-            | undefined;
-          const duration = item.duration as string | null;
-
-          return {
-            youtubeId: item.id as string,
-            title: item.title as string,
-            duration: duration ? this.parseDuration(duration) : 0,
-            thumbnail: thumbnails?.[0]?.url ?? null,
-          };
-        })
-        .filter((item: { duration: number }) => item.duration > 0);
-    } catch (error) {
-      this.logger.error("YouTube search failed", error);
-      return [];
-    }
+  constructor(
+    @Inject(MUSIC_SEARCH_PROVIDER)
+    private readonly provider: MusicSearchProvider,
+  ) {
+    this.logger.log(`Music search provider: ${this.provider.name}`);
   }
 
-  private parseDuration(duration: string): number {
-    const parts = duration.split(":").map(Number);
+  async search(query: string, limit = 5): Promise<MusicSearchResult[]> {
+    const start = Date.now();
 
-    if (parts.length === 3) {
-      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    try {
+      const results = await this.provider.search(query, limit);
+      const elapsed = Date.now() - start;
+
+      this.logger.log(
+        JSON.stringify({
+          event: "music_search",
+          status: "success",
+          provider: this.provider.name,
+          query,
+          limit,
+          results_count: results.length,
+          duration_ms: elapsed,
+        }),
+      );
+
+      return results;
+    } catch (error) {
+      const elapsed = Date.now() - start;
+      const errorCode =
+        error instanceof Error && "code" in error
+          ? (error as { code: string }).code
+          : undefined;
+
+      this.logger.error(
+        JSON.stringify({
+          event: "music_search",
+          status: "error",
+          provider: this.provider.name,
+          query,
+          limit,
+          duration_ms: elapsed,
+          error: error instanceof Error ? error.message : String(error),
+          error_code: errorCode ?? null,
+        }),
+      );
+
+      throw error;
     }
-    if (parts.length === 2) {
-      return parts[0] * 60 + parts[1];
-    }
-    return parts[0] || 0;
   }
 }

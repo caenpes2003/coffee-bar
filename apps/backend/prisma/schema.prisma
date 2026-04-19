@@ -31,6 +31,7 @@ enum OrderStatus {
 
 enum PlaybackStatus {
   idle
+  buffering
   playing
   paused
 }
@@ -52,24 +53,28 @@ model Song {
   youtube_id         String      @unique
   title              String
   duration           Int
-  requested_by_table Int
+  requested_by_table Int?
   created_at         DateTime    @default(now())
-  table              Table       @relation(fields: [requested_by_table], references: [id], onDelete: Cascade)
+  table              Table?      @relation(fields: [requested_by_table], references: [id], onDelete: Cascade)
   queue_items        QueueItem[]
 }
 
 model QueueItem {
-  id             Int         @id @default(autoincrement())
-  song_id        Int
-  table_id       Int
-  priority_score Decimal     @default(0) @db.Decimal(10, 2)
-  status         QueueStatus @default(pending)
-  position       Int
-  created_at     DateTime    @default(now())
-  updated_at     DateTime    @updatedAt
-  song           Song        @relation(fields: [song_id], references: [id], onDelete: Cascade)
-  table          Table       @relation(fields: [table_id], references: [id], onDelete: Cascade)
-  playback_state PlaybackState?
+  id                 Int         @id @default(autoincrement())
+  song_id            Int
+  table_id           Int?
+  priority_score     Decimal     @default(0) @db.Decimal(10, 2)
+  status             QueueStatus @default(pending)
+  position           Int
+  queued_at          DateTime    @default(now())
+  created_at         DateTime    @default(now())
+  updated_at         DateTime    @updatedAt
+  started_playing_at DateTime?
+  finished_at        DateTime?
+  skipped_at         DateTime?
+  song               Song        @relation(fields: [song_id], references: [id], onDelete: Cascade)
+  table              Table?      @relation(fields: [table_id], references: [id], onDelete: Cascade)
+  playback_state     PlaybackState?
 
   @@index([status, position])
   @@index([table_id, status])

@@ -27,6 +27,10 @@ function getSocket(): Socket {
     socket = io(resolveSocketUrl(), {
       transports: ["websocket"],
       autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
     });
 
     socket.on("connect", () => {
@@ -38,7 +42,17 @@ function getSocket(): Socket {
     });
 
     socket.on("connect_error", (err) => {
-      console.error("[Socket] error →", err.message);
+      console.error("[Socket] error de conexión →", err.message);
+    });
+
+    socket.io.on("reconnect", (attempt) => {
+      console.log(`[Socket] reconectado después de ${attempt} intentos`);
+    });
+
+    socket.io.on("reconnect_attempt", (attempt) => {
+      if (attempt <= 3 || attempt % 5 === 0) {
+        console.log(`[Socket] reintentando conexión (intento ${attempt})...`);
+      }
     });
   }
   return socket;
@@ -75,9 +89,15 @@ export function useSocket(options: UseSocketOptions = {}) {
 
     if (!s.connected) s.connect();
 
-    if (tableId !== undefined) {
-      s.emit("table:join", tableId);
-    }
+    // Join room on connect and re-join on reconnect
+    const joinRoom = () => {
+      if (tableId !== undefined) {
+        s.emit("table:join", tableId);
+      }
+    };
+
+    joinRoom();
+    s.on("connect", joinRoom);
 
     if (onQueueUpdated) s.on("queue:updated", onQueueUpdated);
     if (onTableUpdated) s.on("table:updated", onTableUpdated);
@@ -85,6 +105,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     if (onPlaybackUpdated) s.on("playback:updated", onPlaybackUpdated);
 
     return () => {
+      s.off("connect", joinRoom);
       if (onQueueUpdated) s.off("queue:updated", onQueueUpdated);
       if (onTableUpdated) s.off("table:updated", onTableUpdated);
       if (onOrderUpdated) s.off("order:updated", onOrderUpdated);

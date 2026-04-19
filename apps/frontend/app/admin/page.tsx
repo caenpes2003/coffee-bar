@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import { useAppStore } from "@/store";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
@@ -8,12 +8,15 @@ import {
   queueApi,
   ordersApi,
   playbackApi,
+  musicApi,
 } from "@/lib/api/services";
+import { getErrorMessage } from "@/lib/errors";
 import type {
   QueueItem,
   Table,
   Order,
   PlaybackState,
+  YouTubeSearchResult,
 } from "@coffee-bar/shared";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -25,23 +28,24 @@ const fmt = (n: number) =>
   }).format(n);
 
 const pad = (n: number) => String(n).padStart(2, "0");
+const secToMin = (s: number) => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 
 const statusColor: Record<string, string> = {
   available: "#3b82f6",
-  active: "#22c55e",
-  inactive: "#555",
-  occupied: "#f97316",
-  pending: "#FFDC32",
-  preparing: "#FF8C00",
+  active: "#16a34a",
+  inactive: "#9ca3af",
+  occupied: "#ea580c",
+  pending: "#ca8a04",
+  preparing: "#ea580c",
   ready: "#3b82f6",
-  delivered: "#22c55e",
-  cancelled: "#ef4444",
-  played: "#555",
-  skipped: "#ef4444",
+  delivered: "#16a34a",
+  cancelled: "#dc2626",
+  played: "#9ca3af",
+  skipped: "#dc2626",
 };
 
 function Badge({ label, status }: { label: string; status: string }) {
-  const color = statusColor[status] ?? "#555";
+  const color = statusColor[status] ?? "#9ca3af";
   return (
     <span
       style={{
@@ -49,12 +53,337 @@ function Badge({ label, status }: { label: string; status: string }) {
         fontFamily: "monospace",
         letterSpacing: 1,
         color,
-        border: `1px solid ${color}33`,
+        border: `1px solid ${color}44`,
+        background: `${color}10`,
         padding: "2px 7px",
+        borderRadius: 3,
       }}
     >
       {label.toUpperCase()}
     </span>
+  );
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "ahora";
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h`;
+}
+
+function fmtTime(dateStr: string | null): string {
+  if (!dateStr) return "—";
+  return new Date(dateStr).toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// ─── Admin Search Modal ──────────────────────────────────────────────────────
+function AdminSearchModal({
+  open,
+  onClose,
+  queueLength,
+}: {
+  open: boolean;
+  onClose: () => void;
+  queueLength: number;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<YouTubeSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setResults([]);
+      setError(null);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [open]);
+
+  const search = async (q: string) => {
+    if (q.trim().length < 2) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await musicApi.search(q);
+      setResults(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInput = (value: string) => {
+    setQuery(value);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => search(value), 400);
+  };
+
+  const handlePlayNow = async (r: YouTubeSearchResult) => {
+    setAdding(`now:${r.youtubeId}`);
+    setError(null);
+    try {
+      await queueApi.adminPlayNow({
+        youtube_id: r.youtubeId,
+        title: r.title,
+        duration: r.duration,
+      });
+      onClose();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setAdding(null);
+    }
+  };
+
+  const handleAddToQueue = async (r: YouTubeSearchResult, position?: number) => {
+    setAdding(`queue:${r.youtubeId}`);
+    setError(null);
+    try {
+      await queueApi.adminCreate({
+        youtube_id: r.youtubeId,
+        title: r.title,
+        duration: r.duration,
+        position,
+      });
+      onClose();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setAdding(null);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 8,
+          width: "100%",
+          maxWidth: 600,
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            padding: "16px 20px",
+            borderBottom: "1px solid #e5e7eb",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontFamily: "'Bebas Neue',Impact,sans-serif",
+                fontSize: 18,
+                letterSpacing: 3,
+                color: "#111",
+              }}
+            >
+              AGREGAR CANCIÓN (ADMIN)
+            </div>
+            <div style={{ fontSize: 11, color: "#888", fontFamily: "monospace", marginTop: 2 }}>
+              Sin restricciones de duración o límite
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "#f3f4f6",
+              border: "1px solid #d1d5db",
+              color: "#666",
+              padding: "4px 12px",
+              fontFamily: "monospace",
+              fontSize: 12,
+              cursor: "pointer",
+              borderRadius: 4,
+            }}
+          >
+            CERRAR
+          </button>
+        </div>
+
+        {/* Search */}
+        <div style={{ padding: "12px 20px" }}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => handleInput(e.target.value)}
+            placeholder="Buscar cualquier canción..."
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              background: "#f9fafb",
+              border: "1px solid #d1d5db",
+              color: "#111",
+              fontFamily: "monospace",
+              fontSize: 14,
+              outline: "none",
+              borderRadius: 4,
+            }}
+          />
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            style={{
+              margin: "0 20px 8px",
+              padding: "8px 12px",
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              color: "#dc2626",
+              fontFamily: "monospace",
+              fontSize: 11,
+              borderRadius: 4,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Results */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 16px" }}>
+          {loading && (
+            <p style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 11 }}>
+              BUSCANDO...
+            </p>
+          )}
+
+          {!loading && !error && query.length >= 2 && results.length === 0 && (
+            <p style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 11 }}>
+              SIN RESULTADOS
+            </p>
+          )}
+
+
+          {results.map((r) => {
+            const isAdding = adding?.includes(r.youtubeId) ?? false;
+            return (
+              <div
+                key={r.youtubeId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 0",
+                  borderBottom: "1px solid #f3f4f6",
+                }}
+              >
+                {r.thumbnail && (
+                  <img
+                    src={r.thumbnail}
+                    alt=""
+                    style={{ width: 48, height: 36, objectFit: "cover", borderRadius: 3 }}
+                  />
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "'Bebas Neue',Impact,sans-serif",
+                      fontSize: 13,
+                      color: "#111",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {r.title}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace" }}>
+                    {secToMin(r.duration)}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button
+                    onClick={() => handlePlayNow(r)}
+                    disabled={isAdding}
+                    style={{
+                      padding: "5px 10px",
+                      background: isAdding ? "#e5e7eb" : "#dc2626",
+                      border: "none",
+                      color: isAdding ? "#999" : "#fff",
+                      fontFamily: "'Bebas Neue',Impact,sans-serif",
+                      fontSize: 10,
+                      letterSpacing: 1,
+                      cursor: isAdding ? "not-allowed" : "pointer",
+                      borderRadius: 3,
+                    }}
+                  >
+                    SONAR YA
+                  </button>
+                  <button
+                    onClick={() => handleAddToQueue(r, 1)}
+                    disabled={isAdding}
+                    style={{
+                      padding: "5px 10px",
+                      background: isAdding ? "#e5e7eb" : "#2563eb",
+                      border: "none",
+                      color: isAdding ? "#999" : "#fff",
+                      fontFamily: "'Bebas Neue',Impact,sans-serif",
+                      fontSize: 10,
+                      letterSpacing: 1,
+                      cursor: isAdding ? "not-allowed" : "pointer",
+                      borderRadius: 3,
+                    }}
+                  >
+                    SIGUIENTE
+                  </button>
+                  <button
+                    onClick={() => handleAddToQueue(r)}
+                    disabled={isAdding}
+                    style={{
+                      padding: "5px 10px",
+                      background: isAdding ? "#e5e7eb" : "#f3f4f6",
+                      border: "1px solid #d1d5db",
+                      color: isAdding ? "#999" : "#333",
+                      fontFamily: "'Bebas Neue',Impact,sans-serif",
+                      fontSize: 10,
+                      letterSpacing: 1,
+                      cursor: isAdding ? "not-allowed" : "pointer",
+                      borderRadius: 3,
+                    }}
+                  >
+                    AL FINAL
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -65,17 +394,17 @@ function TablesColumn({ tables }: { tables: Table[] }) {
       style={{
         flex: 1,
         minWidth: 200,
-        borderRight: "1px solid #1a1a1a",
+        borderRight: "1px solid #e5e7eb",
         overflowY: "auto",
       }}
     >
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #1a1a1a" }}>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb" }}>
         <span
           style={{
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 13,
             letterSpacing: 3,
-            color: "#555",
+            color: "#888",
           }}
         >
           MESAS
@@ -84,7 +413,7 @@ function TablesColumn({ tables }: { tables: Table[] }) {
       {tables.map((t) => (
         <div
           key={t.id}
-          style={{ padding: "12px 16px", borderBottom: "1px solid #111" }}
+          style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6" }}
         >
           <div
             style={{
@@ -98,7 +427,7 @@ function TablesColumn({ tables }: { tables: Table[] }) {
               style={{
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 22,
-                color: "#f5f5f5",
+                color: "#111",
               }}
             >
               {pad(t.id)}
@@ -109,7 +438,7 @@ function TablesColumn({ tables }: { tables: Table[] }) {
             style={{
               fontFamily: "'Bebas Neue',Impact,sans-serif",
               fontSize: 14,
-              color: "#FFDC32",
+              color: "#ca8a04",
             }}
           >
             {fmt(t.total_consumption)}
@@ -117,15 +446,7 @@ function TablesColumn({ tables }: { tables: Table[] }) {
         </div>
       ))}
       {tables.length === 0 && (
-        <p
-          style={{
-            padding: 24,
-            color: "#333",
-            fontFamily: "monospace",
-            fontSize: 10,
-            letterSpacing: 2,
-          }}
-        >
+        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
           SIN MESAS
         </p>
       )}
@@ -144,14 +465,14 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
       style={{
         flex: 1.4,
         minWidth: 240,
-        borderRight: "1px solid #1a1a1a",
+        borderRight: "1px solid #e5e7eb",
         overflowY: "auto",
       }}
     >
       <div
         style={{
           padding: "14px 16px",
-          borderBottom: "1px solid #1a1a1a",
+          borderBottom: "1px solid #e5e7eb",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
@@ -162,14 +483,12 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 13,
             letterSpacing: 3,
-            color: "#555",
+            color: "#888",
           }}
         >
           COLA GLOBAL
         </span>
-        <span
-          style={{ fontFamily: "monospace", fontSize: 10, color: "#383838" }}
-        >
+        <span style={{ fontFamily: "monospace", fontSize: 10, color: "#9ca3af" }}>
           {queue.length} canciones
         </span>
       </div>
@@ -178,20 +497,22 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
         return (
           <div
             key={item.id}
+            title={`Agregada: ${fmtTime(item.queued_at)}${item.started_playing_at ? ` · Inició: ${fmtTime(item.started_playing_at)}` : ""}`}
             style={{
               display: "flex",
               alignItems: "center",
               gap: 12,
               padding: "11px 16px",
-              borderBottom: "1px solid #111",
-              opacity: playing ? 1 : 0.7,
+              borderBottom: "1px solid #f3f4f6",
+              background: playing ? "#f0fdf4" : "transparent",
+              cursor: "default",
             }}
           >
             <span
               style={{
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: playing ? 18 : 13,
-                color: playing ? "#FFDC32" : "#383838",
+                color: playing ? "#16a34a" : "#9ca3af",
                 width: 22,
                 textAlign: "center",
               }}
@@ -203,7 +524,7 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
                 style={{
                   fontFamily: "'Bebas Neue',Impact,sans-serif",
                   fontSize: 13,
-                  color: playing ? "#f5f5f5" : "#aaa",
+                  color: playing ? "#111" : "#555",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -211,23 +532,22 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
               >
                 {item.song?.title ?? `Song #${item.song_id}`}
               </div>
-              <div
-                style={{ fontSize: 10, color: "#444", fontFamily: "monospace" }}
-              >
-                Mesa {pad(item.table_id)} · pos. {item.position}
+              <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>
+                {item.table_id ? `Mesa ${pad(item.table_id)}` : "ADMIN"} · pos. {item.position} · {playing && item.started_playing_at ? `sonando ${timeAgo(item.started_playing_at)}` : `en cola ${timeAgo(item.created_at)}`}
               </div>
             </div>
             {!playing && (
               <button
                 onClick={() => skip(item.id)}
                 style={{
-                  background: "none",
-                  border: "1px solid #2a2a2a",
-                  color: "#555",
+                  background: "#f3f4f6",
+                  border: "1px solid #d1d5db",
+                  color: "#888",
                   padding: "3px 8px",
                   fontFamily: "monospace",
                   fontSize: 10,
                   cursor: "pointer",
+                  borderRadius: 3,
                 }}
               >
                 SKIP
@@ -237,15 +557,7 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
         );
       })}
       {queue.length === 0 && (
-        <p
-          style={{
-            padding: 24,
-            color: "#333",
-            fontFamily: "monospace",
-            fontSize: 10,
-            letterSpacing: 2,
-          }}
-        >
+        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
           COLA VACÍA
         </p>
       )}
@@ -261,13 +573,13 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
 
   return (
     <div style={{ flex: 1.4, minWidth: 240, overflowY: "auto" }}>
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #1a1a1a" }}>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb" }}>
         <span
           style={{
             fontFamily: "'Bebas Neue',Impact,sans-serif",
             fontSize: 13,
             letterSpacing: 3,
-            color: "#555",
+            color: "#888",
           }}
         >
           PEDIDOS
@@ -276,7 +588,7 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
       {orders.map((o) => (
         <div
           key={o.id}
-          style={{ padding: "12px 16px", borderBottom: "1px solid #111" }}
+          style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6" }}
         >
           <div
             style={{
@@ -291,20 +603,14 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
                 style={{
                   fontFamily: "'Bebas Neue',Impact,sans-serif",
                   fontSize: 14,
-                  color: "#f5f5f5",
+                  color: "#111",
                 }}
               >
                 Mesa {pad(o.table_id)}
               </span>
               <Badge label={o.status} status={o.status} />
             </div>
-            <span
-              style={{
-                fontFamily: "monospace",
-                fontSize: 12,
-                color: "#FFDC32",
-              }}
-            >
+            <span style={{ fontFamily: "monospace", fontSize: 12, color: "#ca8a04" }}>
               {fmt(o.total)}
             </span>
           </div>
@@ -315,13 +621,14 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
                 style={{
                   flex: 1,
                   padding: "6px 0",
-                  background: "none",
-                  border: "1px solid #FFDC32",
-                  color: "#FFDC32",
+                  background: "#fffbeb",
+                  border: "1px solid #ca8a04",
+                  color: "#ca8a04",
                   fontFamily: "'Bebas Neue',Impact,sans-serif",
                   fontSize: 11,
                   letterSpacing: 2,
                   cursor: "pointer",
+                  borderRadius: 3,
                 }}
               >
                 PREPARAR
@@ -330,12 +637,13 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
                 onClick={() => update(o.id, "cancelled")}
                 style={{
                   padding: "6px 10px",
-                  background: "none",
-                  border: "1px solid #2a2a2a",
-                  color: "#555",
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#dc2626",
                   fontFamily: "monospace",
                   fontSize: 10,
                   cursor: "pointer",
+                  borderRadius: 3,
                 }}
               >
                 ✕
@@ -349,13 +657,14 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
                 width: "100%",
                 marginTop: 10,
                 padding: "6px 0",
-                background: "#22c55e22",
-                border: "1px solid #22c55e",
-                color: "#22c55e",
+                background: "#f0fdf4",
+                border: "1px solid #16a34a",
+                color: "#16a34a",
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 11,
                 letterSpacing: 2,
                 cursor: "pointer",
+                borderRadius: 3,
               }}
             >
               ENTREGAR
@@ -364,15 +673,7 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
         </div>
       ))}
       {orders.length === 0 && (
-        <p
-          style={{
-            padding: 24,
-            color: "#333",
-            fontFamily: "monospace",
-            fontSize: 10,
-            letterSpacing: 2,
-          }}
-        >
+        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
           SIN PEDIDOS
         </p>
       )}
@@ -381,8 +682,21 @@ function OrdersColumn({ orders }: { orders: Order[] }) {
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+type QueueStats = {
+  songs_played_today: number;
+  songs_skipped_today: number;
+  songs_pending: number;
+  total_songs_today: number;
+  avg_wait_seconds: number | null;
+  tables_participating: number;
+  top_table: { table_id: number; count: number } | null;
+};
+
 export default function AdminPage() {
   const actionRef = useRef(false);
+  const [stats, setStats] = useState<QueueStats | null>(null);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const {
     allTables,
     setAllTables,
@@ -396,9 +710,16 @@ export default function AdminPage() {
     setCurrentPlayback,
   } = useAppStore();
 
+  const refreshStats = useCallback(() => {
+    queueApi.getStats().then(setStats).catch(console.error);
+  }, []);
+
   const handleQueueUpdated = useCallback(
-    (q: QueueItem[]) => updateFromSocket(q),
-    [updateFromSocket],
+    (q: QueueItem[]) => {
+      updateFromSocket(q);
+      refreshStats();
+    },
+    [updateFromSocket, refreshStats],
   );
   const handleTableUpdated = useCallback(
     (t: Table) => updateTable(t),
@@ -425,34 +746,48 @@ export default function AdminPage() {
     queueApi.getGlobal().then(updateFromSocket).catch(console.error);
     ordersApi.getAll().then(setOrders).catch(console.error);
     playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
-  }, []);
+    refreshStats();
+  }, [refreshStats]);
 
   const handleSkipCurrent = useCallback(async () => {
-    if (actionRef.current || !currentPlayback?.queue_item_id) return;
-
+    if (actionRef.current) return;
     actionRef.current = true;
-
+    setActionInProgress("skip");
     try {
-      await queueApi.skip(currentPlayback.queue_item_id);
-      await queueApi.playNext();
+      await queueApi.skipAndAdvance();
     } catch (error) {
       console.error(error);
     } finally {
       actionRef.current = false;
+      setActionInProgress(null);
     }
-  }, [currentPlayback]);
+  }, []);
 
   const handlePlayNext = useCallback(async () => {
     if (actionRef.current) return;
-
     actionRef.current = true;
-
+    setActionInProgress("play");
     try {
-      await queueApi.playNext();
+      await queueApi.advanceToNext();
     } catch (error) {
       console.error(error);
     } finally {
       actionRef.current = false;
+      setActionInProgress(null);
+    }
+  }, []);
+
+  const handleFinishCurrent = useCallback(async () => {
+    if (actionRef.current) return;
+    actionRef.current = true;
+    setActionInProgress("finish");
+    try {
+      await queueApi.finishCurrent();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      actionRef.current = false;
+      setActionInProgress(null);
     }
   }, []);
 
@@ -464,6 +799,16 @@ export default function AdminPage() {
     currentPlayback?.status === "playing" && Boolean(currentPlayback.song);
   const hasPendingSongs = queue.some((item) => item.status === "pending");
 
+  const btnBase: React.CSSProperties = {
+    padding: "8px 12px",
+    fontFamily: "'Bebas Neue',Impact,sans-serif",
+    fontSize: 12,
+    letterSpacing: 2,
+    borderRadius: 4,
+    border: "none",
+    cursor: "pointer",
+  };
+
   return (
     <>
       <style>{`
@@ -474,7 +819,7 @@ export default function AdminPage() {
       <div
         style={{
           minHeight: "100dvh",
-          background: "#0a0a0a",
+          background: "#fff",
           display: "flex",
           flexDirection: "column",
         }}
@@ -483,7 +828,7 @@ export default function AdminPage() {
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #1a1a1a",
+            borderBottom: "1px solid #e5e7eb",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -493,27 +838,52 @@ export default function AdminPage() {
             style={{
               fontFamily: "'Bebas Neue',Impact,sans-serif",
               fontSize: 20,
-              color: "#f5f5f5",
+              color: "#111",
               letterSpacing: 3,
             }}
           >
             PANEL ADMIN
           </span>
-          <div style={{ display: "flex", gap: 24 }}>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
             {[
               {
                 label: "MESAS ACTIVAS",
                 value: allTables.filter((t) => t.status === "active").length,
+                color: "#16a34a",
               },
-              { label: "EN COLA", value: queue.length },
-              { label: "PEDIDOS", value: activeOrders.length },
-              { label: "CONSUMO TOTAL", value: fmt(revenue) },
+              { label: "EN COLA", value: queue.length, color: "#ca8a04" },
+              { label: "PEDIDOS", value: activeOrders.length, color: "#ca8a04" },
+              {
+                label: "REPRODUCIDAS HOY",
+                value: stats?.songs_played_today ?? 0,
+                color: "#2563eb",
+              },
+              {
+                label: "SALTADAS HOY",
+                value: stats?.songs_skipped_today ?? 0,
+                color: "#dc2626",
+              },
+              {
+                label: "ESPERA PROM.",
+                value: stats?.avg_wait_seconds != null
+                  ? `${Math.floor(stats.avg_wait_seconds / 60)}m ${stats.avg_wait_seconds % 60}s`
+                  : "—",
+                color: "#7c3aed",
+              },
+              {
+                label: "TOP MESA",
+                value: stats?.top_table
+                  ? `${pad(stats.top_table.table_id)} (${stats.top_table.count})`
+                  : "—",
+                color: "#ea580c",
+              },
+              { label: "CONSUMO TOTAL", value: fmt(revenue), color: "#ca8a04" },
             ].map((s) => (
               <div key={s.label} style={{ textAlign: "right" }}>
                 <div
                   style={{
                     fontSize: 9,
-                    color: "#444",
+                    color: "#9ca3af",
                     fontFamily: "monospace",
                     letterSpacing: 2,
                   }}
@@ -524,7 +894,7 @@ export default function AdminPage() {
                   style={{
                     fontFamily: "'Bebas Neue',Impact,sans-serif",
                     fontSize: 18,
-                    color: "#FFDC32",
+                    color: s.color,
                   }}
                 >
                   {s.value}
@@ -534,11 +904,12 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {/* Playback bar */}
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #161616",
-            background: isPlaying ? "rgba(255,220,50,0.06)" : "#0d0d0d",
+            borderBottom: "1px solid #e5e7eb",
+            background: isPlaying ? "#f0fdf4" : "#f9fafb",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -549,7 +920,7 @@ export default function AdminPage() {
             <div
               style={{
                 fontSize: 9,
-                color: "#555",
+                color: "#9ca3af",
                 letterSpacing: 2,
                 fontFamily: "monospace",
                 marginBottom: 6,
@@ -563,7 +934,7 @@ export default function AdminPage() {
                   style={{
                     fontFamily: "'Bebas Neue',Impact,sans-serif",
                     fontSize: 22,
-                    color: "#f5f5f5",
+                    color: "#111",
                     lineHeight: 1.1,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -572,45 +943,24 @@ export default function AdminPage() {
                 >
                   {currentPlayback.song?.title}
                 </div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "#777",
-                    fontFamily: "monospace",
-                    marginTop: 4,
-                  }}
-                >
-                  Mesa {pad(currentPlayback.table_id ?? 0)}
+                <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace", marginTop: 4 }}>
+                  {currentPlayback.table_id ? `Mesa ${pad(currentPlayback.table_id)}` : "ADMIN"}
                 </div>
               </>
             ) : (
-              <div
-                style={{
-                  fontSize: 10,
-                  color: "#444",
-                  fontFamily: "monospace",
-                  letterSpacing: 1,
-                }}
-              >
-                AUN NO HAY UNA CANCION REPRODUCIENDOSE
+              <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace", letterSpacing: 1 }}>
+                SIN REPRODUCCIÓN ACTIVA
               </div>
             )}
           </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              flexShrink: 0,
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                color: isPlaying ? "#22c55e" : "#666",
-                marginRight: 10,
+                gap: 6,
+                color: isPlaying ? "#16a34a" : "#9ca3af",
+                marginRight: 8,
               }}
             >
               <div
@@ -618,48 +968,79 @@ export default function AdminPage() {
                   width: 8,
                   height: 8,
                   borderRadius: "50%",
-                  background: isPlaying ? "#22c55e" : "#666",
+                  background: isPlaying ? "#16a34a" : "#d1d5db",
                 }}
               />
-              <span
-                style={{
-                  fontFamily: "'Bebas Neue',Impact,sans-serif",
-                  fontSize: 12,
-                  letterSpacing: 2,
-                }}
-              >
-                {isPlaying ? "ACTIVA" : "IDLE"}
+              <span style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 12, letterSpacing: 2 }}>
+                {isPlaying ? "ACTIVA" : currentPlayback?.status === "paused" ? "PAUSADO" : "IDLE"}
               </span>
             </div>
 
+            {!isPlaying && hasPendingSongs && (
+              <button
+                onClick={() => void handlePlayNext()}
+                disabled={actionInProgress !== null}
+                style={{
+                  ...btnBase,
+                  background: actionInProgress === "play" ? "#d1d5db" : "#16a34a",
+                  color: actionInProgress === "play" ? "#888" : "#fff",
+                  opacity: actionInProgress && actionInProgress !== "play" ? 0.5 : 1,
+                  cursor: actionInProgress ? "not-allowed" : "pointer",
+                }}
+              >
+                {actionInProgress === "play" ? "INICIANDO..." : "REPRODUCIR SIGUIENTE"}
+              </button>
+            )}
+            {isPlaying && (
+              <>
+                <button
+                  onClick={() => void handleSkipCurrent()}
+                  disabled={actionInProgress !== null}
+                  style={{
+                    ...btnBase,
+                    background: actionInProgress === "skip" ? "#d1d5db" : "#ca8a04",
+                    color: actionInProgress === "skip" ? "#888" : "#fff",
+                    opacity: actionInProgress && actionInProgress !== "skip" ? 0.5 : 1,
+                    cursor: actionInProgress ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {actionInProgress === "skip" ? "SALTANDO..." : "SALTAR CANCIÓN"}
+                </button>
+                <button
+                  onClick={() => void handleFinishCurrent()}
+                  disabled={actionInProgress !== null}
+                  style={{
+                    ...btnBase,
+                    background: actionInProgress === "finish" ? "#d1d5db" : "#f3f4f6",
+                    color: actionInProgress === "finish" ? "#888" : "#555",
+                    border: "1px solid #d1d5db",
+                    opacity: actionInProgress && actionInProgress !== "finish" ? 0.5 : 1,
+                    cursor: actionInProgress ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {actionInProgress === "finish" ? "FINALIZANDO..." : "FINALIZAR"}
+                </button>
+              </>
+            )}
             <button
-              onClick={() => void handleSkipCurrent()}
-              disabled={!isPlaying}
+              onClick={() => setSearchOpen(true)}
               style={{
-                padding: "8px 12px",
-                background: isPlaying ? "#FFDC32" : "transparent",
-                border: `1px solid ${isPlaying ? "#FFDC32" : "#202020"}`,
-                color: isPlaying ? "#0a0a0a" : "#555",
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 12,
-                letterSpacing: 2,
-                cursor: isPlaying ? "pointer" : "not-allowed",
+                ...btnBase,
+                background: "#2563eb",
+                color: "#fff",
               }}
             >
-              SALTAR CANCION
+              AGREGAR CANCIÓN
             </button>
             <a
               href="/player"
               target="_blank"
               rel="noreferrer"
               style={{
-                padding: "8px 12px",
-                background: "transparent",
-                border: "1px solid #202020",
-                color: "#888",
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 12,
-                letterSpacing: 2,
+                ...btnBase,
+                background: "#f3f4f6",
+                border: "1px solid #d1d5db",
+                color: "#555",
                 textDecoration: "none",
               }}
             >
@@ -675,6 +1056,12 @@ export default function AdminPage() {
           <OrdersColumn orders={activeOrders} />
         </div>
       </div>
+
+      <AdminSearchModal
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        queueLength={queue.length}
+      />
     </>
   );
 }

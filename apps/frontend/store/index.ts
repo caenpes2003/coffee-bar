@@ -27,11 +27,15 @@ interface AppStore {
   products: Product[];
   setProducts: (products: Product[]) => void;
 
+  // My songs (includes history)
+  mySongs: QueueItem[];
+  setMySongs: (songs: QueueItem[]) => void;
+
   // UI
   isSearchOpen: boolean;
-  activeTab: "cola" | "pedidos";
+  activeTab: "cola" | "canciones" | "pedidos";
   setSearchOpen: (open: boolean) => void;
-  setActiveTab: (tab: "cola" | "pedidos") => void;
+  setActiveTab: (tab: "cola" | "canciones" | "pedidos") => void;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -87,6 +91,10 @@ export const useAppStore = create<AppStore>()(
       // Products
       products: [],
       setProducts: (products) => set({ products }, false, "setProducts"),
+
+      // My songs
+      mySongs: [],
+      setMySongs: (songs) => set({ mySongs: songs }, false, "setMySongs"),
 
       // UI
       isSearchOpen: false,

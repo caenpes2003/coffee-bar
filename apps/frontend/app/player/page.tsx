@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AdminPlaybackPlayer } from "@/components/music/AdminPlaybackPlayer";
 import { playbackApi, queueApi } from "@/lib/api/services";
 import { useSocket } from "@/lib/socket/useSocket";
@@ -9,6 +9,7 @@ import type { PlaybackState, QueueItem } from "@coffee-bar/shared";
 
 export default function PlayerPage() {
   const autoplayRef = useRef(false);
+  const [loaded, setLoaded] = useState(false);
   const { currentPlayback, setCurrentPlayback, queue, updateFromSocket } =
     useAppStore();
 
@@ -28,56 +29,62 @@ export default function PlayerPage() {
   });
 
   useEffect(() => {
-    queueApi.getGlobal().then(updateFromSocket).catch(console.error);
-    playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
+    Promise.all([
+      queueApi.getGlobal().then(updateFromSocket),
+      playbackApi.getCurrent().then(setCurrentPlayback),
+    ])
+      .catch(console.error)
+      .finally(() => setLoaded(true));
   }, [setCurrentPlayback, updateFromSocket]);
 
   const handlePlaybackEnded = useCallback(async () => {
     if (autoplayRef.current) return;
-
     autoplayRef.current = true;
 
-    try {
-      await queueApi.finishCurrent();
-      await queueApi.playNext();
-    } catch (error) {
-      console.error(error);
-    } finally {
-      autoplayRef.current = false;
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await queueApi.advanceToNext();
+        break;
+      } catch (error) {
+        console.error(`[autoplay] advance failed (attempt ${attempt + 1}):`, error);
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        }
+      }
     }
+    autoplayRef.current = false;
   }, []);
 
   useEffect(() => {
+    if (!loaded) return;
+
     const hasPendingSongs = queue.some((item) => item.status === "pending");
     const isIdle = !currentPlayback || currentPlayback.status === "idle";
 
-    if (!hasPendingSongs || !isIdle || autoplayRef.current) {
-      return;
-    }
+    if (!hasPendingSongs || !isIdle || autoplayRef.current) return;
 
     autoplayRef.current = true;
-
     queueApi
-      .playNext()
+      .advanceToNext()
       .catch(console.error)
-      .finally(() => {
-        autoplayRef.current = false;
-      });
+      .finally(() => { autoplayRef.current = false; });
   }, [currentPlayback, queue]);
+
+  const status = currentPlayback?.status;
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
         * { box-sizing: border-box; }
-        html, body { background: #050505; }
+        html, body { background: #fff; }
       `}</style>
 
       <main
         style={{
           minHeight: "100dvh",
-          background:
-            "radial-gradient(circle at top, rgba(255,220,50,0.08), transparent 35%), #050505",
+          background: "#fff",
           display: "flex",
           flexDirection: "column",
         }}
@@ -85,7 +92,7 @@ export default function PlayerPage() {
         <div
           style={{
             padding: "18px 28px",
-            borderBottom: "1px solid #151515",
+            borderBottom: "1px solid #e5e7eb",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -96,25 +103,29 @@ export default function PlayerPage() {
             <div
               style={{
                 fontSize: 10,
-                color: "#555",
+                color: "#9ca3af",
                 letterSpacing: 3,
                 fontFamily: "monospace",
                 marginBottom: 6,
               }}
             >
-              PANTALLA DE REPRODUCCION
+              PANTALLA DE REPRODUCCIÓN
             </div>
             <div
               style={{
                 fontFamily: "'Bebas Neue',Impact,sans-serif",
                 fontSize: 28,
-                color: "#f5f5f5",
+                color: "#111",
                 letterSpacing: 2,
               }}
             >
-              {currentPlayback?.status === "playing"
-                ? "SONANDO AHORA"
-                : "ESPERANDO CANCION"}
+              {status === "buffering"
+                ? "CARGANDO..."
+                : status === "playing"
+                  ? "SONANDO AHORA"
+                  : status === "paused"
+                    ? "PAUSADO"
+                    : "ESPERANDO CANCIÓN"}
             </div>
           </div>
           <div
@@ -122,13 +133,16 @@ export default function PlayerPage() {
               fontFamily: "monospace",
               fontSize: 11,
               letterSpacing: 2,
-              color:
-                currentPlayback?.status === "playing" ? "#22c55e" : "#666",
+              color: status === "playing" ? "#16a34a" : status === "buffering" ? "#ca8a04" : status === "paused" ? "#ca8a04" : "#9ca3af",
             }}
           >
-            {currentPlayback?.status === "playing"
-              ? "REPRODUCCION ACTIVA"
-              : "IDLE"}
+            {status === "buffering"
+              ? "BUFFERING"
+              : status === "playing"
+                ? "REPRODUCCIÓN ACTIVA"
+                : status === "paused"
+                  ? "PAUSADO"
+                  : "IDLE"}
           </div>
         </div>
 

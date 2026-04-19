@@ -58,8 +58,16 @@ export function rateLimitMiddleware(
     res.setHeader("Retry-After", String(retryAfterSec));
     res.setHeader("X-RateLimit-Limit", String(rule.max));
     res.setHeader("X-RateLimit-Remaining", "0");
+    const code = path.startsWith("/api/music/search")
+      ? "SEARCH_RATE_LIMITED"
+      : path.startsWith("/api/queue")
+        ? "QUEUE_RATE_LIMITED"
+        : "RATE_LIMITED";
+
     res.status(429).json({
+      statusCode: 429,
       message: "Too many requests",
+      code,
       retry_after_seconds: retryAfterSec,
     });
     return;

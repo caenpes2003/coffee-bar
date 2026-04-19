@@ -18,12 +18,42 @@ type PlaybackRecord = Prisma.PlaybackStateGetPayload<{
   };
 }>;
 
+/** Max seconds to wait in buffering before auto-recovering to playing */
+const BUFFERING_TIMEOUT_SECONDS = 30;
+
 @Injectable()
 export class PlaybackService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
   ) {}
+
+  async setPaused() {
+    const state = await this.prisma.playbackState.upsert({
+      where: { id: 1 },
+      update: {
+        status: "paused",
+        queue_item_id: null,
+        started_at: null,
+        position_seconds: null,
+      },
+      create: {
+        id: 1,
+        status: "paused",
+      },
+      include: {
+        queue_item: {
+          include: {
+            song: true,
+            table: true,
+          },
+        },
+      },
+    });
+    const serialized = this.serializePlaybackState(state);
+    this.realtimeGateway.emitPlaybackUpdated(serialized);
+    return serialized;
+  }
 
   async setIdle() {
     const state = await this.prisma.playbackState.upsert({
@@ -37,6 +67,57 @@ export class PlaybackService {
       create: {
         id: 1,
         status: "idle",
+      },
+      include: {
+        queue_item: {
+          include: {
+            song: true,
+            table: true,
+          },
+        },
+      },
+    });
+    const serialized = this.serializePlaybackState(state);
+    this.realtimeGateway.emitPlaybackUpdated(serialized);
+    return serialized;
+  }
+
+  async setBuffering(item: QueueRecord) {
+    const state = await this.prisma.playbackState.upsert({
+      where: { id: 1 },
+      update: {
+        status: "buffering",
+        queue_item_id: item.id,
+        started_at: null,
+        position_seconds: 0,
+      },
+      create: {
+        id: 1,
+        status: "buffering",
+        queue_item_id: item.id,
+        started_at: null,
+        position_seconds: 0,
+      },
+      include: {
+        queue_item: {
+          include: {
+            song: true,
+            table: true,
+          },
+        },
+      },
+    });
+    const serialized = this.serializePlaybackState(state);
+    this.realtimeGateway.emitPlaybackUpdated(serialized);
+    return serialized;
+  }
+
+  async setPlaying() {
+    const state = await this.prisma.playbackState.update({
+      where: { id: 1 },
+      data: {
+        status: "playing",
+        started_at: new Date(),
       },
       include: {
         queue_item: {
@@ -83,6 +164,24 @@ export class PlaybackService {
     return serialized;
   }
 
+  async updateProgress(positionSeconds: number) {
+    const state = await this.prisma.playbackState.update({
+      where: { id: 1 },
+      data: {
+        position_seconds: Math.floor(positionSeconds),
+      },
+      include: {
+        queue_item: {
+          include: {
+            song: true,
+            table: true,
+          },
+        },
+      },
+    });
+    return this.serializePlaybackState(state);
+  }
+
   async getCurrent() {
     const state = await this.prisma.playbackState.findUnique({
       where: { id: 1 },
@@ -98,6 +197,16 @@ export class PlaybackService {
 
     if (!state) {
       return this.setIdle();
+    }
+
+    // Auto-recover: if stuck in buffering for too long, promote to playing
+    if (
+      state.status === "buffering" &&
+      state.updated_at &&
+      Date.now() - state.updated_at.getTime() >
+        BUFFERING_TIMEOUT_SECONDS * 1000
+    ) {
+      return this.setPlaying();
     }
 
     return this.serializePlaybackState(state);
