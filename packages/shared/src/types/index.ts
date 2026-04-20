@@ -1,22 +1,60 @@
-export type TableStatus = "available" | "active" | "occupied" | "inactive";
+export type TableStatus = "available" | "occupied" | "closing";
+
+export type TableSessionStatus = "open" | "ordering" | "closing" | "closed";
+
+export type OrderRequestStatus =
+  | "pending"
+  | "accepted"
+  | "rejected"
+  | "cancelled";
+
+export type OrderStatus =
+  | "accepted"
+  | "preparing"
+  | "ready"
+  | "delivered"
+  | "cancelled";
+
+export type ConsumptionType = "product" | "adjustment" | "discount" | "refund";
+
+export type QueueStatus = "pending" | "playing" | "played" | "skipped";
+
+export type PlaybackStatus = "idle" | "buffering" | "playing" | "paused";
 
 export interface TableCountSummary {
-  orders: number;
   queue_items: number;
   songs: number;
 }
 
 export interface Table {
   id: number;
+  number: number;
   qr_code: string;
   status: TableStatus;
+  current_session_id: number | null;
   total_consumption: number;
+  active_order_count: number;
+  pending_request_count: number;
+  last_activity_at: string | null;
   created_at: string;
   updated_at: string;
   songs?: Song[];
   queue_items?: QueueItem[];
   orders?: Order[];
   _count?: TableCountSummary;
+}
+
+export interface TableSession {
+  id: number;
+  table_id: number;
+  status: TableSessionStatus;
+  total_consumption: number;
+  last_consumption_at: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  metadata: unknown | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Song {
@@ -34,10 +72,6 @@ export interface YouTubeSearchResult {
   duration: number;
   thumbnail?: string;
 }
-
-export type QueueStatus = "pending" | "playing" | "played" | "skipped";
-
-export type PlaybackStatus = "idle" | "buffering" | "playing" | "paused";
 
 export interface QueueItem {
   id: number;
@@ -71,17 +105,11 @@ export interface Product {
   name: string;
   price: number;
   stock: number;
+  is_active: boolean;
   category: string;
   created_at: string;
   updated_at: string;
 }
-
-export type OrderStatus =
-  | "pending"
-  | "preparing"
-  | "ready"
-  | "delivered"
-  | "cancelled";
 
 export interface OrderItem {
   id: number;
@@ -89,16 +117,92 @@ export interface OrderItem {
   product_id: number;
   quantity: number;
   created_at: string;
-  unit_price?: number;
+  unit_price: number;
   product?: Product;
+}
+
+export interface OrderRequestItemInput {
+  product_id: number;
+  quantity: number;
+}
+
+export interface OrderRequest {
+  id: number;
+  table_session_id: number;
+  status: OrderRequestStatus;
+  items: OrderRequestItemInput[];
+  rejection_reason: string | null;
+  accepted_at: string | null;
+  rejected_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  order?: Order | null;
+  table_session?: {
+    id: number;
+    table_id: number;
+    status: TableSessionStatus;
+  };
 }
 
 export interface Order {
   id: number;
-  table_id: number;
+  table_session_id: number;
+  order_request_id: number;
   status: OrderStatus;
-  total: number;
+  accepted_at: string;
+  delivered_at: string | null;
+  cancelled_at: string | null;
   created_at: string;
   updated_at: string;
   order_items?: OrderItem[];
+  table_session?: {
+    id: number;
+    table_id: number;
+    status: TableSessionStatus;
+  };
+}
+
+export interface Consumption {
+  id: number;
+  table_session_id: number;
+  order_id: number | null;
+  product_id: number | null;
+  description: string;
+  quantity: number;
+  unit_amount: number;
+  amount: number;
+  type: ConsumptionType;
+  reversed_at: string | null;
+  reverses_id: number | null;
+  reason: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  order?: { id: number; status: OrderStatus } | null;
+  reverses?: {
+    id: number;
+    description: string;
+    amount: number;
+    type: ConsumptionType;
+  } | null;
+}
+
+export interface BillSummary {
+  subtotal: number;
+  discounts_total: number;
+  adjustments_total: number;
+  total: number;
+  item_count: number;
+}
+
+export interface BillView {
+  session_id: number;
+  table_id: number;
+  status: TableSessionStatus;
+  opened_at: string;
+  closed_at: string | null;
+  last_consumption_at: string | null;
+  summary: BillSummary;
+  items: Consumption[];
 }

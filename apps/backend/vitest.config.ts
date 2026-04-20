@@ -11,5 +11,8 @@ export default defineConfig({
     root: path.resolve(__dirname),
     include: ["test/**/*.test.ts"],
     globals: true,
+    // Integration tests (*.integration.test.ts) share the dev DB and tables,
+    // so they cannot run in parallel. File-level parallelism is disabled.
+    fileParallelism: false,
   },
 });

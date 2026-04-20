@@ -1,11 +1,18 @@
 import api from "./client";
 import type {
-  Table,
-  QueueItem,
+  BillView,
+  Consumption,
   Order,
-  Product,
-  Song,
+  OrderRequest,
+  OrderRequestItemInput,
+  OrderRequestStatus,
+  OrderStatus,
   PlaybackState,
+  Product,
+  QueueItem,
+  Song,
+  Table,
+  TableSession,
   YouTubeSearchResult,
 } from "@coffee-bar/shared";
 
@@ -15,6 +22,123 @@ export const tablesApi = {
     api.get<Table[]>("/tables").then((r) => r.data),
   getById: (id: number): Promise<Table> =>
     api.get<Table>(`/tables/${id}`).then((r) => r.data),
+  getDetail: (id: number): Promise<Table> =>
+    api.get<Table>(`/tables/${id}/detail`).then((r) => r.data),
+};
+
+// ─── Table Sessions ───────────────────────────────────────────────────────────
+export const tableSessionsApi = {
+  open: (tableId: number): Promise<TableSession> =>
+    api
+      .post<TableSession>("/table-sessions/open", { table_id: tableId })
+      .then((r) => r.data),
+  close: (sessionId: number): Promise<TableSession> =>
+    api
+      .post<TableSession>(`/table-sessions/${sessionId}/close`)
+      .then((r) => r.data),
+  getById: (sessionId: number): Promise<TableSession> =>
+    api.get<TableSession>(`/table-sessions/${sessionId}`).then((r) => r.data),
+  /**
+   * Returns the open session for a table, or null if there is none.
+   * Translates the backend's 404 into a null value so callers can
+   * branch on "no session yet" without try/catch.
+   */
+  getCurrentForTable: async (tableId: number): Promise<TableSession | null> => {
+    try {
+      const response = await api.get<TableSession>(
+        `/tables/${tableId}/session/current`,
+      );
+      return response.data;
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 404) return null;
+      throw err;
+    }
+  },
+};
+
+// ─── Order Requests ───────────────────────────────────────────────────────────
+export const orderRequestsApi = {
+  getAll: (params?: {
+    status?: OrderRequestStatus;
+    table_session_id?: number;
+  }): Promise<OrderRequest[]> => {
+    const query = new URLSearchParams();
+    if (params?.status) query.set("status", params.status);
+    if (params?.table_session_id)
+      query.set("table_session_id", String(params.table_session_id));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return api.get<OrderRequest[]>(`/order-requests${suffix}`).then((r) => r.data);
+  },
+  getById: (id: number): Promise<OrderRequest> =>
+    api.get<OrderRequest>(`/order-requests/${id}`).then((r) => r.data),
+  create: (payload: {
+    table_session_id: number;
+    items: OrderRequestItemInput[];
+  }): Promise<OrderRequest> =>
+    api.post<OrderRequest>("/order-requests", payload).then((r) => r.data),
+  accept: (id: number): Promise<OrderRequest> =>
+    api.post<OrderRequest>(`/order-requests/${id}/accept`).then((r) => r.data),
+  reject: (id: number, reason?: string): Promise<OrderRequest> =>
+    api
+      .post<OrderRequest>(`/order-requests/${id}/reject`, { reason })
+      .then((r) => r.data),
+  cancel: (id: number): Promise<OrderRequest> =>
+    api.post<OrderRequest>(`/order-requests/${id}/cancel`).then((r) => r.data),
+};
+
+// ─── Orders (operational transitions only) ───────────────────────────────────
+export const ordersApi = {
+  getAll: (params?: {
+    status?: OrderStatus;
+    table_session_id?: number;
+  }): Promise<Order[]> => {
+    const query = new URLSearchParams();
+    if (params?.status) query.set("status", params.status);
+    if (params?.table_session_id)
+      query.set("table_session_id", String(params.table_session_id));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return api.get<Order[]>(`/orders${suffix}`).then((r) => r.data);
+  },
+  getById: (id: number): Promise<Order> =>
+    api.get<Order>(`/orders/${id}`).then((r) => r.data),
+  updateStatus: (orderId: number, status: OrderStatus): Promise<Order> =>
+    api
+      .patch<Order>(`/orders/${orderId}/status`, { status })
+      .then((r) => r.data),
+};
+
+// ─── Bill / Consumptions ─────────────────────────────────────────────────────
+export const billApi = {
+  get: (sessionId: number): Promise<BillView> =>
+    api.get<BillView>(`/bill/${sessionId}`).then((r) => r.data),
+  createAdjustment: (
+    sessionId: number,
+    payload: {
+      type: "adjustment" | "discount";
+      amount: number;
+      reason: string;
+      notes?: string;
+      created_by?: string;
+    },
+  ): Promise<Consumption> =>
+    api
+      .post<Consumption>(`/bill/${sessionId}/adjustments`, payload)
+      .then((r) => r.data),
+  refundConsumption: (
+    consumptionId: number,
+    payload: { reason: string; notes?: string; created_by?: string },
+  ): Promise<Consumption> =>
+    api
+      .post<Consumption>(`/consumptions/${consumptionId}/refund`, payload)
+      .then((r) => r.data),
+};
+
+// ─── Products ─────────────────────────────────────────────────────────────────
+export const productsApi = {
+  getAll: (): Promise<Product[]> =>
+    api.get<Product[]>("/products").then((r) => r.data),
 };
 
 // ─── Songs ────────────────────────────────────────────────────────────────────
@@ -92,28 +216,6 @@ export const playbackApi = {
         position_seconds: positionSeconds,
       })
       .then((r) => r.data),
-};
-
-// ─── Orders ───────────────────────────────────────────────────────────────────
-export const ordersApi = {
-  getAll: (): Promise<Order[]> =>
-    api.get<Order[]>("/orders").then((r) => r.data),
-  getByTable: (tableId: number): Promise<Order[]> =>
-    api.get<Order[]>(`/orders?table_id=${tableId}`).then((r) => r.data),
-  create: (payload: {
-    table_id: number;
-    items: { product_id: number; quantity: number }[];
-  }): Promise<Order> => api.post<Order>("/orders", payload).then((r) => r.data),
-  updateStatus: (orderId: number, status: Order["status"]): Promise<Order> =>
-    api
-      .patch<Order>(`/orders/${orderId}/status`, { status })
-      .then((r) => r.data),
-};
-
-// ─── Products ─────────────────────────────────────────────────────────────────
-export const productsApi = {
-  getAll: (): Promise<Product[]> =>
-    api.get<Product[]>("/products").then((r) => r.data),
 };
 
 // ─── Music ────────────────────────────────────────────────────────────────────

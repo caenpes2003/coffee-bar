@@ -1,280 +1,239 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { OrderStatus, Prisma } from "@prisma/client";
+import {
+  ConsumptionType,
+  Order,
+  OrderStatus,
+  Prisma,
+} from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { ConsumptionsService } from "../consumptions/consumptions.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
-import { CreateOrderDto } from "./dto/create-order.dto";
+import { TableProjectionService } from "../table-projection/table-projection.service";
+
+type Tx = Prisma.TransactionClient;
+
+const ORDER_INCLUDE = {
+  order_items: { include: { product: true } },
+  table_session: { select: { id: true, table_id: true, status: true } },
+} satisfies Prisma.OrderInclude;
+
+type OrderFull = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
+
+const ACTIVE_STATUSES: OrderStatus[] = [
+  OrderStatus.accepted,
+  OrderStatus.preparing,
+  OrderStatus.ready,
+];
+
+const TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  [OrderStatus.accepted]: [OrderStatus.preparing, OrderStatus.cancelled],
+  [OrderStatus.preparing]: [OrderStatus.ready, OrderStatus.cancelled],
+  [OrderStatus.ready]: [OrderStatus.delivered, OrderStatus.cancelled],
+  [OrderStatus.delivered]: [],
+  [OrderStatus.cancelled]: [],
+};
 
 @Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly realtimeGateway: RealtimeGateway,
+    private readonly projection: TableProjectionService,
+    private readonly realtime: RealtimeGateway,
+    private readonly consumptions: ConsumptionsService,
   ) {}
 
-  async findAll() {
+  async findAll(filter?: {
+    status?: OrderStatus;
+    tableSessionId?: number;
+  }): Promise<OrderFull[]> {
+    const where: Prisma.OrderWhereInput = {};
+    if (filter?.status) where.status = filter.status;
+    if (filter?.tableSessionId)
+      where.table_session_id = filter.tableSessionId;
     const orders = await this.prisma.order.findMany({
-      include: {
-        order_items: {
-          include: {
-            product: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
+      where,
+      include: ORDER_INCLUDE,
+      orderBy: { created_at: "desc" },
     });
-
-    return orders.map((order) => ({
-      ...this.serializeOrder(order),
-    }));
+    return orders;
   }
 
-  async findByTable(tableId: number) {
-    const orders = await this.prisma.order.findMany({
-      where: {
-        table_id: tableId,
-      },
-      include: {
-        order_items: {
-          include: {
-            product: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
+  async findOne(id: number): Promise<OrderFull> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: ORDER_INCLUDE,
     });
-
-    return orders.map((order) => ({
-      ...this.serializeOrder(order),
-    }));
+    if (!order) {
+      throw new NotFoundException(`Order ${id} not found`);
+    }
+    return order;
   }
 
-  async create(createOrderDto: CreateOrderDto) {
-    const { table_id, items } = createOrderDto;
-
-    const table = await this.prisma.table.findUnique({
-      where: { id: table_id },
-    });
-
-    if (!table) {
-      throw new NotFoundException(`Table with ID ${table_id} not found`);
-    }
-
-    const productIds = [...new Set(items.map((item) => item.product_id))];
-    const products = await this.prisma.product.findMany({
-      where: {
-        id: {
-          in: productIds,
-        },
-      },
-    });
-
-    if (products.length !== productIds.length) {
-      throw new NotFoundException("One or more products were not found");
-    }
-
-    const productMap = new Map(products.map((product) => [product.id, product]));
-
-    let total = 0;
-    for (const item of items) {
-      const product = productMap.get(item.product_id)!;
-      if (product.stock < item.quantity) {
-        throw new BadRequestException(
-          `Insufficient stock for product ${product.name}`,
-        );
-      }
-      total += this.toNumber(product.price) * item.quantity;
-    }
-
-    const order = await this.prisma.$transaction(async (tx) => {
-      const createdOrder = await tx.order.create({
-        data: {
-          table_id,
-          total,
-          order_items: {
-            create: items.map((item) => {
-              const product = productMap.get(item.product_id)!;
-              return {
-                product_id: item.product_id,
-                quantity: item.quantity,
-                unit_price: product.price,
-              };
-            }),
-          },
-        },
-        include: {
-          order_items: {
-            include: {
-              product: true,
-            },
-          },
-        },
-      });
-
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.product_id },
-          data: {
-            stock: {
-              decrement: item.quantity,
-            },
-          },
-        });
-      }
-
-      await tx.table.update({
-        where: { id: table_id },
-        data: {
-          total_consumption: {
-            increment: total,
-          },
-          status: "active",
-        },
-      });
-
-      return createdOrder;
-    });
-
-    const freshOrder = await this.prisma.order.findUnique({
-      where: { id: order.id },
-      include: {
-        order_items: {
-          include: {
-            product: true,
-          },
-        },
-      },
-    });
-
-    const freshTable = await this.prisma.table.findUnique({
-      where: { id: table_id },
-    });
-
-    const serializedOrder = this.serializeOrder(freshOrder!);
-    this.realtimeGateway.emitOrderUpdated(serializedOrder);
-
-    if (freshTable) {
-      this.realtimeGateway.emitTableUpdated({
-        ...freshTable,
-        total_consumption: this.toNumber(freshTable.total_consumption),
-      });
-    }
-
-    return serializedOrder;
-  }
-
-  private static readonly VALID_TRANSITIONS: Record<string, string[]> = {
-    pending: ["preparing", "cancelled"],
-    preparing: ["ready", "delivered", "cancelled"],
-    ready: ["delivered"],
-    delivered: [],
-    cancelled: [],
-  };
-
-  async updateStatus(id: number, status: OrderStatus) {
-    const existingOrder = await this.prisma.order.findUnique({
+  async updateStatus(
+    id: number,
+    nextStatus: OrderStatus,
+  ): Promise<OrderFull> {
+    const order = await this.prisma.order.findUnique({
       where: { id },
       include: {
         order_items: true,
+        table_session: { select: { id: true, table_id: true } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${id} not found`);
+    }
+
+    const allowed = TRANSITIONS[order.status];
+    if (!allowed.includes(nextStatus)) {
+      throw new BadRequestException({
+        message: `Invalid transition ${order.status} -> ${nextStatus}`,
+        code: "ORDER_INVALID_TRANSITION",
+      });
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const guarded = await tx.order.updateMany({
+        where: { id, status: order.status },
+        data: this.transitionData(nextStatus),
+      });
+      if (guarded.count === 0) {
+        throw new ConflictException({
+          message: `Order ${id} was modified concurrently`,
+          code: "ORDER_RACE",
+        });
+      }
+
+      if (nextStatus === OrderStatus.delivered) {
+        await this.emitConsumptions(tx, order);
+        await this.projection.onOrderLeftActive(
+          order.table_session.table_id,
+          tx,
+        );
+      } else if (nextStatus === OrderStatus.cancelled) {
+        // Was in ACTIVE_STATUSES per transition table; restore stock.
+        await this.restoreStock(tx, order.order_items);
+        await this.projection.onOrderLeftActive(
+          order.table_session.table_id,
+          tx,
+        );
+      }
+
+      const fresh = await tx.order.findUnique({
+        where: { id },
+        include: ORDER_INCLUDE,
+      });
+      return fresh!;
+    });
+
+    this.realtime.emitOrderUpdated(
+      order.table_session_id,
+      this.serialize(result),
+    );
+    this.realtime.emitTableUpdated({
+      id: order.table_session.table_id,
+    });
+    if (nextStatus === OrderStatus.delivered) {
+      await this.consumptions.emitBillSnapshot(
+        order.table_session_id,
+        order.table_session.table_id,
+      );
+    }
+    return result;
+  }
+
+  // ─── internals ────────────────────────────────────────────────────────────
+
+  private transitionData(next: OrderStatus): Prisma.OrderUncheckedUpdateInput {
+    const now = new Date();
+    const data: Prisma.OrderUncheckedUpdateInput = { status: next };
+    if (next === OrderStatus.delivered) data.delivered_at = now;
+    if (next === OrderStatus.cancelled) data.cancelled_at = now;
+    return data;
+  }
+
+  private async restoreStock(
+    tx: Tx,
+    items: Array<{ product_id: number; quantity: number }>,
+  ) {
+    for (const item of items) {
+      await tx.product.update({
+        where: { id: item.product_id },
+        data: { stock: { increment: item.quantity } },
+      });
+    }
+  }
+
+  private async emitConsumptions(
+    tx: Tx,
+    order: Order & {
+      order_items: Array<{
+        product_id: number;
+        quantity: number;
+        unit_price: Prisma.Decimal;
+      }>;
+      table_session: { table_id: number };
+    },
+  ) {
+    const products = await tx.product.findMany({
+      where: { id: { in: order.order_items.map((i) => i.product_id) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(products.map((p) => [p.id, p.name]));
+
+    let totalDelta = new Prisma.Decimal(0);
+
+    for (const item of order.order_items) {
+      const amount = new Prisma.Decimal(item.unit_price).mul(item.quantity);
+      totalDelta = totalDelta.add(amount);
+      await tx.consumption.create({
+        data: {
+          table_session_id: order.table_session_id,
+          order_id: order.id,
+          product_id: item.product_id,
+          description: nameById.get(item.product_id) ?? `Product ${item.product_id}`,
+          quantity: item.quantity,
+          unit_amount: item.unit_price,
+          amount,
+          type: ConsumptionType.product,
+        },
+      });
+    }
+
+    await tx.tableSession.update({
+      where: { id: order.table_session_id },
+      data: {
+        total_consumption: { increment: totalDelta },
+        last_consumption_at: new Date(),
       },
     });
 
-    if (!existingOrder) {
-      throw new NotFoundException(`Order with ID ${id} not found`);
-    }
-
-    const allowed = OrdersService.VALID_TRANSITIONS[existingOrder.status] ?? [];
-    if (!allowed.includes(status)) {
-      throw new BadRequestException(
-        `Cannot transition from '${existingOrder.status}' to '${status}'`,
-      );
-    }
-
-    const isCancellation = status === OrderStatus.cancelled;
-
-    const updatedOrder = await this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.update({
-        where: { id },
-        data: { status },
-        include: {
-          order_items: {
-            include: {
-              product: true,
-            },
-          },
-        },
-      });
-
-      if (isCancellation) {
-        // Restore stock
-        for (const item of existingOrder.order_items) {
-          await tx.product.update({
-            where: { id: item.product_id },
-            data: {
-              stock: { increment: item.quantity },
-            },
-          });
-        }
-
-        // Subtract from table consumption
-        await tx.table.update({
-          where: { id: existingOrder.table_id },
-          data: {
-            total_consumption: {
-              decrement: this.toNumber(existingOrder.total),
-            },
-          },
-        });
-      }
-
-      return order;
-    });
-
-    const serializedOrder = this.serializeOrder(updatedOrder);
-    this.realtimeGateway.emitOrderUpdated(serializedOrder);
-
-    if (isCancellation) {
-      const freshTable = await this.prisma.table.findUnique({
-        where: { id: existingOrder.table_id },
-      });
-      if (freshTable) {
-        this.realtimeGateway.emitTableUpdated({
-          ...freshTable,
-          total_consumption: this.toNumber(freshTable.total_consumption),
-        });
-      }
-    }
-
-    return serializedOrder;
+    await this.projection.onConsumptionCreated(
+      order.table_session.table_id,
+      totalDelta,
+      tx,
+    );
   }
 
-  private toNumber(value: Prisma.Decimal | number) {
-    return Number(value);
-  }
-
-  private serializeOrder(
-    order: Prisma.OrderGetPayload<{
-      include: { order_items: { include: { product: true } } };
-    }>,
-  ) {
+  serialize(order: OrderFull) {
     return {
       ...order,
-      total: this.toNumber(order.total),
       order_items: order.order_items.map((item) => ({
         ...item,
-        unit_price: this.toNumber(item.unit_price),
+        unit_price: Number(item.unit_price),
         product: {
           ...item.product,
-          price: this.toNumber(item.product.price),
+          price: Number(item.product.price),
         },
       })),
     };
   }
+
+  static readonly ACTIVE_STATUSES = ACTIVE_STATUSES;
+  static readonly TRANSITIONS = TRANSITIONS;
 }

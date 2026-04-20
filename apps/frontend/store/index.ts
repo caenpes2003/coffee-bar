@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
-import type { Table, QueueItem, Order, Product, PlaybackState } from "@coffee-bar/shared";
+import type {
+  OrderRequest,
+  Order,
+  PlaybackState,
+  Product,
+  QueueItem,
+  Table,
+} from "@coffee-bar/shared";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface AppStore {
@@ -22,6 +29,11 @@ interface AppStore {
   orders: Order[];
   setOrders: (orders: Order[]) => void;
   upsertOrder: (order: Order) => void;
+
+  // Order Requests (admin queue of pending requests + their transitions)
+  orderRequests: OrderRequest[];
+  setOrderRequests: (requests: OrderRequest[]) => void;
+  upsertOrderRequest: (request: OrderRequest) => void;
 
   // Products
   products: Product[];
@@ -88,6 +100,26 @@ export const useAppStore = create<AppStore>()(
           "upsertOrder",
         ),
 
+      // Order Requests
+      orderRequests: [],
+      setOrderRequests: (orderRequests) =>
+        set({ orderRequests }, false, "setOrderRequests"),
+      upsertOrderRequest: (request) =>
+        set(
+          (state) => {
+            const exists = state.orderRequests.find((r) => r.id === request.id);
+            return {
+              orderRequests: exists
+                ? state.orderRequests.map((r) =>
+                    r.id === request.id ? request : r,
+                  )
+                : [request, ...state.orderRequests],
+            };
+          },
+          false,
+          "upsertOrderRequest",
+        ),
+
       // Products
       products: [],
       setProducts: (products) => set({ products }, false, "setProducts"),
@@ -117,5 +149,5 @@ export const selectMyQueueCount = (tableId: number) => (s: AppStore) =>
       q.table_id === tableId &&
       (q.status === "pending" || q.status === "playing"),
   ).length;
-export const selectTableOrders = (tableId: number) => (s: AppStore) =>
-  s.orders.filter((o) => o.table_id === tableId);
+export const selectSessionOrders = (sessionId: number) => (s: AppStore) =>
+  s.orders.filter((o) => o.table_session_id === sessionId);

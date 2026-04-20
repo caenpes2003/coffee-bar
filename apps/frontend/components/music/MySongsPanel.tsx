@@ -2,6 +2,25 @@
 
 import type { QueueItem } from "@coffee-bar/shared";
 
+// Warm premium palette — same as mesa / SongSearch
+const C = {
+  paper: "#FFFDF8",
+  parchment: "#F8F1E4",
+  sand: "#F1E6D2",
+  sandDark: "#E6D8BF",
+  gold: "#B8894A",
+  goldSoft: "#E8D4A8",
+  burgundy: "#8B2635",
+  burgundySoft: "#E8CDD2",
+  olive: "#6B7E4A",
+  oliveSoft: "#E5EAD3",
+  cacao: "#6B4E2E",
+  ink: "#2B1D14",
+  mute: "#A89883",
+};
+const FONT_DISPLAY = "var(--font-bebas), 'Bebas Neue', Impact, sans-serif";
+const FONT_MONO = "var(--font-oswald), 'Oswald', ui-monospace, monospace";
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const secToMin = (s: number) => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 
@@ -30,11 +49,16 @@ function getWaitMessage(item: QueueItem, allQueue: QueueItem[]): string {
 
 function getStatusLabel(status: string) {
   switch (status) {
-    case "playing": return { text: "SONANDO", color: "#16a34a" };
-    case "pending": return { text: "EN COLA", color: "#2563eb" };
-    case "skipped": return { text: "SALTADA", color: "#dc2626" };
-    case "played": return { text: "REPRODUCIDA", color: "#9ca3af" };
-    default: return { text: status.toUpperCase(), color: "#9ca3af" };
+    case "playing":
+      return { text: "SONANDO", color: C.olive };
+    case "pending":
+      return { text: "EN COLA", color: C.gold };
+    case "skipped":
+      return { text: "SALTADA", color: C.burgundy };
+    case "played":
+      return { text: "REPRODUCIDA", color: C.mute };
+    default:
+      return { text: status.toUpperCase(), color: C.mute };
   }
 }
 
@@ -58,17 +82,65 @@ export function MySongsPanel({
 
   return (
     <div style={{ padding: "16px 0" }}>
-      <div style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 11, letterSpacing: 3, color: "#9ca3af", marginBottom: 12 }}>
-        TUS CANCIONES
+      <div
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 9,
+          letterSpacing: 3,
+          color: C.mute,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          marginBottom: 6,
+        }}
+      >
+        — Tus canciones
       </div>
-      <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace", marginBottom: 16 }}>
+      <p
+        style={{
+          fontSize: 11,
+          color: C.cacao,
+          fontFamily: FONT_MONO,
+          letterSpacing: 1,
+          margin: "0 0 18px",
+          lineHeight: 1.5,
+        }}
+      >
         Aquí puedes ver el estado de lo que has agregado a la cola.
-      </div>
+      </p>
 
       {active.length === 0 && history.length === 0 && (
-        <p style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontFamily: "monospace", fontSize: 11, letterSpacing: 2 }}>
-          AÚN NO HAS AGREGADO CANCIONES
-        </p>
+        <div style={{ textAlign: "center", padding: "56px 20px" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 58,
+              height: 58,
+              borderRadius: "50%",
+              background: `color-mix(in srgb, ${C.goldSoft} 70%, transparent)`,
+              border: `1px solid ${C.goldSoft}`,
+              color: C.gold,
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              marginBottom: 14,
+            }}
+          >
+            ♪
+          </div>
+          <p
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 16,
+              color: C.cacao,
+              letterSpacing: 2,
+              margin: 0,
+              textTransform: "uppercase",
+            }}
+          >
+            Aún no has agregado canciones
+          </p>
+        </div>
       )}
 
       <div aria-live="polite">
@@ -78,74 +150,190 @@ export function MySongsPanel({
           const isPlaying = item.status === "playing";
 
           return (
-            <div
+            <article
               key={item.id}
               style={{
-                padding: "14px 0",
-                borderBottom: "1px solid #f3f4f6",
+                padding: "14px 12px",
+                margin: "0 -12px 6px",
+                borderRadius: 10,
                 display: "flex",
-                gap: 12,
+                gap: 14,
                 alignItems: "flex-start",
-                background: isPlaying ? "#f0fdf4" : "transparent",
-                borderRadius: 4,
+                borderBottom: `1px solid ${C.sand}`,
+                background: isPlaying
+                  ? `linear-gradient(90deg, color-mix(in srgb, ${C.oliveSoft} 60%, transparent) 0%, transparent 100%)`
+                  : "transparent",
+                transition: "background 0.2s ease",
               }}
             >
               <div
                 style={{
-                  width: 30, minWidth: 30,
-                  fontFamily: "'Bebas Neue',Impact,sans-serif",
-                  fontSize: isPlaying ? 20 : 16,
-                  color: isPlaying ? "#16a34a" : "#d1d5db",
-                  textAlign: "center", paddingTop: 2,
+                  width: 36,
+                  minWidth: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: isPlaying ? C.olive : C.goldSoft,
+                  color: isPlaying ? C.paper : C.cacao,
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: isPlaying ? 18 : 14,
+                  letterSpacing: 0,
                 }}
               >
                 {isPlaying ? "▶" : `#${item.position}`}
               </div>
+
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 14, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 15,
+                    color: C.ink,
+                    letterSpacing: 0.3,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    lineHeight: 1.2,
+                  }}
+                >
                   {item.song?.title ?? `Song ${item.song_id}`}
                 </div>
-                <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace", marginTop: 4, display: "flex", gap: 8, alignItems: "center" }}>
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: C.mute,
+                    fontFamily: FONT_MONO,
+                    marginTop: 5,
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    letterSpacing: 1,
+                  }}
+                >
                   <span>{secToMin(item.song?.duration ?? 0)}</span>
-                  <span style={{ color: status.color, letterSpacing: 1 }}>{status.text}</span>
+                  <span
+                    style={{
+                      color: status.color,
+                      letterSpacing: 1.5,
+                      fontWeight: 700,
+                    }}
+                  >
+                    ● {status.text}
+                  </span>
                 </div>
                 <div
                   aria-live="polite"
-                  style={{ fontSize: 10, color: isPlaying ? "#16a34a" : "#888", fontFamily: "monospace", marginTop: 4, fontStyle: "italic" }}
+                  style={{
+                    fontSize: 11,
+                    color: isPlaying ? C.olive : C.cacao,
+                    fontFamily: FONT_MONO,
+                    marginTop: 6,
+                    letterSpacing: 0.5,
+                    fontStyle: "italic",
+                  }}
                 >
                   {waitMsg}
                 </div>
               </div>
-            </div>
+            </article>
           );
         })}
       </div>
 
       {history.length > 0 && (
         <>
-          <div style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 10, letterSpacing: 3, color: "#d1d5db", marginTop: 20, marginBottom: 8 }}>
-            HISTORIAL
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 3,
+              color: C.mute,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              marginTop: 24,
+              marginBottom: 10,
+              paddingTop: 16,
+              borderTop: `1px solid ${C.sand}`,
+            }}
+          >
+            — Historial
           </div>
           {history.map((item) => {
             const status = getStatusLabel(item.status);
+            const skipped = item.status === "skipped";
             return (
-              <div
+              <article
                 key={item.id}
-                style={{ padding: "10px 0", borderBottom: "1px solid #f9fafb", display: "flex", gap: 12, alignItems: "center", opacity: 0.6 }}
+                style={{
+                  padding: "10px 0",
+                  borderBottom: `1px solid ${C.sand}`,
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  opacity: 0.7,
+                }}
               >
-                <div style={{ width: 30, minWidth: 30, textAlign: "center", fontSize: 12, color: "#d1d5db" }}>
-                  {item.status === "skipped" ? "✕" : "✓"}
+                <div
+                  style={{
+                    width: 30,
+                    minWidth: 30,
+                    textAlign: "center",
+                    fontSize: 14,
+                    color: skipped ? C.burgundy : C.mute,
+                    fontFamily: FONT_DISPLAY,
+                  }}
+                >
+                  {skipped ? "✕" : "✓"}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div
+                    style={{
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 13,
+                      color: C.cacao,
+                      letterSpacing: 0.2,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
                     {item.song?.title ?? `Song ${item.song_id}`}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                  <span style={{ fontSize: 9, color: status.color, fontFamily: "monospace", letterSpacing: 1 }}>{status.text}</span>
-                  <span style={{ fontSize: 9, color: "#d1d5db", fontFamily: "monospace" }}>{timeAgo(item.updated_at)}</span>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-end",
+                    gap: 2,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 9,
+                      color: status.color,
+                      fontFamily: FONT_MONO,
+                      letterSpacing: 1.2,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {status.text}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      color: C.mute,
+                      fontFamily: FONT_MONO,
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    {timeAgo(item.updated_at)}
+                  </span>
                 </div>
-              </div>
+              </article>
             );
           })}
         </>

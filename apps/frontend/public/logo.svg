@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120" fill="none">
+  <!-- TODO: reemplazar este SVG placeholder con el logo final del bar.
+       Recomendado: SVG con viewBox 240x120, color principal #E9B949 (dorado),
+       fondo transparente. Si se entrega PNG, usar PNG de 960x480 con fondo transparente. -->
+  <g stroke="#E9B949" stroke-width="2.4" stroke-linejoin="round" fill="none">
+    <!-- Corona -->
+    <path d="M32 56 L48 30 L66 52 L84 24 L102 52 L120 30 L120 74 L32 74 Z" fill="#E9B949" fill-opacity="0.12"/>
+    <circle cx="48" cy="28" r="3" fill="#E9B949"/>
+    <circle cx="84" cy="22" r="3" fill="#E9B949"/>
+    <circle cx="120" cy="28" r="3" fill="#E9B949"/>
+    <line x1="32" y1="82" x2="120" y2="82" stroke-width="3"/>
+  </g>
+  <text x="140" y="66" font-family="'Oswald', 'Arial Narrow', sans-serif" font-weight="700" font-size="44" letter-spacing="2" fill="#F5EFE2">4.90</text>
+  <text x="141" y="88" font-family="'Manrope', sans-serif" font-size="10" letter-spacing="6" fill="#E9B949">CROWN BAR</text>
+</svg>

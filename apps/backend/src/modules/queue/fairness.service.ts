@@ -109,11 +109,13 @@ export class FairnessService {
       Date.now() - RECENT_ORDER_WINDOW_MINUTES * 60 * 1000,
     );
 
-    const tablesWithOrders = await db.order.findMany({
+    const tablesWithOrdersRaw = await db.order.findMany({
       where: { created_at: { gte: recentOrderCutoff } },
-      select: { table_id: true },
-      distinct: ["table_id"],
+      select: { table_session: { select: { table_id: true } } },
     });
+    const tablesWithOrders = tablesWithOrdersRaw.map((o) => ({
+      table_id: o.table_session.table_id,
+    }));
 
     const activeTableIds = new Set([
       ...tablesWithQueue.map((t) => t.table_id),

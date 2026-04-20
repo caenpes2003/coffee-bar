@@ -8,7 +8,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 
-class CreateOrderItemDto {
+class CreateOrderRequestItemDto {
   @IsInt()
   @IsPositive()
   product_id!: number;
@@ -19,14 +19,14 @@ class CreateOrderItemDto {
   quantity!: number;
 }
 
-export class CreateOrderDto {
+export class CreateOrderRequestDto {
   @IsInt()
   @IsPositive()
-  table_id!: number;
+  table_session_id!: number;
 
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
-  @Type(() => CreateOrderItemDto)
-  items!: CreateOrderItemDto[];
+  @Type(() => CreateOrderRequestItemDto)
+  items!: CreateOrderRequestItemDto[];
 }

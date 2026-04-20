@@ -1,26 +1,176 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------ */
+/*  Crown Bar 4.90 — design tokens                                     */
+/* ------------------------------------------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --crown-midnight: #0b0f14;
+  --crown-pitch: #0e2a1f;
+  --crown-gold: #e9b949;
+  --crown-gold-hot: #f6cf6a;
+  --crown-cream: #f5efe2;
+  --crown-ember: #8b2635;
+  --crown-chalk: rgba(245, 239, 226, 0.08);
+
+  --background: var(--crown-midnight);
+  --foreground: var(--crown-cream);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  --color-crown-midnight: var(--crown-midnight);
+  --color-crown-pitch: var(--crown-pitch);
+  --color-crown-gold: var(--crown-gold);
+  --color-crown-gold-hot: var(--crown-gold-hot);
+  --color-crown-cream: var(--crown-cream);
+  --color-crown-ember: var(--crown-ember);
+  --color-crown-chalk: var(--crown-chalk);
+
+  --font-sans: var(--font-manrope);
+  --font-display: var(--font-bebas);
+  --font-score: var(--font-oswald);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ------------------------------------------------------------------ */
+/*  Base                                                               */
+/* ------------------------------------------------------------------ */
+html,
+body {
+  background: var(--crown-midnight);
+  color: var(--crown-cream);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-manrope), system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--crown-gold);
+  color: var(--crown-midnight);
+}
+
+/* Focus ring — visible gold for accessibility */
+:focus-visible {
+  outline: 2px solid var(--crown-gold);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Atmosphere — grain overlay + pitch texture                         */
+/* ------------------------------------------------------------------ */
+.crown-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.14;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 240px 240px;
+}
+
+.crown-vignette::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+}
+
+.crown-pitch-lines {
+  background-image:
+    linear-gradient(var(--crown-chalk) 1px, transparent 1px),
+    linear-gradient(90deg, var(--crown-chalk) 1px, transparent 1px);
+  background-size: 80px 80px;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Keyframes                                                          */
+/* ------------------------------------------------------------------ */
+@keyframes crown-ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes crown-pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.75; }
+  100% { transform: scale(2.2); opacity: 0;    }
+}
+
+@keyframes crown-spotlight {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.85; }
+}
+
+@keyframes crown-scoreboard-blink {
+  0%, 60%, 100% { opacity: 1; }
+  30%           { opacity: 0.35; }
+}
+
+.crown-animate-ticker {
+  animation: crown-ticker 42s linear infinite;
+}
+
+.crown-animate-pulse-ring {
+  animation: crown-pulse-ring 2.4s ease-out infinite;
+}
+
+.crown-animate-spotlight {
+  animation: crown-spotlight 5s ease-in-out infinite;
+}
+
+.crown-animate-blink {
+  animation: crown-scoreboard-blink 1.8s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Utility: corner ticks (estadio signage)                            */
+/* ------------------------------------------------------------------ */
+.crown-corner-tick {
+  position: relative;
+}
+.crown-corner-tick::before,
+.crown-corner-tick::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--crown-gold);
+}
+.crown-corner-tick::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.crown-corner-tick::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reduced motion                                                     */
+/* ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .crown-animate-ticker,
+  .crown-animate-pulse-ring,
+  .crown-animate-spotlight,
+  .crown-animate-blink {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
 }

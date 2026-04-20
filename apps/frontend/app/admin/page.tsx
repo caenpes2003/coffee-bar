@@ -7,17 +7,44 @@ import {
   tablesApi,
   queueApi,
   ordersApi,
+  orderRequestsApi,
   playbackApi,
   musicApi,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { AdminBillDrawer } from "@/components/admin/AdminBillDrawer";
 import type {
+  Order,
+  OrderRequest,
+  PlaybackState,
   QueueItem,
   Table,
-  Order,
-  PlaybackState,
   YouTubeSearchResult,
 } from "@coffee-bar/shared";
+
+// ─── Warm premium palette ─────────────────────────────────────────────────────
+const C = {
+  cream: "#FDF8EC",
+  parchment: "#F8F1E4",
+  sand: "#F1E6D2",
+  sandDark: "#E6D8BF",
+  gold: "#B8894A",
+  goldSoft: "#E8D4A8",
+  burgundy: "#8B2635",
+  burgundySoft: "#E8CDD2",
+  olive: "#6B7E4A",
+  oliveSoft: "#E5EAD3",
+  cacao: "#6B4E2E",
+  ink: "#2B1D14",
+  mute: "#A89883",
+  paper: "#FFFDF8",
+  shadow: "0 1px 0 rgba(43,29,20,0.04), 0 12px 32px -18px rgba(107,78,46,0.28)",
+  shadowLift: "0 2px 0 rgba(43,29,20,0.05), 0 22px 40px -18px rgba(184,137,74,0.55)",
+  shadowModal: "0 30px 80px -20px rgba(43,29,20,0.45), 0 10px 32px -12px rgba(107,78,46,0.35)",
+};
+const FONT_DISPLAY = "var(--font-bebas), 'Bebas Neue', Impact, sans-serif";
+const FONT_UI = "var(--font-manrope), system-ui, sans-serif";
+const FONT_MONO = "var(--font-oswald), 'Oswald', ui-monospace, monospace";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
@@ -30,33 +57,36 @@ const fmt = (n: number) =>
 const pad = (n: number) => String(n).padStart(2, "0");
 const secToMin = (s: number) => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 
+// Map existing statuses to our warm palette
 const statusColor: Record<string, string> = {
-  available: "#3b82f6",
-  active: "#16a34a",
-  inactive: "#9ca3af",
-  occupied: "#ea580c",
-  pending: "#ca8a04",
-  preparing: "#ea580c",
-  ready: "#3b82f6",
-  delivered: "#16a34a",
-  cancelled: "#dc2626",
-  played: "#9ca3af",
-  skipped: "#dc2626",
+  available: C.gold,
+  active: C.olive,
+  inactive: C.mute,
+  occupied: C.burgundy,
+  pending: C.gold,
+  preparing: C.burgundy,
+  ready: C.olive,
+  delivered: C.olive,
+  cancelled: C.burgundy,
+  played: C.mute,
+  skipped: C.burgundy,
 };
 
 function Badge({ label, status }: { label: string; status: string }) {
-  const color = statusColor[status] ?? "#9ca3af";
+  const color = statusColor[status] ?? C.mute;
   return (
     <span
       style={{
         fontSize: 9,
-        fontFamily: "monospace",
-        letterSpacing: 1,
+        fontFamily: FONT_MONO,
+        letterSpacing: 1.5,
         color,
-        border: `1px solid ${color}44`,
-        background: `${color}10`,
-        padding: "2px 7px",
-        borderRadius: 3,
+        border: `1px solid ${color}55`,
+        background: `${color}14`,
+        padding: "3px 9px",
+        borderRadius: 999,
+        fontWeight: 700,
+        textTransform: "uppercase",
       }}
     >
       {label.toUpperCase()}
@@ -84,11 +114,9 @@ function fmtTime(dateStr: string | null): string {
 function AdminSearchModal({
   open,
   onClose,
-  queueLength,
 }: {
   open: boolean;
   onClose: () => void;
-  queueLength: number;
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<YouTubeSearchResult[]>([]);
@@ -105,6 +133,15 @@ function AdminSearchModal({
       setError(null);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
   }, [open]);
 
   const search = async (q: string) => {
@@ -168,73 +205,113 @@ function AdminSearchModal({
     <div
       role="dialog"
       aria-modal="true"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.5)",
         zIndex: 1000,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 20,
+        padding: 16,
+        background: `
+          radial-gradient(ellipse at 30% 20%, rgba(184,137,74,0.15), transparent 60%),
+          radial-gradient(ellipse at 80% 80%, rgba(139,38,53,0.12), transparent 55%),
+          rgba(43,29,20,0.55)
+        `,
+        backdropFilter: "blur(8px)",
+        WebkitBackdropFilter: "blur(8px)",
       }}
     >
       <div
         style={{
-          background: "#fff",
-          borderRadius: 8,
+          fontFamily: FONT_UI,
+          color: C.ink,
+          background: `linear-gradient(180deg, ${C.paper} 0%, ${C.parchment} 100%)`,
+          border: `1px solid ${C.sand}`,
+          borderRadius: 20,
+          boxShadow: C.shadowModal,
           width: "100%",
-          maxWidth: 600,
-          maxHeight: "80vh",
+          maxWidth: 640,
+          maxHeight: "min(680px, calc(100dvh - 32px))",
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+          overflow: "hidden",
         }}
       >
         {/* Header */}
         <div
           style={{
-            padding: "16px 20px",
-            borderBottom: "1px solid #e5e7eb",
+            padding: "20px 22px 16px",
+            borderBottom: `1px solid ${C.sand}`,
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center",
+            alignItems: "flex-start",
+            gap: 12,
           }}
         >
           <div>
             <div
               style={{
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 18,
+                fontFamily: FONT_MONO,
+                fontSize: 9,
                 letterSpacing: 3,
-                color: "#111",
+                color: C.mute,
+                fontWeight: 600,
+                textTransform: "uppercase",
               }}
             >
-              AGREGAR CANCIÓN (ADMIN)
+              — Admin
             </div>
-            <div style={{ fontSize: 11, color: "#888", fontFamily: "monospace", marginTop: 2 }}>
+            <h2
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 24,
+                letterSpacing: 3,
+                color: C.ink,
+                margin: "6px 0 4px",
+                lineHeight: 1,
+              }}
+            >
+              AGREGAR CANCIÓN
+            </h2>
+            <p
+              style={{
+                fontSize: 11,
+                color: C.cacao,
+                fontFamily: FONT_MONO,
+                letterSpacing: 1,
+                margin: 0,
+              }}
+            >
               Sin restricciones de duración o límite
-            </div>
+            </p>
           </div>
           <button
             onClick={onClose}
+            aria-label="Cerrar"
             style={{
-              background: "#f3f4f6",
-              border: "1px solid #d1d5db",
-              color: "#666",
-              padding: "4px 12px",
-              fontFamily: "monospace",
-              fontSize: 12,
+              background: C.paper,
+              border: `1px solid ${C.sand}`,
+              color: C.cacao,
+              width: 34,
+              height: 34,
+              fontSize: 22,
+              lineHeight: 1,
               cursor: "pointer",
-              borderRadius: 4,
+              borderRadius: 10,
+              fontFamily: FONT_UI,
+              flexShrink: 0,
             }}
           >
-            CERRAR
+            ×
           </button>
         </div>
 
         {/* Search */}
-        <div style={{ padding: "12px 20px" }}>
+        <div style={{ padding: "14px 22px 4px" }}>
           <input
             ref={inputRef}
             type="text"
@@ -243,14 +320,14 @@ function AdminSearchModal({
             placeholder="Buscar cualquier canción..."
             style={{
               width: "100%",
-              padding: "12px 14px",
-              background: "#f9fafb",
-              border: "1px solid #d1d5db",
-              color: "#111",
-              fontFamily: "monospace",
+              padding: "13px 14px",
+              background: C.paper,
+              border: `1px solid ${C.sand}`,
+              color: C.ink,
+              fontFamily: FONT_UI,
               fontSize: 14,
               outline: "none",
-              borderRadius: 4,
+              borderRadius: 12,
             }}
           />
         </div>
@@ -259,14 +336,15 @@ function AdminSearchModal({
           <div
             role="alert"
             style={{
-              margin: "0 20px 8px",
-              padding: "8px 12px",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#dc2626",
-              fontFamily: "monospace",
+              margin: "10px 22px 0",
+              padding: "10px 12px",
+              background: C.burgundySoft,
+              border: `1px solid ${C.burgundy}`,
+              color: C.burgundy,
+              fontFamily: FONT_MONO,
               fontSize: 11,
-              borderRadius: 4,
+              letterSpacing: 1,
+              borderRadius: 10,
             }}
           >
             {error}
@@ -274,19 +352,18 @@ function AdminSearchModal({
         )}
 
         {/* Results */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 16px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "10px 22px 20px", minHeight: 0 }}>
           {loading && (
-            <p style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 11 }}>
-              BUSCANDO...
+            <p style={{ textAlign: "center", padding: 24, color: C.mute, fontFamily: FONT_MONO, fontSize: 11, letterSpacing: 2.5, textTransform: "uppercase" }}>
+              Buscando...
             </p>
           )}
 
           {!loading && !error && query.length >= 2 && results.length === 0 && (
-            <p style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 11 }}>
-              SIN RESULTADOS
+            <p style={{ textAlign: "center", padding: 24, color: C.mute, fontFamily: FONT_MONO, fontSize: 11, letterSpacing: 2.5, textTransform: "uppercase" }}>
+              Sin resultados
             </p>
           )}
-
 
           {results.map((r) => {
             const isAdding = adding?.includes(r.youtubeId) ?? false;
@@ -297,48 +374,73 @@ function AdminSearchModal({
                   display: "flex",
                   alignItems: "center",
                   gap: 12,
-                  padding: "10px 0",
-                  borderBottom: "1px solid #f3f4f6",
+                  padding: "11px 10px",
+                  margin: "0 -10px",
+                  borderRadius: 10,
+                  borderBottom: `1px solid ${C.sand}`,
                 }}
               >
-                {r.thumbnail && (
+                {r.thumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={r.thumbnail}
                     alt=""
-                    style={{ width: 48, height: 36, objectFit: "cover", borderRadius: 3 }}
+                    style={{ width: 56, height: 42, objectFit: "cover", borderRadius: 8, flexShrink: 0 }}
                   />
+                ) : (
+                  <div
+                    aria-hidden
+                    style={{
+                      width: 56,
+                      height: 42,
+                      borderRadius: 8,
+                      background: `linear-gradient(135deg, ${C.goldSoft} 0%, ${C.burgundySoft} 100%)`,
+                      color: C.gold,
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 18,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    ♪
+                  </div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontFamily: "'Bebas Neue',Impact,sans-serif",
-                      fontSize: 13,
-                      color: "#111",
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 14,
+                      color: C.ink,
+                      letterSpacing: 0.3,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
+                      lineHeight: 1.2,
                     }}
                   >
                     {r.title}
                   </div>
-                  <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace" }}>
+                  <div style={{ fontSize: 10, color: C.mute, fontFamily: FONT_MONO, marginTop: 3, letterSpacing: 1 }}>
                     {secToMin(r.duration)}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button
                     onClick={() => handlePlayNow(r)}
                     disabled={isAdding}
                     style={{
-                      padding: "5px 10px",
-                      background: isAdding ? "#e5e7eb" : "#dc2626",
+                      padding: "7px 11px",
+                      background: isAdding ? C.sand : C.burgundy,
                       border: "none",
-                      color: isAdding ? "#999" : "#fff",
-                      fontFamily: "'Bebas Neue',Impact,sans-serif",
-                      fontSize: 10,
-                      letterSpacing: 1,
+                      color: isAdding ? C.mute : C.paper,
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 11,
+                      letterSpacing: 1.5,
                       cursor: isAdding ? "not-allowed" : "pointer",
-                      borderRadius: 3,
+                      borderRadius: 999,
+                      WebkitTapHighlightColor: "transparent",
                     }}
                   >
                     SONAR YA
@@ -347,15 +449,18 @@ function AdminSearchModal({
                     onClick={() => handleAddToQueue(r, 1)}
                     disabled={isAdding}
                     style={{
-                      padding: "5px 10px",
-                      background: isAdding ? "#e5e7eb" : "#2563eb",
+                      padding: "7px 11px",
+                      background: isAdding
+                        ? C.sand
+                        : `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
                       border: "none",
-                      color: isAdding ? "#999" : "#fff",
-                      fontFamily: "'Bebas Neue',Impact,sans-serif",
-                      fontSize: 10,
-                      letterSpacing: 1,
+                      color: isAdding ? C.mute : C.paper,
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 11,
+                      letterSpacing: 1.5,
                       cursor: isAdding ? "not-allowed" : "pointer",
-                      borderRadius: 3,
+                      borderRadius: 999,
+                      WebkitTapHighlightColor: "transparent",
                     }}
                   >
                     SIGUIENTE
@@ -364,15 +469,16 @@ function AdminSearchModal({
                     onClick={() => handleAddToQueue(r)}
                     disabled={isAdding}
                     style={{
-                      padding: "5px 10px",
-                      background: isAdding ? "#e5e7eb" : "#f3f4f6",
-                      border: "1px solid #d1d5db",
-                      color: isAdding ? "#999" : "#333",
-                      fontFamily: "'Bebas Neue',Impact,sans-serif",
-                      fontSize: 10,
-                      letterSpacing: 1,
+                      padding: "7px 11px",
+                      background: "transparent",
+                      border: `1px solid ${C.sand}`,
+                      color: isAdding ? C.mute : C.cacao,
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 11,
+                      letterSpacing: 1.5,
                       cursor: isAdding ? "not-allowed" : "pointer",
-                      borderRadius: 3,
+                      borderRadius: 999,
+                      WebkitTapHighlightColor: "transparent",
                     }}
                   >
                     AL FINAL
@@ -388,68 +494,165 @@ function AdminSearchModal({
 }
 
 // ─── Columna mesas ────────────────────────────────────────────────────────────
-function TablesColumn({ tables }: { tables: Table[] }) {
+function TablesColumn({
+  tables,
+  onOpenBill,
+}: {
+  tables: Table[];
+  onOpenBill: (sessionId: number, tableNumber: number | null) => void;
+}) {
+  // Sort priority: pending attention > operating > closing > available.
+  // Within the top band, pending requests break the tie so staff see them first.
+  const statusRank: Record<string, number> = {
+    occupied: 0,
+    closing: 1,
+    available: 2,
+  };
+  const sortedTables = [...tables].sort((a, b) => {
+    const aAttention =
+      a.pending_request_count > 0 || a.active_order_count > 0 ? 0 : 1;
+    const bAttention =
+      b.pending_request_count > 0 || b.active_order_count > 0 ? 0 : 1;
+    if (aAttention !== bAttention) return aAttention - bAttention;
+    const rs = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
+    if (rs !== 0) return rs;
+    if (b.pending_request_count !== a.pending_request_count) {
+      return b.pending_request_count - a.pending_request_count;
+    }
+    return (a.number ?? a.id) - (b.number ?? b.id);
+  });
+
   return (
     <div
       style={{
         flex: 1,
-        minWidth: 200,
-        borderRight: "1px solid #e5e7eb",
+        minWidth: 220,
+        borderRight: `1px solid ${C.sand}`,
         overflowY: "auto",
+        background: C.paper,
       }}
     >
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb" }}>
-        <span
-          style={{
-            fontFamily: "'Bebas Neue',Impact,sans-serif",
-            fontSize: 13,
-            letterSpacing: 3,
-            color: "#888",
-          }}
-        >
-          MESAS
-        </span>
-      </div>
-      {tables.map((t) => (
+      <ColumnHeader label="Mesas" count={tables.length} />
+      {sortedTables.map((t) => {
+        const isAvailable = t.status === "available";
+        const needsAttention = t.pending_request_count > 0;
+        return (
         <div
           key={t.id}
-          style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6" }}
+          style={{
+            padding: "14px 18px",
+            borderBottom: `1px solid ${C.sand}`,
+            borderLeft: needsAttention
+              ? `3px solid ${C.burgundy}`
+              : "3px solid transparent",
+            background: needsAttention
+              ? `color-mix(in srgb, ${C.burgundySoft} 25%, transparent)`
+              : "transparent",
+            opacity: isAvailable ? 0.7 : 1,
+          }}
         >
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              marginBottom: 6,
+              marginBottom: isAvailable ? 0 : 8,
             }}
           >
             <span
               style={{
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 22,
-                color: "#111",
+                fontFamily: FONT_DISPLAY,
+                fontSize: isAvailable ? 20 : 24,
+                color: isAvailable ? C.mute : C.ink,
+                letterSpacing: -0.5,
               }}
             >
-              {pad(t.id)}
+              {pad(t.number ?? t.id)}
             </span>
             <Badge label={t.status} status={t.status} />
           </div>
+          {!isAvailable && (
           <div
             style={{
-              fontFamily: "'Bebas Neue',Impact,sans-serif",
-              fontSize: 14,
-              color: "#ca8a04",
+              fontFamily: FONT_DISPLAY,
+              fontSize: 16,
+              color: C.gold,
+              letterSpacing: 0.5,
             }}
           >
             {fmt(t.total_consumption)}
           </div>
+          )}
+          {(t.pending_request_count > 0 || t.active_order_count > 0) && (
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                marginTop: 8,
+                fontFamily: FONT_MONO,
+                fontSize: 9,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+              }}
+            >
+              {t.pending_request_count > 0 && (
+                <span
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: C.burgundySoft,
+                    color: C.burgundy,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t.pending_request_count} solicitud
+                  {t.pending_request_count === 1 ? "" : "es"}
+                </span>
+              )}
+              {t.active_order_count > 0 && (
+                <span
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: C.goldSoft,
+                    color: C.cacao,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t.active_order_count} pedido
+                  {t.active_order_count === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+          )}
+          {t.current_session_id != null && (
+            <button
+              type="button"
+              onClick={() =>
+                onOpenBill(t.current_session_id!, t.number ?? t.id)
+              }
+              style={{
+                marginTop: 10,
+                padding: "6px 12px",
+                border: `1px solid ${C.sand}`,
+                background: C.paper,
+                color: C.cacao,
+                borderRadius: 999,
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 1.5,
+                cursor: "pointer",
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              Ver cuenta
+            </button>
+          )}
         </div>
-      ))}
-      {tables.length === 0 && (
-        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
-          SIN MESAS
-        </p>
-      )}
+        );
+      })}
+      {tables.length === 0 && <EmptyMsg text="Sin mesas" />}
     </div>
   );
 }
@@ -464,34 +667,13 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
     <div
       style={{
         flex: 1.4,
-        minWidth: 240,
-        borderRight: "1px solid #e5e7eb",
+        minWidth: 260,
+        borderRight: `1px solid ${C.sand}`,
         overflowY: "auto",
+        background: C.paper,
       }}
     >
-      <div
-        style={{
-          padding: "14px 16px",
-          borderBottom: "1px solid #e5e7eb",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <span
-          style={{
-            fontFamily: "'Bebas Neue',Impact,sans-serif",
-            fontSize: 13,
-            letterSpacing: 3,
-            color: "#888",
-          }}
-        >
-          COLA GLOBAL
-        </span>
-        <span style={{ fontFamily: "monospace", fontSize: 10, color: "#9ca3af" }}>
-          {queue.length} canciones
-        </span>
-      </div>
+      <ColumnHeader label="Cola global" count={queue.length} />
       {queue.map((item, i) => {
         const playing = item.status === "playing";
         return (
@@ -502,19 +684,26 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
               display: "flex",
               alignItems: "center",
               gap: 12,
-              padding: "11px 16px",
-              borderBottom: "1px solid #f3f4f6",
-              background: playing ? "#f0fdf4" : "transparent",
-              cursor: "default",
+              padding: "12px 18px",
+              borderBottom: `1px solid ${C.sand}`,
+              background: playing
+                ? `linear-gradient(90deg, color-mix(in srgb, ${C.oliveSoft} 60%, transparent) 0%, transparent 100%)`
+                : "transparent",
             }}
           >
             <span
               style={{
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: playing ? 18 : 13,
-                color: playing ? "#16a34a" : "#9ca3af",
-                width: 22,
-                textAlign: "center",
+                width: 28,
+                minWidth: 28,
+                height: 28,
+                borderRadius: 8,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontFamily: FONT_DISPLAY,
+                fontSize: playing ? 15 : 13,
+                color: playing ? C.paper : C.mute,
+                background: playing ? C.olive : "transparent",
               }}
             >
               {playing ? "▶" : pad(i + 1)}
@@ -522,9 +711,10 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
-                  fontFamily: "'Bebas Neue',Impact,sans-serif",
+                  fontFamily: FONT_DISPLAY,
                   fontSize: 13,
-                  color: playing ? "#111" : "#555",
+                  color: playing ? C.ink : C.cacao,
+                  letterSpacing: 0.3,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -532,152 +722,395 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
               >
                 {item.song?.title ?? `Song #${item.song_id}`}
               </div>
-              <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>
-                {item.table_id ? `Mesa ${pad(item.table_id)}` : "ADMIN"} · pos. {item.position} · {playing && item.started_playing_at ? `sonando ${timeAgo(item.started_playing_at)}` : `en cola ${timeAgo(item.created_at)}`}
+              <div style={{ fontSize: 10, color: C.mute, fontFamily: FONT_MONO, marginTop: 3, letterSpacing: 0.8 }}>
+                {item.table_id ? `Mesa ${pad(item.table_id)}` : "ADMIN"} · pos. {item.position} ·{" "}
+                {playing && item.started_playing_at
+                  ? `sonando ${timeAgo(item.started_playing_at)}`
+                  : `en cola ${timeAgo(item.created_at)}`}
               </div>
             </div>
             {!playing && (
               <button
                 onClick={() => skip(item.id)}
                 style={{
-                  background: "#f3f4f6",
-                  border: "1px solid #d1d5db",
-                  color: "#888",
-                  padding: "3px 8px",
-                  fontFamily: "monospace",
+                  background: "transparent",
+                  border: `1px solid ${C.sand}`,
+                  color: C.cacao,
+                  padding: "4px 10px",
+                  fontFamily: FONT_MONO,
                   fontSize: 10,
+                  letterSpacing: 1,
                   cursor: "pointer",
-                  borderRadius: 3,
+                  borderRadius: 999,
+                  fontWeight: 600,
+                  textTransform: "uppercase",
                 }}
               >
-                SKIP
+                Skip
               </button>
             )}
           </div>
         );
       })}
-      {queue.length === 0 && (
-        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
-          COLA VACÍA
-        </p>
-      )}
+      {queue.length === 0 && <EmptyMsg text="Cola vacía" />}
+    </div>
+  );
+}
+
+// ─── Columna solicitudes pendientes ──────────────────────────────────────────
+// Why: customers create OrderRequests that need explicit staff review before
+// stock is decremented. This column is the single place where accept/reject
+// happens — without it, no customer request can ever become an Order.
+function PendingRequestsColumn({
+  requests,
+  tables,
+}: {
+  requests: OrderRequest[];
+  tables: Table[];
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [errorByRequest, setErrorByRequest] = useState<Record<number, string>>(
+    {},
+  );
+
+  const tableNumberBySessionId = new Map<number, number>();
+  for (const t of tables) {
+    if (t.current_session_id != null) {
+      tableNumberBySessionId.set(t.current_session_id, t.number ?? t.id);
+    }
+  }
+
+  const run = async (id: number, action: "accept" | "reject") => {
+    setBusyId(id);
+    setErrorByRequest((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      if (action === "accept") {
+        await orderRequestsApi.accept(id);
+      } else {
+        await orderRequestsApi.reject(id);
+      }
+    } catch (err) {
+      setErrorByRequest((prev) => ({ ...prev, [id]: getErrorMessage(err) }));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        flex: 1.2,
+        minWidth: 260,
+        overflowY: "auto",
+        background: C.paper,
+        borderLeft: `1px solid ${C.sand}`,
+      }}
+    >
+      <ColumnHeader label="Solicitudes" count={requests.length} />
+      {requests.map((r) => {
+        const tableNumber =
+          tableNumberBySessionId.get(r.table_session_id) ??
+          r.table_session?.table_id;
+        const itemsCount = Array.isArray(r.items)
+          ? r.items.reduce((acc, it) => acc + (it.quantity ?? 0), 0)
+          : 0;
+        const busy = busyId === r.id;
+        return (
+          <div
+            key={r.id}
+            style={{
+              padding: "14px 18px",
+              borderBottom: `1px solid ${C.sand}`,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 16,
+                    color: C.ink,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  {tableNumber != null
+                    ? `Mesa ${pad(tableNumber)}`
+                    : `Sesión ${r.table_session_id}`}
+                </span>
+                <Badge label={r.status} status={r.status} />
+              </div>
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 11,
+                  color: C.mute,
+                  letterSpacing: 1,
+                }}
+              >
+                {itemsCount} {itemsCount === 1 ? "unidad" : "unidades"}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => run(r.id, "accept")}
+                disabled={busy}
+                style={{
+                  flex: 1,
+                  padding: "8px 0",
+                  background: busy
+                    ? C.sand
+                    : `color-mix(in srgb, ${C.oliveSoft} 50%, transparent)`,
+                  border: `1px solid ${busy ? C.sand : C.olive}`,
+                  color: busy ? C.mute : C.olive,
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 11,
+                  letterSpacing: 2.5,
+                  cursor: busy ? "not-allowed" : "pointer",
+                  borderRadius: 999,
+                  fontWeight: 600,
+                }}
+              >
+                ACEPTAR
+              </button>
+              <button
+                onClick={() => run(r.id, "reject")}
+                disabled={busy}
+                style={{
+                  padding: "8px 12px",
+                  background: C.burgundySoft,
+                  border: `1px solid ${C.burgundy}`,
+                  color: C.burgundy,
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
+                  cursor: busy ? "not-allowed" : "pointer",
+                  borderRadius: 999,
+                  fontWeight: 700,
+                }}
+              >
+                RECHAZAR
+              </button>
+            </div>
+            {errorByRequest[r.id] && (
+              <p
+                role="alert"
+                style={{
+                  margin: "8px 0 0",
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  color: C.burgundy,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                }}
+              >
+                {errorByRequest[r.id]}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {requests.length === 0 && <EmptyMsg text="Sin solicitudes" />}
     </div>
   );
 }
 
 // ─── Columna pedidos ──────────────────────────────────────────────────────────
-function OrdersColumn({ orders }: { orders: Order[] }) {
+function OrdersColumn({
+  orders,
+  tables,
+}: {
+  orders: Order[];
+  tables: Table[];
+}) {
   const update = async (id: number, status: Order["status"]) => {
     await ordersApi.updateStatus(id, status);
   };
 
+  const tableNumberBySessionId = new Map<number, number>();
+  for (const t of tables) {
+    if (t.current_session_id != null) {
+      tableNumberBySessionId.set(t.current_session_id, t.number ?? t.id);
+    }
+  }
+
+  const orderAmount = (o: Order) =>
+    (o.order_items ?? []).reduce(
+      (acc, it) => acc + (it.unit_price ?? 0) * it.quantity,
+      0,
+    );
+
+  const next = {
+    accepted: "preparing" as const,
+    preparing: "ready" as const,
+    ready: "delivered" as const,
+  };
+  const nextLabel = {
+    accepted: "PREPARAR",
+    preparing: "MARCAR LISTO",
+    ready: "ENTREGAR",
+  };
+
   return (
-    <div style={{ flex: 1.4, minWidth: 240, overflowY: "auto" }}>
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb" }}>
-        <span
-          style={{
-            fontFamily: "'Bebas Neue',Impact,sans-serif",
-            fontSize: 13,
-            letterSpacing: 3,
-            color: "#888",
-          }}
-        >
-          PEDIDOS
-        </span>
-      </div>
-      {orders.map((o) => (
+    <div style={{ flex: 1.4, minWidth: 260, overflowY: "auto", background: C.paper }}>
+      <ColumnHeader label="Pedidos" count={orders.length} />
+      {orders.map((o) => {
+        const tableNumber =
+          tableNumberBySessionId.get(o.table_session_id) ??
+          o.table_session?.table_id;
+        const transitionable =
+          o.status === "accepted" ||
+          o.status === "preparing" ||
+          o.status === "ready";
+        const amount = orderAmount(o);
+        return (
         <div
           key={o.id}
-          style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6" }}
+          style={{
+            padding: "14px 18px",
+            borderBottom: `1px solid ${C.sand}`,
+          }}
         >
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              marginBottom: 8,
+              marginBottom: 10,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span
                 style={{
-                  fontFamily: "'Bebas Neue',Impact,sans-serif",
-                  fontSize: 14,
-                  color: "#111",
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 16,
+                  color: C.ink,
+                  letterSpacing: 0.5,
                 }}
               >
-                Mesa {pad(o.table_id)}
+                {tableNumber != null ? `Mesa ${pad(tableNumber)}` : `Sesión ${o.table_session_id}`}
               </span>
               <Badge label={o.status} status={o.status} />
             </div>
-            <span style={{ fontFamily: "monospace", fontSize: 12, color: "#ca8a04" }}>
-              {fmt(o.total)}
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 16, color: C.gold, letterSpacing: 0.5 }}>
+              {fmt(amount)}
             </span>
           </div>
-          {o.status === "pending" && (
+          {transitionable && (
             <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
               <button
-                onClick={() => update(o.id, "preparing")}
+                onClick={() => update(o.id, next[o.status as keyof typeof next])}
                 style={{
                   flex: 1,
-                  padding: "6px 0",
-                  background: "#fffbeb",
-                  border: "1px solid #ca8a04",
-                  color: "#ca8a04",
-                  fontFamily: "'Bebas Neue',Impact,sans-serif",
+                  padding: "8px 0",
+                  background:
+                    o.status === "ready"
+                      ? `color-mix(in srgb, ${C.oliveSoft} 50%, transparent)`
+                      : `color-mix(in srgb, ${C.goldSoft} 40%, transparent)`,
+                  border: `1px solid ${o.status === "ready" ? C.olive : C.gold}`,
+                  color: o.status === "ready" ? C.olive : C.gold,
+                  fontFamily: FONT_DISPLAY,
                   fontSize: 11,
-                  letterSpacing: 2,
+                  letterSpacing: 2.5,
                   cursor: "pointer",
-                  borderRadius: 3,
+                  borderRadius: 999,
+                  fontWeight: 600,
                 }}
               >
-                PREPARAR
+                {nextLabel[o.status as keyof typeof nextLabel]}
               </button>
               <button
                 onClick={() => update(o.id, "cancelled")}
                 style={{
-                  padding: "6px 10px",
-                  background: "#fef2f2",
-                  border: "1px solid #fecaca",
-                  color: "#dc2626",
-                  fontFamily: "monospace",
-                  fontSize: 10,
+                  padding: "8px 12px",
+                  background: C.burgundySoft,
+                  border: `1px solid ${C.burgundy}`,
+                  color: C.burgundy,
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
                   cursor: "pointer",
-                  borderRadius: 3,
+                  borderRadius: 999,
+                  fontWeight: 700,
                 }}
               >
                 ✕
               </button>
             </div>
           )}
-          {o.status === "preparing" && (
-            <button
-              onClick={() => update(o.id, "delivered")}
-              style={{
-                width: "100%",
-                marginTop: 10,
-                padding: "6px 0",
-                background: "#f0fdf4",
-                border: "1px solid #16a34a",
-                color: "#16a34a",
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 11,
-                letterSpacing: 2,
-                cursor: "pointer",
-                borderRadius: 3,
-              }}
-            >
-              ENTREGAR
-            </button>
-          )}
         </div>
-      ))}
-      {orders.length === 0 && (
-        <p style={{ padding: 24, color: "#9ca3af", fontFamily: "monospace", fontSize: 10, letterSpacing: 2 }}>
-          SIN PEDIDOS
-        </p>
-      )}
+        );
+      })}
+      {orders.length === 0 && <EmptyMsg text="Sin pedidos" />}
     </div>
+  );
+}
+
+// ─── Primitives ───────────────────────────────────────────────────────────────
+function ColumnHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div
+      style={{
+        padding: "16px 18px",
+        borderBottom: `1px solid ${C.sand}`,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        background: C.parchment,
+        position: "sticky",
+        top: 0,
+        zIndex: 1,
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 14,
+          letterSpacing: 3,
+          color: C.ink,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          color: C.mute,
+          letterSpacing: 1.5,
+          fontWeight: 600,
+        }}
+      >
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function EmptyMsg({ text }: { text: string }) {
+  return (
+    <p
+      style={{
+        padding: 32,
+        color: C.mute,
+        fontFamily: FONT_MONO,
+        fontSize: 10,
+        letterSpacing: 2,
+        textTransform: "uppercase",
+        textAlign: "center",
+      }}
+    >
+      {text}
+    </p>
   );
 }
 
@@ -697,6 +1130,10 @@ export default function AdminPage() {
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [billDrawer, setBillDrawer] = useState<
+    | { open: true; sessionId: number; tableNumber: number | null }
+    | { open: false }
+  >({ open: false });
   const {
     allTables,
     setAllTables,
@@ -706,6 +1143,9 @@ export default function AdminPage() {
     orders,
     setOrders,
     upsertOrder,
+    orderRequests,
+    setOrderRequests,
+    upsertOrderRequest,
     currentPlayback,
     setCurrentPlayback,
   } = useAppStore();
@@ -722,12 +1162,28 @@ export default function AdminPage() {
     [updateFromSocket, refreshStats],
   );
   const handleTableUpdated = useCallback(
-    (t: Table) => updateTable(t),
-    [updateTable],
+    (patch: Partial<Table> & { id: number }) => {
+      // Projection emits partial patches for counters. Merge into the
+      // current row rather than replacing it.
+      const current = useAppStore
+        .getState()
+        .allTables.find((t) => t.id === patch.id);
+      if (!current) {
+        // New table we haven't seen: refetch list to stay consistent.
+        tablesApi.getAll().then(setAllTables).catch(console.error);
+        return;
+      }
+      updateTable({ ...current, ...patch });
+    },
+    [updateTable, setAllTables],
   );
   const handleOrderUpdated = useCallback(
     (o: Order) => upsertOrder(o),
     [upsertOrder],
+  );
+  const handleOrderRequestUpdated = useCallback(
+    (r: OrderRequest) => upsertOrderRequest(r),
+    [upsertOrderRequest],
   );
   const handlePlaybackUpdated = useCallback(
     (playback: PlaybackState) => setCurrentPlayback(playback),
@@ -735,19 +1191,47 @@ export default function AdminPage() {
   );
 
   useSocket({
+    staff: true,
     onQueueUpdated: handleQueueUpdated,
     onTableUpdated: handleTableUpdated,
+    onOrderCreated: handleOrderUpdated,
     onOrderUpdated: handleOrderUpdated,
+    onOrderRequestCreated: handleOrderRequestUpdated,
+    onOrderRequestUpdated: handleOrderRequestUpdated,
     onPlaybackUpdated: handlePlaybackUpdated,
   });
 
   useEffect(() => {
     tablesApi.getAll().then(setAllTables).catch(console.error);
     queueApi.getGlobal().then(updateFromSocket).catch(console.error);
-    ordersApi.getAll().then(setOrders).catch(console.error);
+    ordersApi
+      .getAll()
+      .then((all) =>
+        setOrders(
+          // Only active orders are actionable; delivered/cancelled go to history.
+          all.filter(
+            (o) =>
+              o.status === "accepted" ||
+              o.status === "preparing" ||
+              o.status === "ready",
+          ),
+        ),
+      )
+      .catch(console.error);
+    orderRequestsApi
+      .getAll({ status: "pending" })
+      .then(setOrderRequests)
+      .catch(console.error);
     playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
     refreshStats();
-  }, [refreshStats]);
+  }, [
+    refreshStats,
+    setAllTables,
+    setCurrentPlayback,
+    setOrders,
+    setOrderRequests,
+    updateFromSocket,
+  ]);
 
   const handleSkipCurrent = useCallback(async () => {
     if (actionRef.current) return;
@@ -792,109 +1276,154 @@ export default function AdminPage() {
   }, []);
 
   const activeOrders = orders.filter(
-    (o) => o.status === "pending" || o.status === "preparing",
+    (o) =>
+      o.status === "accepted" ||
+      o.status === "preparing" ||
+      o.status === "ready",
   );
+  const pendingRequests = orderRequests.filter((r) => r.status === "pending");
   const revenue = allTables.reduce((a, t) => a + t.total_consumption, 0);
   const isPlaying =
     currentPlayback?.status === "playing" && Boolean(currentPlayback.song);
   const hasPendingSongs = queue.some((item) => item.status === "pending");
 
-  const btnBase: React.CSSProperties = {
-    padding: "8px 12px",
-    fontFamily: "'Bebas Neue',Impact,sans-serif",
+  const ctaBase: React.CSSProperties = {
+    padding: "9px 14px",
+    fontFamily: FONT_DISPLAY,
     fontSize: 12,
-    letterSpacing: 2,
-    borderRadius: 4,
+    letterSpacing: 2.5,
+    borderRadius: 999,
     border: "none",
     cursor: "pointer",
+    WebkitTapHighlightColor: "transparent",
+    fontWeight: 600,
   };
+
+  const openSessionsCount = allTables.filter(
+    (t) => t.current_session_id != null,
+  ).length;
+
+  const statCards: { label: string; value: string | number; color: string }[] = [
+    {
+      label: "MESAS ACTIVAS",
+      value: allTables.filter((t) => t.status === "occupied").length,
+      color: C.olive,
+    },
+    {
+      label: "SESIONES ABIERTAS",
+      value: openSessionsCount,
+      color: C.olive,
+    },
+    {
+      label: "SOLICITUDES",
+      value: pendingRequests.length,
+      color: C.burgundy,
+    },
+    { label: "EN COLA", value: queue.length, color: C.gold },
+    { label: "PEDIDOS", value: activeOrders.length, color: C.gold },
+    { label: "REPROD. HOY", value: stats?.songs_played_today ?? 0, color: C.ink },
+    { label: "SALTADAS", value: stats?.songs_skipped_today ?? 0, color: C.burgundy },
+    {
+      label: "ESPERA PROM.",
+      value:
+        stats?.avg_wait_seconds != null
+          ? `${Math.floor(stats.avg_wait_seconds / 60)}m ${stats.avg_wait_seconds % 60}s`
+          : "—",
+      color: C.cacao,
+    },
+    {
+      label: "TOP MESA",
+      value: stats?.top_table ? `${pad(stats.top_table.table_id)} (${stats.top_table.count})` : "—",
+      color: C.burgundy,
+    },
+    { label: "CONSUMO TOTAL", value: fmt(revenue), color: C.gold },
+  ];
 
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
         * { box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: ${C.sandDark}; border-radius: 999px; }
       `}</style>
 
       <div
         style={{
           minHeight: "100dvh",
-          background: "#fff",
+          height: "100dvh",
+          background: `
+            radial-gradient(ellipse at 10% 0%, rgba(184,137,74,0.06), transparent 55%),
+            radial-gradient(ellipse at 95% 95%, rgba(139,38,53,0.04), transparent 50%),
+            ${C.cream}
+          `,
+          color: C.ink,
+          fontFamily: FONT_UI,
           display: "flex",
           flexDirection: "column",
+          overflow: "hidden",
         }}
       >
         {/* Header */}
         <div
           style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid #e5e7eb",
+            padding: "16px 24px",
+            borderBottom: `1px solid ${C.sand}`,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            background: `linear-gradient(180deg, ${C.paper} 0%, ${C.parchment} 100%)`,
+            gap: 24,
+            flexWrap: "wrap",
           }}
         >
-          <span
-            style={{
-              fontFamily: "'Bebas Neue',Impact,sans-serif",
-              fontSize: 20,
-              color: "#111",
-              letterSpacing: 3,
-            }}
-          >
-            PANEL ADMIN
-          </span>
-          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-            {[
-              {
-                label: "MESAS ACTIVAS",
-                value: allTables.filter((t) => t.status === "active").length,
-                color: "#16a34a",
-              },
-              { label: "EN COLA", value: queue.length, color: "#ca8a04" },
-              { label: "PEDIDOS", value: activeOrders.length, color: "#ca8a04" },
-              {
-                label: "REPRODUCIDAS HOY",
-                value: stats?.songs_played_today ?? 0,
-                color: "#2563eb",
-              },
-              {
-                label: "SALTADAS HOY",
-                value: stats?.songs_skipped_today ?? 0,
-                color: "#dc2626",
-              },
-              {
-                label: "ESPERA PROM.",
-                value: stats?.avg_wait_seconds != null
-                  ? `${Math.floor(stats.avg_wait_seconds / 60)}m ${stats.avg_wait_seconds % 60}s`
-                  : "—",
-                color: "#7c3aed",
-              },
-              {
-                label: "TOP MESA",
-                value: stats?.top_table
-                  ? `${pad(stats.top_table.table_id)} (${stats.top_table.count})`
-                  : "—",
-                color: "#ea580c",
-              },
-              { label: "CONSUMO TOTAL", value: fmt(revenue), color: "#ca8a04" },
-            ].map((s) => (
-              <div key={s.label} style={{ textAlign: "right" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 9,
+                letterSpacing: 3,
+                color: C.mute,
+                fontWeight: 600,
+                textTransform: "uppercase",
+              }}
+            >
+              — Crown Bar 4.90
+            </span>
+            <span
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 22,
+                color: C.ink,
+                letterSpacing: 4,
+                textTransform: "uppercase",
+              }}
+            >
+              Panel Admin
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-end" }}>
+            {statCards.map((s) => (
+              <div key={s.label} style={{ textAlign: "right", minWidth: 72 }}>
                 <div
                   style={{
                     fontSize: 9,
-                    color: "#9ca3af",
-                    fontFamily: "monospace",
+                    color: C.mute,
+                    fontFamily: FONT_MONO,
                     letterSpacing: 2,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    marginBottom: 2,
                   }}
                 >
                   {s.label}
                 </div>
                 <div
                   style={{
-                    fontFamily: "'Bebas Neue',Impact,sans-serif",
-                    fontSize: 18,
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 20,
                     color: s.color,
+                    letterSpacing: 0.5,
+                    lineHeight: 1,
                   }}
                 >
                   {s.value}
@@ -907,73 +1436,108 @@ export default function AdminPage() {
         {/* Playback bar */}
         <div
           style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid #e5e7eb",
-            background: isPlaying ? "#f0fdf4" : "#f9fafb",
+            padding: "14px 24px",
+            borderBottom: `1px solid ${C.sand}`,
+            background: isPlaying
+              ? `linear-gradient(90deg, color-mix(in srgb, ${C.oliveSoft} 55%, ${C.paper}) 0%, ${C.paper} 100%)`
+              : C.paper,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             gap: 16,
+            flexWrap: "wrap",
           }}
         >
-          <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ minWidth: 0, flex: 1, display: "flex", alignItems: "center", gap: 14 }}>
             <div
+              aria-hidden
               style={{
-                fontSize: 9,
-                color: "#9ca3af",
-                letterSpacing: 2,
-                fontFamily: "monospace",
-                marginBottom: 6,
+                width: 44,
+                height: 44,
+                borderRadius: 10,
+                background: isPlaying
+                  ? `linear-gradient(135deg, ${C.gold} 0%, ${C.burgundy} 100%)`
+                  : C.sand,
+                color: isPlaying ? C.paper : C.mute,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontFamily: FONT_DISPLAY,
+                fontSize: 20,
+                flexShrink: 0,
               }}
             >
-              SONANDO AHORA
+              ♪
             </div>
-            {isPlaying ? (
-              <>
-                <div
-                  style={{
-                    fontFamily: "'Bebas Neue',Impact,sans-serif",
-                    fontSize: 22,
-                    color: "#111",
-                    lineHeight: 1.1,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {currentPlayback.song?.title}
-                </div>
-                <div style={{ fontSize: 10, color: "#888", fontFamily: "monospace", marginTop: 4 }}>
-                  {currentPlayback.table_id ? `Mesa ${pad(currentPlayback.table_id)}` : "ADMIN"}
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace", letterSpacing: 1 }}>
-                SIN REPRODUCCIÓN ACTIVA
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: C.mute,
+                  letterSpacing: 2.5,
+                  fontFamily: FONT_MONO,
+                  marginBottom: 4,
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                }}
+              >
+                Sonando ahora
               </div>
-            )}
+              {isPlaying ? (
+                <>
+                  <div
+                    style={{
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 20,
+                      color: C.ink,
+                      lineHeight: 1.1,
+                      letterSpacing: 0.5,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {currentPlayback.song?.title}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.cacao, fontFamily: FONT_MONO, marginTop: 3, letterSpacing: 1 }}>
+                    {currentPlayback.table_id ? `Mesa ${pad(currentPlayback.table_id)}` : "ADMIN"}
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11, color: C.mute, fontFamily: FONT_MONO, letterSpacing: 1.5, textTransform: "uppercase" }}>
+                  Sin reproducción activa
+                </div>
+              )}
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
-                color: isPlaying ? "#16a34a" : "#9ca3af",
-                marginRight: 8,
+                gap: 8,
+                color: isPlaying ? C.olive : C.mute,
+                padding: "5px 11px",
+                borderRadius: 999,
+                border: `1px solid ${isPlaying ? C.oliveSoft : C.sand}`,
+                background: isPlaying ? `color-mix(in srgb, ${C.oliveSoft} 40%, transparent)` : "transparent",
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 1.5,
+                fontWeight: 700,
+                textTransform: "uppercase",
               }}
             >
-              <div
+              <span
                 style={{
                   width: 8,
                   height: 8,
                   borderRadius: "50%",
-                  background: isPlaying ? "#16a34a" : "#d1d5db",
+                  background: "currentColor",
                 }}
               />
-              <span style={{ fontFamily: "'Bebas Neue',Impact,sans-serif", fontSize: 12, letterSpacing: 2 }}>
-                {isPlaying ? "ACTIVA" : currentPlayback?.status === "paused" ? "PAUSADO" : "IDLE"}
-              </span>
+              {isPlaying ? "Activa" : currentPlayback?.status === "paused" ? "Pausado" : "Idle"}
             </div>
 
             {!isPlaying && hasPendingSongs && (
@@ -981,14 +1545,16 @@ export default function AdminPage() {
                 onClick={() => void handlePlayNext()}
                 disabled={actionInProgress !== null}
                 style={{
-                  ...btnBase,
-                  background: actionInProgress === "play" ? "#d1d5db" : "#16a34a",
-                  color: actionInProgress === "play" ? "#888" : "#fff",
+                  ...ctaBase,
+                  background: actionInProgress === "play"
+                    ? C.sand
+                    : `linear-gradient(135deg, ${C.olive} 0%, #7F934F 100%)`,
+                  color: actionInProgress === "play" ? C.mute : C.paper,
                   opacity: actionInProgress && actionInProgress !== "play" ? 0.5 : 1,
                   cursor: actionInProgress ? "not-allowed" : "pointer",
                 }}
               >
-                {actionInProgress === "play" ? "INICIANDO..." : "REPRODUCIR SIGUIENTE"}
+                {actionInProgress === "play" ? "INICIANDO..." : "▶ REPRODUCIR SIGUIENTE"}
               </button>
             )}
             {isPlaying && (
@@ -997,23 +1563,25 @@ export default function AdminPage() {
                   onClick={() => void handleSkipCurrent()}
                   disabled={actionInProgress !== null}
                   style={{
-                    ...btnBase,
-                    background: actionInProgress === "skip" ? "#d1d5db" : "#ca8a04",
-                    color: actionInProgress === "skip" ? "#888" : "#fff",
+                    ...ctaBase,
+                    background: actionInProgress === "skip"
+                      ? C.sand
+                      : `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
+                    color: actionInProgress === "skip" ? C.mute : C.paper,
                     opacity: actionInProgress && actionInProgress !== "skip" ? 0.5 : 1,
                     cursor: actionInProgress ? "not-allowed" : "pointer",
                   }}
                 >
-                  {actionInProgress === "skip" ? "SALTANDO..." : "SALTAR CANCIÓN"}
+                  {actionInProgress === "skip" ? "SALTANDO..." : "SALTAR"}
                 </button>
                 <button
                   onClick={() => void handleFinishCurrent()}
                   disabled={actionInProgress !== null}
                   style={{
-                    ...btnBase,
-                    background: actionInProgress === "finish" ? "#d1d5db" : "#f3f4f6",
-                    color: actionInProgress === "finish" ? "#888" : "#555",
-                    border: "1px solid #d1d5db",
+                    ...ctaBase,
+                    background: "transparent",
+                    color: actionInProgress === "finish" ? C.mute : C.cacao,
+                    border: `1px solid ${C.sand}`,
                     opacity: actionInProgress && actionInProgress !== "finish" ? 0.5 : 1,
                     cursor: actionInProgress ? "not-allowed" : "pointer",
                   }}
@@ -1025,42 +1593,70 @@ export default function AdminPage() {
             <button
               onClick={() => setSearchOpen(true)}
               style={{
-                ...btnBase,
-                background: "#2563eb",
-                color: "#fff",
+                ...ctaBase,
+                background: `linear-gradient(135deg, ${C.burgundy} 0%, #A03245 100%)`,
+                color: C.paper,
               }}
             >
-              AGREGAR CANCIÓN
+              + AGREGAR
             </button>
             <a
               href="/player"
               target="_blank"
               rel="noreferrer"
               style={{
-                ...btnBase,
-                background: "#f3f4f6",
-                border: "1px solid #d1d5db",
-                color: "#555",
+                ...ctaBase,
+                background: "transparent",
+                border: `1px solid ${C.sand}`,
+                color: C.cacao,
                 textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
               }}
             >
-              ABRIR PLAYER
+              ⤢ PLAYER
             </a>
           </div>
         </div>
 
         {/* Columnas */}
-        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-          <TablesColumn tables={allTables} />
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            overflow: "hidden",
+            margin: 16,
+            borderRadius: 16,
+            border: `1px solid ${C.sand}`,
+            boxShadow: C.shadow,
+            background: C.paper,
+          }}
+        >
+          <TablesColumn
+            tables={allTables}
+            onOpenBill={(sessionId, tableNumber) =>
+              setBillDrawer({ open: true, sessionId, tableNumber })
+            }
+          />
           <QueueColumn queue={queue} />
-          <OrdersColumn orders={activeOrders} />
+          <PendingRequestsColumn
+            requests={pendingRequests}
+            tables={allTables}
+          />
+          <OrdersColumn orders={activeOrders} tables={allTables} />
         </div>
       </div>
 
       <AdminSearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        queueLength={queue.length}
+      />
+
+      <AdminBillDrawer
+        open={billDrawer.open}
+        sessionId={billDrawer.open ? billDrawer.sessionId : null}
+        tableNumber={billDrawer.open ? billDrawer.tableNumber : null}
+        onClose={() => setBillDrawer({ open: false })}
       />
     </>
   );

@@ -58,28 +58,59 @@ function getSocket(): Socket {
   return socket;
 }
 
-// ─── Tipos de listeners ───────────────────────────────────────────────────────
 type SocketListener<K extends keyof SocketEvents> = (
   payload: SocketEvents[K],
 ) => void;
 
-// ─── Opciones del hook ────────────────────────────────────────────────────────
 interface UseSocketOptions {
+  /**
+   * Join the session room `tableSession:{id}`. Customer views pass this so
+   * they receive bill, order, order-request and session lifecycle events for
+   * their own visit only.
+   */
+  sessionId?: number;
+  /**
+   * Join the staff room. Today the staff channel is broadcast (pre-auth), so
+   * this only affects room membership, not delivery. It future-proofs the UI
+   * for when the staff channel gates by auth.
+   */
+  staff?: boolean;
+  /**
+   * Legacy per-table room. Kept for back-compat with any client still
+   * subscribing by raw table id. New code should use `sessionId` instead.
+   */
   tableId?: number;
+
   onQueueUpdated?: SocketListener<"queue:updated">;
-  onTableUpdated?: SocketListener<"table:updated">;
-  onOrderUpdated?: SocketListener<"order:updated">;
   onPlaybackUpdated?: SocketListener<"playback:updated">;
+  onTableUpdated?: SocketListener<"table:updated">;
+
+  onBillUpdated?: SocketListener<"bill:updated">;
+  onOrderCreated?: SocketListener<"order:created">;
+  onOrderUpdated?: SocketListener<"order:updated">;
+  onOrderRequestCreated?: SocketListener<"order-request:created">;
+  onOrderRequestUpdated?: SocketListener<"order-request:updated">;
+  onTableSessionOpened?: SocketListener<"table-session:opened">;
+  onTableSessionUpdated?: SocketListener<"table-session:updated">;
+  onTableSessionClosed?: SocketListener<"table-session:closed">;
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
 export function useSocket(options: UseSocketOptions = {}) {
   const {
+    sessionId,
+    staff,
     tableId,
     onQueueUpdated,
-    onTableUpdated,
-    onOrderUpdated,
     onPlaybackUpdated,
+    onTableUpdated,
+    onBillUpdated,
+    onOrderCreated,
+    onOrderUpdated,
+    onOrderRequestCreated,
+    onOrderRequestUpdated,
+    onTableSessionOpened,
+    onTableSessionUpdated,
+    onTableSessionClosed,
   } = options;
   const socketRef = useRef<Socket | null>(null);
 
@@ -89,31 +120,76 @@ export function useSocket(options: UseSocketOptions = {}) {
 
     if (!s.connected) s.connect();
 
-    // Join room on connect and re-join on reconnect
-    const joinRoom = () => {
+    // Join rooms on connect and re-join on reconnect.
+    const joinRooms = () => {
+      if (sessionId !== undefined) {
+        s.emit("tableSession:join", sessionId);
+      }
+      if (staff) {
+        s.emit("staff:join");
+      }
       if (tableId !== undefined) {
         s.emit("table:join", tableId);
       }
     };
 
-    joinRoom();
-    s.on("connect", joinRoom);
+    joinRooms();
+    s.on("connect", joinRooms);
 
     if (onQueueUpdated) s.on("queue:updated", onQueueUpdated);
-    if (onTableUpdated) s.on("table:updated", onTableUpdated);
-    if (onOrderUpdated) s.on("order:updated", onOrderUpdated);
     if (onPlaybackUpdated) s.on("playback:updated", onPlaybackUpdated);
+    if (onTableUpdated) s.on("table:updated", onTableUpdated);
+    if (onBillUpdated) s.on("bill:updated", onBillUpdated);
+    if (onOrderCreated) s.on("order:created", onOrderCreated);
+    if (onOrderUpdated) s.on("order:updated", onOrderUpdated);
+    if (onOrderRequestCreated)
+      s.on("order-request:created", onOrderRequestCreated);
+    if (onOrderRequestUpdated)
+      s.on("order-request:updated", onOrderRequestUpdated);
+    if (onTableSessionOpened)
+      s.on("table-session:opened", onTableSessionOpened);
+    if (onTableSessionUpdated)
+      s.on("table-session:updated", onTableSessionUpdated);
+    if (onTableSessionClosed)
+      s.on("table-session:closed", onTableSessionClosed);
 
     return () => {
-      s.off("connect", joinRoom);
+      s.off("connect", joinRooms);
+      if (sessionId !== undefined) s.emit("tableSession:leave", sessionId);
       if (onQueueUpdated) s.off("queue:updated", onQueueUpdated);
-      if (onTableUpdated) s.off("table:updated", onTableUpdated);
-      if (onOrderUpdated) s.off("order:updated", onOrderUpdated);
       if (onPlaybackUpdated) s.off("playback:updated", onPlaybackUpdated);
+      if (onTableUpdated) s.off("table:updated", onTableUpdated);
+      if (onBillUpdated) s.off("bill:updated", onBillUpdated);
+      if (onOrderCreated) s.off("order:created", onOrderCreated);
+      if (onOrderUpdated) s.off("order:updated", onOrderUpdated);
+      if (onOrderRequestCreated)
+        s.off("order-request:created", onOrderRequestCreated);
+      if (onOrderRequestUpdated)
+        s.off("order-request:updated", onOrderRequestUpdated);
+      if (onTableSessionOpened)
+        s.off("table-session:opened", onTableSessionOpened);
+      if (onTableSessionUpdated)
+        s.off("table-session:updated", onTableSessionUpdated);
+      if (onTableSessionClosed)
+        s.off("table-session:closed", onTableSessionClosed);
     };
-  }, [tableId, onQueueUpdated, onTableUpdated, onOrderUpdated, onPlaybackUpdated]);
+  }, [
+    sessionId,
+    staff,
+    tableId,
+    onQueueUpdated,
+    onPlaybackUpdated,
+    onTableUpdated,
+    onBillUpdated,
+    onOrderCreated,
+    onOrderUpdated,
+    onOrderRequestCreated,
+    onOrderRequestUpdated,
+    onTableSessionOpened,
+    onTableSessionUpdated,
+    onTableSessionClosed,
+  ]);
 
-  // ─── Acciones ─────────────────────────────────────────────────────────────
   const requestSong = useCallback((payload: SocketEvents["song:request"]) => {
     socketRef.current?.emit("song:request", payload);
   }, []);

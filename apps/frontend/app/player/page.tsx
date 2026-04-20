@@ -7,6 +7,21 @@ import { useSocket } from "@/lib/socket/useSocket";
 import { useAppStore } from "@/store";
 import type { PlaybackState, QueueItem } from "@coffee-bar/shared";
 
+// ─── Dark stadium palette (landing-aligned) ──────────────────────────────────
+const D = {
+  midnight: "#0B0F14",
+  pitch: "#0E2A1F",
+  gold: "#E9B949",
+  goldHot: "#F6CF6A",
+  cream: "#F5EFE2",
+  burgundy: "#8B2635",
+  chalk: "rgba(245,239,226,0.08)",
+  mute: "rgba(245,239,226,0.55)",
+};
+const FONT_DISPLAY = "var(--font-bebas), 'Bebas Neue', Impact, sans-serif";
+const FONT_UI = "var(--font-manrope), system-ui, sans-serif";
+const FONT_MONO = "var(--font-oswald), 'Oswald', ui-monospace, monospace";
+
 export default function PlayerPage() {
   const autoplayRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
@@ -68,93 +83,265 @@ export default function PlayerPage() {
     queueApi
       .advanceToNext()
       .catch(console.error)
-      .finally(() => { autoplayRef.current = false; });
+      .finally(() => {
+        autoplayRef.current = false;
+      });
   }, [currentPlayback, queue]);
 
   const status = currentPlayback?.status;
 
+  const statusLabel =
+    status === "buffering"
+      ? "CARGANDO..."
+      : status === "playing"
+        ? "SONANDO AHORA"
+        : status === "paused"
+          ? "PAUSADO"
+          : "ESPERANDO CANCIÓN";
+
+  const statusTag =
+    status === "buffering"
+      ? "BUFFERING"
+      : status === "playing"
+        ? "REPRODUCCIÓN ACTIVA"
+        : status === "paused"
+          ? "PAUSADO"
+          : "IDLE";
+
+  const statusColor =
+    status === "playing"
+      ? D.gold
+      : status === "buffering" || status === "paused"
+        ? D.goldHot
+        : D.mute;
+
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
         * { box-sizing: border-box; }
-        html, body { background: #fff; }
+        html, body { background: ${D.midnight}; color: ${D.cream}; }
+        @keyframes crown-player-ping {
+          0%   { transform: scale(1);   opacity: 0.55; }
+          80%  { transform: scale(2.4); opacity: 0;    }
+          100% { transform: scale(2.4); opacity: 0;    }
+        }
+        .crown-player-grain::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          opacity: 0.12;
+          mix-blend-mode: overlay;
+          background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+          background-size: 240px 240px;
+        }
       `}</style>
 
       <main
         style={{
+          position: "relative",
           minHeight: "100dvh",
-          background: "#fff",
           display: "flex",
           flexDirection: "column",
+          fontFamily: FONT_UI,
+          color: D.cream,
+          background: `
+            radial-gradient(ellipse at 50% 0%, rgba(14,42,31,0.75) 0%, transparent 55%),
+            radial-gradient(ellipse at 85% 90%, rgba(233,185,73,0.08) 0%, transparent 50%),
+            ${D.midnight}
+          `,
+          overflow: "hidden",
         }}
+        className="crown-player-grain"
       >
+        {/* Watermark logo */}
         <div
+          aria-hidden
           style={{
-            padding: "18px 28px",
-            borderBottom: "1px solid #e5e7eb",
+            position: "absolute",
+            inset: 0,
+            zIndex: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt=""
+            style={{
+              width: "min(55vw, 720px)",
+              height: "auto",
+              opacity: 0.08,
+              mixBlendMode: "screen",
+              filter: "saturate(1.2) contrast(1.1)",
+              userSelect: "none",
+            }}
+            draggable={false}
+          />
+        </div>
+
+        {/* Pitch lines — subtle stadium texture */}
+        <svg
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+            opacity: 0.35,
+            zIndex: 0,
+          }}
+          viewBox="0 0 1600 900"
+          preserveAspectRatio="xMidYMid slice"
+        >
+          <defs>
+            <linearGradient id="playerFade" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="rgba(245,239,226,0)" />
+              <stop offset="50%" stopColor="rgba(245,239,226,0.15)" />
+              <stop offset="100%" stopColor="rgba(245,239,226,0.04)" />
+            </linearGradient>
+          </defs>
+          <g stroke="url(#playerFade)" strokeWidth={1.2} fill="none">
+            <circle cx="800" cy="450" r="140" />
+            <circle cx="800" cy="450" r="3" fill="rgba(245,239,226,0.35)" />
+            <line x1="0" y1="450" x2="1600" y2="450" />
+          </g>
+        </svg>
+
+        {/* Header */}
+        <header
+          style={{
+            position: "relative",
+            zIndex: 2,
+            padding: "22px 36px",
+            borderBottom: `1px solid ${D.chalk}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
             gap: 16,
+            background: `linear-gradient(180deg, rgba(11,15,20,0.85) 0%, transparent 100%)`,
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
           }}
         >
-          <div>
-            <div
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.png"
+              alt="Crown Bar 4.90"
               style={{
-                fontSize: 10,
-                color: "#9ca3af",
-                letterSpacing: 3,
-                fontFamily: "monospace",
-                marginBottom: 6,
+                height: 56,
+                width: "auto",
+                mixBlendMode: "screen",
+                filter: "saturate(1.15)",
               }}
-            >
-              PANTALLA DE REPRODUCCIÓN
-            </div>
-            <div
-              style={{
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 28,
-                color: "#111",
-                letterSpacing: 2,
-              }}
-            >
-              {status === "buffering"
-                ? "CARGANDO..."
-                : status === "playing"
-                  ? "SONANDO AHORA"
-                  : status === "paused"
-                    ? "PAUSADO"
-                    : "ESPERANDO CANCIÓN"}
+            />
+            <div>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: D.mute,
+                  letterSpacing: 3,
+                  fontFamily: FONT_MONO,
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
+                — Pantalla de reproducción
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 32,
+                  color: D.cream,
+                  letterSpacing: 3,
+                  lineHeight: 1,
+                  textTransform: "uppercase",
+                }}
+              >
+                {statusLabel}
+              </div>
             </div>
           </div>
+
           <div
             style={{
-              fontFamily: "monospace",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "7px 14px",
+              borderRadius: 999,
+              border: `1px solid ${status === "playing" ? D.gold : D.chalk}`,
+              background: status === "playing" ? "rgba(233,185,73,0.12)" : "transparent",
+              color: statusColor,
+              fontFamily: FONT_MONO,
               fontSize: 11,
               letterSpacing: 2,
-              color: status === "playing" ? "#16a34a" : status === "buffering" ? "#ca8a04" : status === "paused" ? "#ca8a04" : "#9ca3af",
+              fontWeight: 700,
+              textTransform: "uppercase",
             }}
           >
-            {status === "buffering"
-              ? "BUFFERING"
-              : status === "playing"
-                ? "REPRODUCCIÓN ACTIVA"
-                : status === "paused"
-                  ? "PAUSADO"
-                  : "IDLE"}
+            <span style={{ position: "relative", display: "inline-flex", width: 9, height: 9 }}>
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  borderRadius: "50%",
+                  background: statusColor,
+                  animation: status === "playing" ? "crown-player-ping 2s ease-out infinite" : "none",
+                  opacity: status === "playing" ? 0.55 : 0,
+                }}
+              />
+              <span
+                style={{
+                  position: "relative",
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: "currentColor",
+                }}
+              />
+            </span>
+            {statusTag}
           </div>
-        </div>
+        </header>
 
-        <div style={{ flex: 1, display: "flex", alignItems: "stretch" }}>
-          <div style={{ flex: 1 }}>
+        {/* Player surface */}
+        <section
+          style={{
+            position: "relative",
+            zIndex: 2,
+            flex: 1,
+            display: "flex",
+            alignItems: "stretch",
+            padding: 36,
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              borderRadius: 20,
+              overflow: "hidden",
+              border: `1px solid ${D.chalk}`,
+              background: "rgba(11,15,20,0.65)",
+              boxShadow:
+                "0 40px 80px -30px rgba(0,0,0,0.85), 0 0 0 1px rgba(233,185,73,0.06)",
+            }}
+          >
             <AdminPlaybackPlayer
               playback={currentPlayback}
               onPlaybackEnded={handlePlaybackEnded}
               mode="screen"
             />
           </div>
-        </div>
+        </section>
       </main>
     </>
   );

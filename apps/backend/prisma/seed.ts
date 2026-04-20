@@ -4,19 +4,22 @@ const prisma = new PrismaClient();
 
 async function main() {
   await prisma.playbackState.deleteMany();
+  await prisma.consumption.deleteMany();
   await prisma.orderItem.deleteMany();
   await prisma.order.deleteMany();
+  await prisma.orderRequest.deleteMany();
   await prisma.queueItem.deleteMany();
   await prisma.song.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.tableSession.deleteMany();
   await prisma.table.deleteMany();
 
   await prisma.table.createMany({
     data: [
-      { qr_code: "mesa-1", status: TableStatus.available },
-      { qr_code: "mesa-2", status: TableStatus.available },
-      { qr_code: "mesa-3", status: TableStatus.available },
-      { qr_code: "mesa-4", status: TableStatus.available },
+      { number: 1, qr_code: "mesa-1", status: TableStatus.available },
+      { number: 2, qr_code: "mesa-2", status: TableStatus.available },
+      { number: 3, qr_code: "mesa-3", status: TableStatus.available },
+      { number: 4, qr_code: "mesa-4", status: TableStatus.available },
     ],
   });
 

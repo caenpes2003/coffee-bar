@@ -209,9 +209,9 @@ export class QueueService {
       throw new NotFoundException(`Table with ID ${table_id} not found`);
     }
 
-    if (table.status !== TableStatus.active) {
+    if (table.status !== TableStatus.occupied) {
       throw new BadRequestException({
-        message: "Table must be active to add songs to the queue",
+        message: "Table must be occupied to add songs to the queue",
         code: "TABLE_NOT_ACTIVE",
       });
     }

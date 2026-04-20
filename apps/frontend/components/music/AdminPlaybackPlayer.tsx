@@ -4,6 +4,24 @@ import { useEffect, useRef, useState } from "react";
 import type { PlaybackState } from "@coffee-bar/shared";
 import { playbackApi } from "@/lib/api/services";
 
+// ─── Dark stadium palette (landing + player aligned) ─────────────────────────
+const D = {
+  midnight: "#0B0F14",
+  pitch: "#0E2A1F",
+  gold: "#E9B949",
+  goldHot: "#F6CF6A",
+  cream: "#F5EFE2",
+  burgundy: "#8B2635",
+  chalk: "rgba(245,239,226,0.08)",
+  chalkStrong: "rgba(245,239,226,0.14)",
+  mute: "rgba(245,239,226,0.55)",
+  muted2: "rgba(245,239,226,0.72)",
+  surface: "rgba(11,15,20,0.6)",
+  surfaceSolid: "#101720",
+};
+const FONT_DISPLAY = "var(--font-bebas), 'Bebas Neue', Impact, sans-serif";
+const FONT_MONO = "var(--font-oswald), 'Oswald', ui-monospace, monospace";
+
 type YouTubePlayerInstance = {
   destroy: () => Promise<void> | void;
   loadVideoById: (videoId: string) => Promise<void>;
@@ -236,21 +254,23 @@ export function AdminPlaybackPlayer({
     syncPlayback().catch(console.error);
   }, [isActive, isReady, youtubeId]);
 
+  const isScreen = mode === "screen";
+
   return (
     <section
-      className={mode === "screen" ? "playback-shell playback-shell-screen" : "playback-shell"}
+      className={isScreen ? "playback-shell playback-shell-screen" : "playback-shell"}
       style={{
-        padding: mode === "screen" ? "20px 28px 28px" : "16px 20px 20px",
-        borderBottom: mode === "screen" ? "none" : "1px solid #e5e7eb",
-        background: "#fff",
+        padding: isScreen ? "24px 28px 28px" : "16px 20px 20px",
+        borderBottom: isScreen ? "none" : `1px solid ${D.chalk}`,
+        background: isScreen ? "transparent" : D.surfaceSolid,
+        color: D.cream,
         display: "grid",
-        gap: mode === "screen" ? 20 : 16,
-        gridTemplateColumns:
-          mode === "screen"
-            ? "minmax(0, 2.2fr) minmax(320px, 0.8fr)"
-            : "minmax(0, 1.7fr) minmax(240px, 0.9fr)",
+        gap: isScreen ? 22 : 16,
+        gridTemplateColumns: isScreen
+          ? "minmax(0, 2.2fr) minmax(340px, 0.8fr)"
+          : "minmax(0, 1.7fr) minmax(240px, 0.9fr)",
         alignItems: "stretch",
-        flex: mode === "screen" ? 1 : undefined,
+        flex: isScreen ? 1 : undefined,
       }}
     >
       <style>{`
@@ -303,19 +323,19 @@ export function AdminPlaybackPlayer({
           }
         }
       `}</style>
+
       <div
         className="playback-video-frame"
         style={{
-          minHeight: mode === "screen" ? undefined : PLAYER_HEIGHT,
-          border: "1px solid #e5e7eb",
-          background: "#f9fafb",
+          minHeight: isScreen ? undefined : PLAYER_HEIGHT,
+          border: `1px solid ${D.chalk}`,
+          background: "#000",
           position: "relative",
           overflow: "hidden",
-          borderRadius: 6,
-          boxShadow:
-            mode === "screen"
-              ? "0 10px 40px rgba(0,0,0,0.1)"
-              : undefined,
+          borderRadius: 14,
+          boxShadow: isScreen
+            ? "0 18px 48px -20px rgba(0,0,0,0.85), 0 0 0 1px rgba(233,185,73,0.08)"
+            : undefined,
         }}
       >
         <div
@@ -336,14 +356,16 @@ export function AdminPlaybackPlayer({
               justifyContent: "center",
               padding: 24,
               textAlign: "center",
-              color: "#9ca3af",
-              fontFamily: "monospace",
-              fontSize: 11,
+              color: playerError ? D.burgundy : D.mute,
+              fontFamily: FONT_MONO,
+              fontSize: 12,
               letterSpacing: 2,
-              background: "#f3f4f6",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              background: D.midnight,
             }}
           >
-            {playerError ?? "SIN VIDEO ACTIVO"}
+            {playerError ?? "Sin video activo"}
           </div>
         )}
       </div>
@@ -351,38 +373,43 @@ export function AdminPlaybackPlayer({
       <div
         className="playback-meta-panel"
         style={{
-          border: "1px solid #e5e7eb",
-          background: "#f9fafb",
-          borderRadius: 6,
-          padding: mode === "screen" ? 24 : 18,
+          border: `1px solid ${D.chalk}`,
+          background: D.surface,
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          borderRadius: 14,
+          padding: isScreen ? 28 : 18,
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          gap: mode === "screen" ? 22 : 16,
+          gap: isScreen ? 24 : 16,
         }}
       >
         <div>
           <div
             style={{
               fontSize: 9,
-              color: "#9ca3af",
-              letterSpacing: 2,
-              fontFamily: "monospace",
-              marginBottom: 8,
+              color: D.mute,
+              letterSpacing: 3,
+              fontFamily: FONT_MONO,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              marginBottom: 10,
             }}
           >
-            REPRODUCTOR
+            — Reproductor
           </div>
           <div
             className="playback-title"
             style={{
-              fontFamily: "'Bebas Neue',Impact,sans-serif",
-              fontSize: mode === "screen" ? 32 : 22,
-              color: "#111",
+              fontFamily: FONT_DISPLAY,
+              fontSize: isScreen ? 32 : 22,
+              color: D.cream,
               lineHeight: 1.05,
+              letterSpacing: 0.5,
             }}
           >
-            {currentSong?.title ?? "Esperando siguiente cancion"}
+            {currentSong?.title ?? "Esperando siguiente canción"}
           </div>
         </div>
 
@@ -390,108 +417,102 @@ export function AdminPlaybackPlayer({
           className="playback-data"
           style={{
             display: "grid",
-            gap: mode === "screen" ? 16 : 10,
+            gap: isScreen ? 18 : 10,
             gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           }}
         >
-          <div>
-            <div
-              style={{
-                fontSize: 9,
-                color: "#9ca3af",
-                letterSpacing: 2,
-                fontFamily: "monospace",
-              }}
-            >
-              ESTADO
-            </div>
-            <div
-              style={{
-                marginTop: 4,
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 18,
-                color: isPlaying ? "#16a34a" : "#9ca3af",
-              }}
-            >
-              {isBuffering
+          <MetaField
+            label="Estado"
+            value={
+              isBuffering
                 ? "CARGANDO..."
                 : isPlaying
-                  ? "SONANDO AHORA"
-                  : "EN ESPERA"}
-            </div>
-          </div>
-
-          <div>
-            <div
-              style={{
-                fontSize: 9,
-                color: "#9ca3af",
-                letterSpacing: 2,
-                fontFamily: "monospace",
-              }}
-            >
-              DURACION
-            </div>
-            <div
-              style={{
-                marginTop: 4,
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 18,
-                color: "#ca8a04",
-              }}
-            >
-              {formatDuration(currentSong?.duration)}
-            </div>
-          </div>
-
-          <div>
-            <div
-              style={{
-                fontSize: 9,
-                color: "#9ca3af",
-                letterSpacing: 2,
-                fontFamily: "monospace",
-              }}
-            >
-              MESA
-            </div>
-            <div
-              style={{
-                marginTop: 4,
-                fontFamily: "'Bebas Neue',Impact,sans-serif",
-                fontSize: 18,
-                color: "#111",
-              }}
-            >
-              {playback?.table_id ? `Mesa ${String(playback.table_id).padStart(2, "0")}` : "ADMIN"}
-            </div>
-          </div>
-
-          <div>
-            <div
-              style={{
-                fontSize: 9,
-                color: "#9ca3af",
-                letterSpacing: 2,
-                fontFamily: "monospace",
-              }}
-            >
-              VIDEO
-            </div>
-            <div
-              style={{
-                marginTop: 4,
-                fontFamily: "monospace",
-                fontSize: 11,
-                color: "#888",
-                wordBreak: "break-all",
-              }}
-            >
-              {youtubeId ?? "sin asignar"}
-            </div>
-          </div>
+                  ? "SONANDO"
+                  : "EN ESPERA"
+            }
+            color={isPlaying ? D.gold : isBuffering ? D.goldHot : D.mute}
+            indicator={isPlaying}
+          />
+          <MetaField
+            label="Duración"
+            value={formatDuration(currentSong?.duration)}
+            color={D.goldHot}
+          />
+          <MetaField
+            label="Mesa"
+            value={
+              playback?.table_id
+                ? `Mesa ${String(playback.table_id).padStart(2, "0")}`
+                : "ADMIN"
+            }
+            color={D.cream}
+          />
+          <MetaField
+            label="Video"
+            value={youtubeId ?? "sin asignar"}
+            color={D.muted2}
+            mono
+          />
         </div>
       </div>
     </section>
+  );
+}
+
+function MetaField({
+  label,
+  value,
+  color,
+  mono,
+  indicator,
+}: {
+  label: string;
+  value: string;
+  color: string;
+  mono?: boolean;
+  indicator?: boolean;
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 9,
+          color: D.mute,
+          letterSpacing: 2.5,
+          fontFamily: FONT_MONO,
+          fontWeight: 600,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          marginTop: 6,
+          fontFamily: mono ? FONT_MONO : FONT_DISPLAY,
+          fontSize: mono ? 12 : 20,
+          color,
+          letterSpacing: mono ? 1 : 0.5,
+          wordBreak: mono ? "break-all" : "normal",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        {indicator && (
+          <span
+            aria-hidden
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: color,
+              boxShadow: `0 0 10px ${color}`,
+            }}
+          />
+        )}
+        {value}
+      </div>
+    </div>
   );
 }

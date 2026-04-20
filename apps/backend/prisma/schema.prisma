@@ -9,9 +9,15 @@ datasource db {
 
 enum TableStatus {
   available
-  active
   occupied
-  inactive
+  closing
+}
+
+enum TableSessionStatus {
+  open
+  ordering
+  closing
+  closed
 }
 
 enum QueueStatus {
@@ -21,12 +27,26 @@ enum QueueStatus {
   skipped
 }
 
-enum OrderStatus {
+enum OrderRequestStatus {
   pending
+  accepted
+  rejected
+  cancelled
+}
+
+enum OrderStatus {
+  accepted
   preparing
   ready
   delivered
   cancelled
+}
+
+enum ConsumptionType {
+  product
+  adjustment
+  discount
+  refund
 }
 
 enum PlaybackStatus {
@@ -37,15 +57,42 @@ enum PlaybackStatus {
 }
 
 model Table {
-  id                Int         @id @default(autoincrement())
-  qr_code           String      @unique
-  status            TableStatus @default(available)
-  total_consumption Decimal     @default(0) @db.Decimal(10, 2)
-  created_at        DateTime    @default(now())
-  updated_at        DateTime    @updatedAt
-  songs             Song[]
-  queue_items       QueueItem[]
-  orders            Order[]
+  id                     Int            @id @default(autoincrement())
+  number                 Int            @unique
+  qr_code                String         @unique
+  status                 TableStatus    @default(available)
+  current_session_id     Int?           @unique
+  total_consumption      Decimal        @default(0) @db.Decimal(10, 2)
+  active_order_count     Int            @default(0)
+  pending_request_count  Int            @default(0)
+  last_activity_at       DateTime?
+  created_at             DateTime       @default(now())
+  updated_at             DateTime       @updatedAt
+  songs                  Song[]
+  queue_items            QueueItem[]
+  sessions               TableSession[] @relation("TableSessions")
+  current_session        TableSession?  @relation("TableCurrentSession", fields: [current_session_id], references: [id], onDelete: SetNull)
+}
+
+model TableSession {
+  id                  Int                @id @default(autoincrement())
+  table_id            Int
+  status              TableSessionStatus @default(open)
+  total_consumption   Decimal            @default(0) @db.Decimal(10, 2)
+  last_consumption_at DateTime?
+  opened_at           DateTime           @default(now())
+  closed_at           DateTime?
+  metadata            Json?
+  created_at          DateTime           @default(now())
+  updated_at          DateTime           @updatedAt
+  table               Table              @relation("TableSessions", fields: [table_id], references: [id], onDelete: Cascade)
+  current_of_table    Table?             @relation("TableCurrentSession")
+  order_requests      OrderRequest[]
+  orders              Order[]
+  consumptions        Consumption[]
+
+  @@index([table_id, status])
+  @@index([status])
 }
 
 model Song {
@@ -60,20 +107,20 @@ model Song {
 }
 
 model QueueItem {
-  id                 Int         @id @default(autoincrement())
+  id                 Int            @id @default(autoincrement())
   song_id            Int
   table_id           Int?
-  priority_score     Decimal     @default(0) @db.Decimal(10, 2)
-  status             QueueStatus @default(pending)
+  priority_score     Decimal        @default(0) @db.Decimal(10, 2)
+  status             QueueStatus    @default(pending)
   position           Int
-  queued_at          DateTime    @default(now())
-  created_at         DateTime    @default(now())
-  updated_at         DateTime    @updatedAt
+  queued_at          DateTime       @default(now())
+  created_at         DateTime       @default(now())
+  updated_at         DateTime       @updatedAt
   started_playing_at DateTime?
   finished_at        DateTime?
   skipped_at         DateTime?
-  song               Song        @relation(fields: [song_id], references: [id], onDelete: Cascade)
-  table              Table?      @relation(fields: [table_id], references: [id], onDelete: Cascade)
+  song               Song           @relation(fields: [song_id], references: [id], onDelete: Cascade)
+  table              Table?         @relation(fields: [table_id], references: [id], onDelete: Cascade)
   playback_state     PlaybackState?
 
   @@index([status, position])
@@ -85,37 +132,87 @@ model Product {
   name        String
   price       Decimal     @db.Decimal(10, 2)
   stock       Int         @default(0)
+  is_active   Boolean     @default(true)
   category    String
   created_at  DateTime    @default(now())
   updated_at  DateTime    @updatedAt
   order_items OrderItem[]
 }
 
-model Order {
-  id          Int          @id @default(autoincrement())
-  table_id    Int
-  status      OrderStatus  @default(pending)
-  total       Decimal      @default(0) @db.Decimal(10, 2)
-  created_at  DateTime     @default(now())
-  updated_at  DateTime     @updatedAt
-  table       Table        @relation(fields: [table_id], references: [id], onDelete: Cascade)
-  order_items OrderItem[]
+model OrderRequest {
+  id                Int                @id @default(autoincrement())
+  table_session_id  Int
+  status            OrderRequestStatus @default(pending)
+  items             Json
+  rejection_reason  String?
+  created_at        DateTime           @default(now())
+  updated_at        DateTime           @updatedAt
+  accepted_at       DateTime?
+  rejected_at       DateTime?
+  cancelled_at      DateTime?
+  table_session     TableSession       @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
+  order             Order?
 
-  @@index([table_id, status])
+  @@index([table_session_id, status])
+  @@index([status])
+}
+
+model Order {
+  id                Int          @id @default(autoincrement())
+  table_session_id  Int
+  order_request_id  Int          @unique
+  status            OrderStatus  @default(accepted)
+  accepted_at       DateTime     @default(now())
+  delivered_at      DateTime?
+  cancelled_at      DateTime?
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
+  table_session     TableSession @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
+  order_request     OrderRequest @relation(fields: [order_request_id], references: [id], onDelete: Restrict)
+  order_items       OrderItem[]
+  consumptions      Consumption[]
+
+  @@index([table_session_id, status])
+  @@index([status])
 }
 
 model OrderItem {
   id         Int      @id @default(autoincrement())
-  order_id    Int
-  product_id  Int
-  quantity    Int
-  unit_price  Decimal  @db.Decimal(10, 2)
-  created_at  DateTime @default(now())
-  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  order_id   Int
+  product_id Int
+  quantity   Int
+  unit_price Decimal  @db.Decimal(10, 2)
+  created_at DateTime @default(now())
+  order      Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [product_id], references: [id], onDelete: Restrict)
 
   @@index([order_id])
   @@index([product_id])
+}
+
+model Consumption {
+  id                Int             @id @default(autoincrement())
+  table_session_id  Int
+  order_id          Int?
+  product_id        Int?
+  description       String
+  quantity          Int             @default(1)
+  unit_amount       Decimal         @db.Decimal(10, 2)
+  amount            Decimal         @db.Decimal(10, 2)
+  type              ConsumptionType @default(product)
+  reversed_at       DateTime?
+  reverses_id       Int?            @unique
+  reason            String?
+  notes             String?
+  created_by        String?
+  created_at        DateTime        @default(now())
+  table_session     TableSession    @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
+  order             Order?          @relation(fields: [order_id], references: [id], onDelete: SetNull)
+  reverses          Consumption?    @relation("ConsumptionReversal", fields: [reverses_id], references: [id], onDelete: SetNull)
+  reversal          Consumption?    @relation("ConsumptionReversal")
+
+  @@index([table_session_id, created_at])
+  @@index([order_id])
 }
 
 model PlaybackState {

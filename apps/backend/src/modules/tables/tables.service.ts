@@ -6,7 +6,6 @@ import { UpdateTableDto } from "./dto/update-table.dto";
 const tableListInclude = {
   _count: {
     select: {
-      orders: true,
       queue_items: true,
       songs: true,
     },
@@ -27,21 +26,24 @@ const tableDetailInclude = {
       position: "asc",
     },
   },
-  orders: {
+  current_session: {
     include: {
-      order_items: {
+      orders: {
         include: {
-          product: true,
+          order_items: {
+            include: {
+              product: true,
+            },
+          },
+        },
+        orderBy: {
+          created_at: "desc",
         },
       },
-    },
-    orderBy: {
-      created_at: "desc",
     },
   },
   _count: {
     select: {
-      orders: true,
       queue_items: true,
       songs: true,
     },
@@ -119,6 +121,7 @@ export class TablesService {
   }
 
   private serializeTableDetail(table: TableDetailRecord) {
+    const orders = table.current_session?.orders ?? [];
     return {
       ...this.serializeTable(table),
       songs: table.songs.map((song) => ({
@@ -128,9 +131,8 @@ export class TablesService {
         ...queueItem,
         priority_score: this.toNumber(queueItem.priority_score),
       })),
-      orders: table.orders.map((order) => ({
+      orders: orders.map((order) => ({
         ...order,
-        total: this.toNumber(order.total),
         order_items: order.order_items.map((item) => ({
           ...item,
           unit_price: this.toNumber(item.unit_price),

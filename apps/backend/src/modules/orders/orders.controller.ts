@@ -5,10 +5,9 @@ import {
   Param,
   ParseIntPipe,
   Patch,
-  Post,
   Query,
 } from "@nestjs/common";
-import { CreateOrderDto } from "./dto/create-order.dto";
+import { OrderStatus } from "@prisma/client";
 import { UpdateOrderStatusDto } from "./dto/update-order-status.dto";
 import { OrdersService } from "./orders.service";
 
@@ -17,24 +16,31 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  findAll(@Query("table_id") tableId?: string) {
-    if (tableId !== undefined) {
-      return this.ordersService.findByTable(Number.parseInt(tableId, 10));
-    }
-
-    return this.ordersService.findAll();
+  async findAll(
+    @Query("status") status?: OrderStatus,
+    @Query("table_session_id") tableSessionId?: string,
+  ) {
+    const orders = await this.ordersService.findAll({
+      status,
+      tableSessionId: tableSessionId
+        ? Number.parseInt(tableSessionId, 10)
+        : undefined,
+    });
+    return orders.map((o) => this.ordersService.serialize(o));
   }
 
-  @Post()
-  create(@Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(createOrderDto);
+  @Get(":id")
+  async findOne(@Param("id", ParseIntPipe) id: number) {
+    const order = await this.ordersService.findOne(id);
+    return this.ordersService.serialize(order);
   }
 
   @Patch(":id/status")
-  updateStatus(
+  async updateStatus(
     @Param("id", ParseIntPipe) id: number,
-    @Body() updateOrderStatusDto: UpdateOrderStatusDto,
+    @Body() dto: UpdateOrderStatusDto,
   ) {
-    return this.ordersService.updateStatus(id, updateOrderStatusDto.status);
+    const order = await this.ordersService.updateStatus(id, dto.status);
+    return this.ordersService.serialize(order);
   }
 }
