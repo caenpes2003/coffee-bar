@@ -93,6 +93,7 @@ interface UseSocketOptions {
   onTableSessionOpened?: SocketListener<"table-session:opened">;
   onTableSessionUpdated?: SocketListener<"table-session:updated">;
   onTableSessionClosed?: SocketListener<"table-session:closed">;
+  onReconnect?: () => void;
 }
 
 export function useSocket(options: UseSocketOptions = {}) {
@@ -111,6 +112,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionOpened,
     onTableSessionUpdated,
     onTableSessionClosed,
+    onReconnect,
   } = options;
   const socketRef = useRef<Socket | null>(null);
 
@@ -134,27 +136,71 @@ export function useSocket(options: UseSocketOptions = {}) {
     };
 
     joinRooms();
+    s.off("connect", joinRooms);
     s.on("connect", joinRooms);
 
-    if (onQueueUpdated) s.on("queue:updated", onQueueUpdated);
-    if (onPlaybackUpdated) s.on("playback:updated", onPlaybackUpdated);
-    if (onTableUpdated) s.on("table:updated", onTableUpdated);
-    if (onBillUpdated) s.on("bill:updated", onBillUpdated);
-    if (onOrderCreated) s.on("order:created", onOrderCreated);
-    if (onOrderUpdated) s.on("order:updated", onOrderUpdated);
+    const handleReconnect = () => {
+      onReconnect?.();
+    };
+
+    if (onReconnect) {
+      s.io.off("reconnect", handleReconnect);
+      s.io.on("reconnect", handleReconnect);
+    }
+
+    if (onQueueUpdated) {
+      s.off("queue:updated", onQueueUpdated);
+      s.on("queue:updated", onQueueUpdated);
+    }
+    if (onPlaybackUpdated) {
+      s.off("playback:updated", onPlaybackUpdated);
+      s.on("playback:updated", onPlaybackUpdated);
+    }
+    if (onTableUpdated) {
+      s.off("table:updated", onTableUpdated);
+      s.on("table:updated", onTableUpdated);
+    }
+    if (onBillUpdated) {
+      s.off("bill:updated", onBillUpdated);
+      s.on("bill:updated", onBillUpdated);
+    }
+    if (onOrderCreated) {
+      s.off("order:created", onOrderCreated);
+      s.on("order:created", onOrderCreated);
+    }
+    if (onOrderUpdated) {
+      s.off("order:updated", onOrderUpdated);
+      s.on("order:updated", onOrderUpdated);
+    }
     if (onOrderRequestCreated)
-      s.on("order-request:created", onOrderRequestCreated);
+      s.off("order-request:created", onOrderRequestCreated).on(
+        "order-request:created",
+        onOrderRequestCreated,
+      );
     if (onOrderRequestUpdated)
-      s.on("order-request:updated", onOrderRequestUpdated);
+      s.off("order-request:updated", onOrderRequestUpdated).on(
+        "order-request:updated",
+        onOrderRequestUpdated,
+      );
     if (onTableSessionOpened)
-      s.on("table-session:opened", onTableSessionOpened);
+      s.off("table-session:opened", onTableSessionOpened).on(
+        "table-session:opened",
+        onTableSessionOpened,
+      );
     if (onTableSessionUpdated)
-      s.on("table-session:updated", onTableSessionUpdated);
+      s.off("table-session:updated", onTableSessionUpdated).on(
+        "table-session:updated",
+        onTableSessionUpdated,
+      );
     if (onTableSessionClosed)
-      s.on("table-session:closed", onTableSessionClosed);
+      s.off("table-session:closed", onTableSessionClosed).on(
+        "table-session:closed",
+        onTableSessionClosed,
+      );
 
     return () => {
       s.off("connect", joinRooms);
+      if (onReconnect) s.io.off("reconnect", handleReconnect);
       if (sessionId !== undefined) s.emit("tableSession:leave", sessionId);
       if (onQueueUpdated) s.off("queue:updated", onQueueUpdated);
       if (onPlaybackUpdated) s.off("playback:updated", onPlaybackUpdated);
@@ -188,6 +234,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionOpened,
     onTableSessionUpdated,
     onTableSessionClosed,
+    onReconnect,
   ]);
 
   const requestSong = useCallback((payload: SocketEvents["song:request"]) => {

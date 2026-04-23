@@ -285,7 +285,7 @@ export class OrderRequestsService {
   private async validateProductsExistAndActive(items: RequestItemInput[]) {
     const products = await this.prisma.product.findMany({
       where: { id: { in: items.map((i) => i.product_id) } },
-      select: { id: true, is_active: true, stock: true },
+      select: { id: true, name: true, is_active: true, stock: true },
     });
     const byId = new Map(products.map((p) => [p.id, p]));
     for (const item of items) {
@@ -305,8 +305,10 @@ export class OrderRequestsService {
       // Logical availability: product.stock is the upper bound; we don't reserve here.
       if (product.stock < item.quantity) {
         throw new BadRequestException({
-          message: `Product ${item.product_id} has insufficient stock`,
+          message: `${product.name} sin disponibilidad`,
           code: "STOCK_INSUFFICIENT",
+          product_id: item.product_id,
+          product_name: product.name,
         });
       }
     }
@@ -314,14 +316,20 @@ export class OrderRequestsService {
 
   private async decrementStockOrThrow(tx: Tx, items: RequestItemInput[]) {
     for (const item of items) {
+      const product = await tx.product.findUnique({
+        where: { id: item.product_id },
+        select: { id: true, name: true },
+      });
       const result = await tx.product.updateMany({
         where: { id: item.product_id, stock: { gte: item.quantity } },
         data: { stock: { decrement: item.quantity } },
       });
       if (result.count === 0) {
         throw new ConflictException({
-          message: `Product ${item.product_id} stock changed; cannot accept`,
+          message: `${product?.name ?? `Producto ${item.product_id}`} sin disponibilidad`,
           code: "STOCK_CONFLICT",
+          product_id: item.product_id,
+          product_name: product?.name ?? null,
         });
       }
     }

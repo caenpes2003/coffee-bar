@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  OrderStatus,
   Prisma,
   TableSession,
   TableSessionStatus,
@@ -19,6 +20,12 @@ const NON_CLOSED = [
   TableSessionStatus.open,
   TableSessionStatus.ordering,
   TableSessionStatus.closing,
+];
+
+const ACTIVE_ORDER_STATUSES = [
+  OrderStatus.accepted,
+  OrderStatus.preparing,
+  OrderStatus.ready,
 ];
 
 @Injectable()
@@ -104,6 +111,23 @@ export class TableSessionsService {
     }
 
     const closed = await this.prisma.$transaction(async (tx) => {
+      const activeOrders = await tx.order.count({
+        where: {
+          table_session: {
+            table_id: session.table_id,
+          },
+          status: { in: ACTIVE_ORDER_STATUSES },
+        },
+      });
+
+      if (activeOrders > 0) {
+        throw new BadRequestException({
+          message: "Cannot close session while there are active orders",
+          code: "TABLE_SESSION_HAS_ACTIVE_ORDERS",
+          active_orders: activeOrders,
+        });
+      }
+
       const updated = await tx.tableSession.update({
         where: { id: sessionId },
         data: {

@@ -76,6 +76,24 @@ function buildMesaQueue(tableQueue: QueueItem[], tableId: number) {
     .sort((a, b) => a.position - b.position);
 }
 
+function dedupeById<T extends { id: number }>(items: T[]) {
+  const unique = new Map<number, T>();
+
+  for (const item of items) {
+    unique.set(item.id, item);
+  }
+
+  return Array.from(unique.values());
+}
+
+function upsertById<T extends { id: number }>(items: T[], nextItem: T) {
+  const exists = items.some((item) => item.id === nextItem.id);
+
+  return exists
+    ? items.map((item) => (item.id === nextItem.id ? nextItem : item))
+    : [nextItem, ...items];
+}
+
 type TabKey = "cola" | "canciones" | "pedidos";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -120,6 +138,39 @@ export default function MesaPage({
   const currentPlayback = useAppStore(selectCurrentPlayback);
   const myQueueCount = useAppStore(selectMyQueueCount(tableId));
 
+  const clearMesaSessionState = useCallback(() => {
+    setSession(null);
+    setBill(null);
+    setOrders([]);
+    setMyRequests([]);
+    setCartOpen(false);
+    setSearchOpen(false);
+    setMySongs([]);
+    updateFromSocket([]);
+    setActiveTab("cola");
+  }, [
+    setOrders,
+    setSearchOpen,
+    setMySongs,
+    updateFromSocket,
+    setActiveTab,
+  ]);
+
+  const hydrateSessionData = useCallback(
+    async (sessionToHydrate: TableSession) => {
+      const [nextBill, nextOrders, nextRequests] = await Promise.all([
+        billApi.get(sessionToHydrate.id),
+        ordersApi.getAll({ table_session_id: sessionToHydrate.id }),
+        orderRequestsApi.getAll({ table_session_id: sessionToHydrate.id }),
+      ]);
+
+      setBill(nextBill);
+      setOrders(dedupeById(nextOrders));
+      setMyRequests(dedupeById(nextRequests));
+    },
+    [setOrders],
+  );
+
   const handleQueueUpdated = useCallback(
     (q: QueueItem[]) => {
       updateFromSocket(buildMesaQueue(q, tableId));
@@ -129,7 +180,7 @@ export default function MesaPage({
         (s) => s.status === "played" || s.status === "skipped",
       );
       const freshActive = q.filter((item) => item.table_id === tableId);
-      setMySongs([...freshActive, ...history]);
+      setMySongs(dedupeById([...freshActive, ...history]));
     },
     [tableId, updateFromSocket, setMySongs],
   );
@@ -162,24 +213,33 @@ export default function MesaPage({
     (closed: TableSession) => {
       if (session && closed.id === session.id) {
         // Bar closed our session — kick back to entry view.
-        setSession(null);
-        setBill(null);
-        setOrders([]);
-        setMyRequests([]);
+        clearMesaSessionState();
       }
     },
-    [session, setOrders],
+    [session, clearMesaSessionState],
   );
   const handleOrderRequestUpdated = useCallback(
     (r: OrderRequest) => {
       if (!session || r.table_session_id !== session.id) return;
-      setMyRequests((prev) => {
-        const exists = prev.find((p) => p.id === r.id);
-        return exists ? prev.map((p) => (p.id === r.id ? r : p)) : [r, ...prev];
-      });
+      setMyRequests((prev) => upsertById(prev, r));
     },
     [session],
   );
+  const handleSocketReconnect = useCallback(async () => {
+    try {
+      const latestSession = await tableSessionsApi.getCurrentForTable(tableId);
+
+      if (!latestSession) {
+        clearMesaSessionState();
+        return;
+      }
+
+      setSession(latestSession);
+      await hydrateSessionData(latestSession);
+    } catch (error) {
+      console.error(error);
+    }
+  }, [tableId, clearMesaSessionState, hydrateSessionData]);
 
   useSocket({
     sessionId: session?.id,
@@ -192,6 +252,7 @@ export default function MesaPage({
     onPlaybackUpdated: handlePlaybackUpdated,
     onBillUpdated: handleBillUpdated,
     onTableSessionClosed: handleSessionClosed,
+    onReconnect: handleSocketReconnect,
   });
 
   // Initial load — table + session discovery + playback + queue.
@@ -208,7 +269,7 @@ export default function MesaPage({
       .catch(console.error);
     queueApi
       .getByTableWithHistory(tableId)
-      .then(setMySongs)
+      .then((songs) => setMySongs(dedupeById(songs)))
       .catch(console.error);
     queueApi.getGlobal().then(setGlobalQueue).catch(console.error);
     productsApi.getAll().then(setProducts).catch(console.error);
@@ -231,16 +292,8 @@ export default function MesaPage({
       setMyRequests([]);
       return;
     }
-    billApi.get(session.id).then(setBill).catch(console.error);
-    ordersApi
-      .getAll({ table_session_id: session.id })
-      .then(setOrders)
-      .catch(console.error);
-    orderRequestsApi
-      .getAll({ table_session_id: session.id })
-      .then(setMyRequests)
-      .catch(console.error);
-  }, [session, setOrders]);
+    hydrateSessionData(session).catch(console.error);
+  }, [session, setOrders, hydrateSessionData]);
 
   async function handleStartSession() {
     setOpenError(null);
@@ -259,6 +312,7 @@ export default function MesaPage({
   }
 
   const disabled = myQueueCount >= MAX_SONGS_PER_TABLE;
+  const orderCreationDisabled = session?.status === "closed";
 
   // ─── Loading ─────────────────────────────────────────────────────────────
   if (!currentTable || session === undefined) {
@@ -385,6 +439,7 @@ export default function MesaPage({
                 )}
                 total={billTotal}
                 onOpenCart={() => setCartOpen(true)}
+                disableCreateOrder={orderCreationDisabled}
               />
             )}
           </section>
@@ -396,7 +451,10 @@ export default function MesaPage({
         <aside className="mesa-rightpanel">
           <NowPlayingCard playback={currentPlayback} />
           <div className="mesa-rightpanel-cta-wrap">
-            <OrderProductsCTA onClick={() => setCartOpen(true)} />
+            <OrderProductsCTA
+              onClick={() => setCartOpen(true)}
+              disabled={orderCreationDisabled}
+            />
             <div style={{ height: 10 }} />
             <RequestCTA
               disabled={disabled}
@@ -415,7 +473,11 @@ export default function MesaPage({
         {/* ═══════════════════════════════════════════════════════════════════ */}
         <div className="mesa-mobile-dock">
           <div style={{ display: "flex", gap: 8 }}>
-            <OrderProductsCTA onClick={() => setCartOpen(true)} mobile />
+            <OrderProductsCTA
+              onClick={() => setCartOpen(true)}
+              mobile
+              disabled={orderCreationDisabled}
+            />
             <RequestCTA
               disabled={disabled}
               onClick={() => setSearchOpen(true)}
@@ -644,11 +706,13 @@ function OrdersTab({
   activeOrders,
   total,
   onOpenCart,
+  disableCreateOrder,
 }: {
   requests: OrderRequest[];
   activeOrders: Order[];
   total: number;
   onOpenCart: () => void;
+  disableCreateOrder: boolean;
 }) {
   const statusLabel: Record<Order["status"], string> = {
     accepted: "Aceptado",
@@ -679,16 +743,17 @@ function OrdersTab({
             <button
               type="button"
               onClick={onOpenCart}
+              disabled={disableCreateOrder}
               style={{
                 padding: "12px 22px",
-                border: `1px solid ${C.cacao}`,
+                border: `1px solid ${disableCreateOrder ? C.sandDark : C.cacao}`,
                 borderRadius: 999,
-                background: C.paper,
-                color: C.ink,
+                background: disableCreateOrder ? C.parchment : C.paper,
+                color: disableCreateOrder ? C.mute : C.ink,
                 fontFamily: FONT_DISPLAY,
                 fontSize: 14,
                 letterSpacing: 3,
-                cursor: "pointer",
+                cursor: disableCreateOrder ? "not-allowed" : "pointer",
                 textTransform: "uppercase",
               }}
             >
@@ -827,26 +892,29 @@ function RequestCTA({
 function OrderProductsCTA({
   onClick,
   mobile,
+  disabled,
 }: {
   onClick: () => void;
   mobile?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       aria-label="Pedir productos"
       style={{
         width: "100%",
         padding: mobile ? "14px 16px" : "16px 20px",
-        border: `1px solid ${C.cacao}`,
+        border: `1px solid ${disabled ? C.sandDark : C.cacao}`,
         borderRadius: 999,
-        background: C.paper,
-        color: C.ink,
+        background: disabled ? C.parchment : C.paper,
+        color: disabled ? C.mute : C.ink,
         fontFamily: FONT_DISPLAY,
         fontSize: mobile ? 14 : 16,
         letterSpacing: 3,
-        cursor: "pointer",
-        boxShadow: C.shadow,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: disabled ? "none" : C.shadow,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
