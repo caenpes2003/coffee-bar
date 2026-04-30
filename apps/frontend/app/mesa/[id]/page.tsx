@@ -9,7 +9,6 @@ import {
 } from "@/store";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
-  tablesApi,
   tableSessionsApi,
   queueApi,
   ordersApi,
@@ -181,17 +180,25 @@ export default function MesaPage({
 
   const hydrateSessionData = useCallback(
     async (sessionToHydrate: TableSession) => {
-      const [nextBill, nextOrders, nextRequests] = await Promise.all([
-        billApi.getForSession(sessionToHydrate.id),
-        ordersApi.getAllForSession(sessionToHydrate.id),
-        orderRequestsApi.getAllForSession(sessionToHydrate.id),
-      ]);
+      // These four calls share the same auth context (session_token), so
+      // they must not run before a session exists. The pre-session entry
+      // view does NOT call this; it only renders the public surface.
+      const [nextBill, nextOrders, nextRequests, tableQueue, tableQueueHistory] =
+        await Promise.all([
+          billApi.getForSession(sessionToHydrate.id),
+          ordersApi.getAllForSession(sessionToHydrate.id),
+          orderRequestsApi.getAllForSession(sessionToHydrate.id),
+          queueApi.getByTable(tableId),
+          queueApi.getByTableWithHistory(tableId),
+        ]);
 
       setBill(nextBill);
       setOrders(dedupeById(nextOrders));
       setMyRequests(dedupeById(nextRequests));
+      updateFromSocket(buildMesaQueue(tableQueue, tableId));
+      setMySongs(dedupeById(tableQueueHistory));
     },
-    [setOrders],
+    [setOrders, tableId, updateFromSocket, setMySongs],
   );
 
   const handleQueueUpdated = useCallback(
@@ -305,23 +312,34 @@ export default function MesaPage({
     setTableTokenStatus(stored ? "ok" : "missing");
   }, [tableId, searchParams]);
 
-  // Initial load — table + session discovery + playback + queue.
+  // Initial load — only public + table-token endpoints. Anything that
+  // requires a session_token waits until `hydrateSessionData`. Anything
+  // that requires an admin_token (e.g. /tables/:id) is NOT called here at
+  // all — the customer doesn't need raw Table rows; we synthesize the
+  // minimum metadata for display from the URL `tableId`.
   useEffect(() => {
     if (isNaN(tableId)) return;
     if (tableTokenStatus !== "ok") return;
     sessionStorage.setItem("table_id", String(tableId));
-    tablesApi.getById(tableId).then(setCurrentTable).catch(console.error);
+
+    // Synthetic Table row for display until a session arrives. We treat
+    // `tableId` as the visible number — that matches how the seed builds
+    // tables. When the session loads we re-derive from session.table_id.
+    setCurrentTable({
+      id: tableId,
+      number: tableId,
+      qr_code: `mesa-${tableId}`,
+      status: "occupied",
+      current_session_id: null,
+      total_consumption: 0,
+      active_order_count: 0,
+      pending_request_count: 0,
+      last_activity_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as Table);
+
     playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
-    queueApi
-      .getByTable(tableId)
-      .then((tableQueue) => {
-        updateFromSocket(buildMesaQueue(tableQueue, tableId));
-      })
-      .catch(console.error);
-    queueApi
-      .getByTableWithHistory(tableId)
-      .then((songs) => setMySongs(dedupeById(songs)))
-      .catch(console.error);
     queueApi.getGlobal().then(setGlobalQueue).catch(console.error);
     productsApi.getAll().then(setProducts).catch(console.error);
 
@@ -331,8 +349,9 @@ export default function MesaPage({
       .catch((err) => {
         const status = (err as { response?: { status?: number } })?.response
           ?.status;
-        // 401/403 from a customer-side endpoint = the token is no longer
-        // accepted. We surface the recovery card; the user will scan again.
+        // 401/403 here means the table token is invalid (revoked, secret
+        // rotated, or the user landed without `?t=`). Surface the recovery
+        // card so they scan the QR again.
         if (status === 401 || status === 403) {
           setSessionInvalid(true);
           return;
