@@ -117,6 +117,17 @@ export const orderRequestsApi = {
     customerApi
       .post<OrderRequest>(`/order-requests/${id}/cancel`)
       .then((r) => r.data),
+  /**
+   * Customer edits the items of its own pending request. Backend rejects
+   * with ORDER_REQUEST_NOT_PENDING (409) if admin accepted in the meantime.
+   */
+  update: (
+    id: number,
+    payload: { items: OrderRequestItemInput[] },
+  ): Promise<OrderRequest> =>
+    customerApi
+      .patch<OrderRequest>(`/order-requests/${id}`, payload)
+      .then((r) => r.data),
 };
 
 // ─── Orders (operational transitions only) ───────────────────────────────────

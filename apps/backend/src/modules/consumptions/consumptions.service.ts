@@ -315,7 +315,8 @@ export class ConsumptionsService {
       id: sessionId,
       total_consumption: bill.summary.total,
     });
-    this.realtime.emitTableUpdated({ id: tableId });
+    const snapshot = await this.projection.snapshotForBroadcast(tableId);
+    if (snapshot) this.realtime.emitTableUpdated(snapshot);
   }
 
   private async emitBillUpdates(sessionId: number, tableId: number) {

@@ -118,4 +118,39 @@ export class TableProjectionService {
       },
     });
   }
+
+  /**
+   * Returns a wire-ready snapshot of the table to ship via socket.io. Call
+   * this AFTER your transaction commits — anything fewer than the full
+   * shape leaves the admin UI stuck on stale data, because the dashboard
+   * merges patches over its in-memory row and a `{ id }`-only patch is a
+   * no-op on the merge.
+   */
+  async snapshotForBroadcast(
+    tableId: number,
+  ): Promise<{
+    id: number;
+    number: number;
+    qr_code: string;
+    status: TableStatus;
+    current_session_id: number | null;
+    total_consumption: number;
+    active_order_count: number;
+    pending_request_count: number;
+    last_activity_at: Date | null;
+  } | null> {
+    const t = await this.prisma.table.findUnique({ where: { id: tableId } });
+    if (!t) return null;
+    return {
+      id: t.id,
+      number: t.number,
+      qr_code: t.qr_code,
+      status: t.status,
+      current_session_id: t.current_session_id,
+      total_consumption: Number(t.total_consumption),
+      active_order_count: t.active_order_count,
+      pending_request_count: t.pending_request_count,
+      last_activity_at: t.last_activity_at,
+    };
+  }
 }

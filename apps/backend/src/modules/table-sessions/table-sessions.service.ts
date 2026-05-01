@@ -49,7 +49,8 @@ export class TableSessionsService {
     });
 
     this.realtime.emitTableSessionOpened(session.id, this.serialize(session));
-    this.realtime.emitTableUpdated({ id: tableId });
+    const snapshot = await this.projection.snapshotForBroadcast(tableId);
+    if (snapshot) this.realtime.emitTableUpdated(snapshot);
     return session;
   }
 
@@ -140,7 +141,10 @@ export class TableSessionsService {
     });
 
     this.realtime.emitTableSessionClosed(closed.id, this.serialize(closed));
-    this.realtime.emitTableUpdated({ id: session.table_id });
+    const snapshot = await this.projection.snapshotForBroadcast(
+      session.table_id,
+    );
+    if (snapshot) this.realtime.emitTableUpdated(snapshot);
     return closed;
   }
 

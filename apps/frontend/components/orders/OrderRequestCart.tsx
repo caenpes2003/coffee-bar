@@ -3,14 +3,19 @@
 /**
  * Customer cart for building an OrderRequest.
  *
- * Strict separation (Phase F1b):
+ * UI flow (drill-down):
+ *   - View A: grid of categories. Each tile shows product count, sold-out
+ *     hint, and the running cart count for that category.
+ *   - View B: products inside one category, with quantity steppers.
+ *   - Footer is shared and shows cart estimate + submit button regardless
+ *     of which view is active. Cart state survives navigation between
+ *     A and B; only `submit` or `close` clears it.
+ *
+ * Strict separation:
  *   - Catalog (products)   → backend, read from the store.
- *   - Cart items           → local state only. Not persisted. Dies on close/submit.
+ *   - Cart items           → local state only. Not persisted.
  *   - Submitted requests   → backend + socket. We do NOT read them here.
  *   - Active orders        → backend + socket. We do NOT read them here.
- *
- * Submit calls POST /order-requests. On success the modal closes. The bill
- * and "mis pedidos" views update independently via their own socket paths.
  */
 import { useEffect, useMemo, useState } from "react";
 import { orderRequestsApi } from "@/lib/api/services";
@@ -26,12 +31,26 @@ const fmt = (n: number) =>
 
 type CartState = Record<number, number>; // product_id -> quantity
 
+/**
+ * Two modes:
+ *   - create: opens empty, submits POST /order-requests.
+ *   - edit:   opens prefilled with `editing.items`, submits PATCH
+ *             /order-requests/:id. Reuses the same UI; only the entry
+ *             state and the submit endpoint differ.
+ */
+type EditingTarget = {
+  requestId: number;
+  items: { product_id: number; quantity: number }[];
+};
+
 interface Props {
   open: boolean;
   onClose: () => void;
   onSubmitted: () => void;
   tableSessionId: number;
   products: Product[];
+  /** When provided, the modal opens in edit mode. */
+  editing?: EditingTarget | null;
 }
 
 export function OrderRequestCart({
@@ -40,18 +59,35 @@ export function OrderRequestCart({
   onSubmitted,
   tableSessionId,
   products,
+  editing,
 }: Props) {
   const [cart, setCart] = useState<CartState>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<
+    { kind: "categories" } | { kind: "products"; category: string }
+  >({ kind: "categories" });
+
+  const isEditMode = editing != null;
 
   useEffect(() => {
-    // Reset on open: cart is ephemeral and must not leak between openings.
+    // Reset on open: cart and navigation state are ephemeral and must not
+    // leak between openings. In edit mode, prefill from the request being
+    // edited so the customer sees their current items already loaded.
     if (open) {
-      setCart({});
+      if (editing) {
+        const seeded: CartState = {};
+        for (const it of editing.items) {
+          seeded[it.product_id] = (seeded[it.product_id] ?? 0) + it.quantity;
+        }
+        setCart(seeded);
+      } else {
+        setCart({});
+      }
       setError(null);
+      setView({ kind: "categories" });
     }
-  }, [open]);
+  }, [open, editing]);
 
   const cartEntries = useMemo(
     () =>
@@ -61,14 +97,60 @@ export function OrderRequestCart({
     [cart],
   );
 
+  const cartUnitCount = useMemo(
+    () => cartEntries.reduce((acc, e) => acc + e.qty, 0),
+    [cartEntries],
+  );
+
+  const productsById = useMemo(
+    () => new Map(products.map((p) => [p.id, p])),
+    [products],
+  );
+
   const estimatedTotal = useMemo(() => {
-    const byId = new Map(products.map((p) => [p.id, p]));
     return cartEntries.reduce((acc, e) => {
-      const p = byId.get(e.id);
+      const p = productsById.get(e.id);
       if (!p) return acc;
       return acc + Number(p.price) * e.qty;
     }, 0);
-  }, [cartEntries, products]);
+  }, [cartEntries, productsById]);
+
+  const productsByCategory = useMemo(() => {
+    const m = new Map<string, Product[]>();
+    for (const p of products) {
+      const list = m.get(p.category) ?? [];
+      list.push(p);
+      m.set(p.category, list);
+    }
+    return m;
+  }, [products]);
+
+  /**
+   * Aggregated metadata per category. We hide categories with zero products
+   * (so we don't show empty tiles), but keep ones whose products are all
+   * sold out — the customer should still see the category exists.
+   */
+  const categories = useMemo(() => {
+    const out: {
+      name: string;
+      total: number;
+      available: number;
+      cartCount: number;
+    }[] = [];
+    for (const [name, list] of productsByCategory) {
+      if (list.length === 0) continue;
+      const available = list.filter(
+        (p) => p.is_active && p.stock > 0,
+      ).length;
+      const cartCount = list.reduce(
+        (acc, p) => acc + (cart[p.id] ?? 0),
+        0,
+      );
+      out.push({ name, total: list.length, available, cartCount });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }, [productsByCategory, cart]);
 
   const bump = (product: Product, delta: number) => {
     setCart((prev) => {
@@ -88,14 +170,31 @@ export function OrderRequestCart({
     setSubmitting(true);
     setError(null);
     try {
-      await orderRequestsApi.create({
-        table_session_id: tableSessionId,
-        items: cartEntries.map((e) => ({ product_id: e.id, quantity: e.qty })),
-      });
+      const items = cartEntries.map((e) => ({
+        product_id: e.id,
+        quantity: e.qty,
+      }));
+      if (isEditMode && editing) {
+        await orderRequestsApi.update(editing.requestId, { items });
+      } else {
+        await orderRequestsApi.create({
+          table_session_id: tableSessionId,
+          items,
+        });
+      }
       onSubmitted();
       onClose();
     } catch (err) {
-      setError(getErrorMessage(err));
+      // Surface the canonical "admin already accepted" case in plain words.
+      const code = (err as { response?: { data?: { code?: string } } })
+        ?.response?.data?.code;
+      if (code === "ORDER_REQUEST_NOT_PENDING") {
+        setError(
+          "Tu pedido ya fue aceptado por el bar. Recarga para ver tu pedido.",
+        );
+      } else {
+        setError(getErrorMessage(err));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -103,12 +202,7 @@ export function OrderRequestCart({
 
   if (!open) return null;
 
-  const byCategory = new Map<string, Product[]>();
-  for (const p of products) {
-    const list = byCategory.get(p.category) ?? [];
-    list.push(p);
-    byCategory.set(p.category, list);
-  }
+  const inCategoriesView = view.kind === "categories";
 
   return (
     <div
@@ -138,6 +232,7 @@ export function OrderRequestCart({
           display: "flex",
           flexDirection: "column",
           boxShadow: "0 -20px 60px -20px rgba(43,29,20,0.45)",
+          overflow: "hidden",
         }}
       >
         <header
@@ -147,33 +242,70 @@ export function OrderRequestCart({
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            gap: 10,
           }}
         >
-          <div>
-            <span
-              style={{
-                fontFamily: "var(--font-oswald)",
-                fontSize: 10,
-                letterSpacing: 3,
-                color: "#A89883",
-                textTransform: "uppercase",
-                fontWeight: 600,
-              }}
-            >
-              — Pedir
-            </span>
-            <h2
-              style={{
-                fontFamily: "var(--font-bebas)",
-                fontSize: 28,
-                letterSpacing: 1,
-                color: "#2B1D14",
-                margin: 0,
-                lineHeight: 1,
-              }}
-            >
-              Carta
-            </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            {!inCategoriesView && (
+              <button
+                type="button"
+                aria-label="Volver a categorías"
+                onClick={() => setView({ kind: "categories" })}
+                style={{
+                  background: "transparent",
+                  border: "1px solid #F1E6D2",
+                  borderRadius: 999,
+                  width: 34,
+                  height: 34,
+                  fontFamily: "var(--font-bebas)",
+                  fontSize: 18,
+                  lineHeight: 1,
+                  color: "#6B4E2E",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                ←
+              </button>
+            )}
+            <div style={{ minWidth: 0 }}>
+              <span
+                style={{
+                  fontFamily: "var(--font-oswald)",
+                  fontSize: 10,
+                  letterSpacing: 3,
+                  color: "#A89883",
+                  textTransform: "uppercase",
+                  fontWeight: 600,
+                }}
+              >
+                {inCategoriesView
+                  ? isEditMode
+                    ? "— Editar pedido"
+                    : "— Pedir"
+                  : "← Volver"}
+              </span>
+              <h2
+                style={{
+                  fontFamily: "var(--font-bebas)",
+                  fontSize: 28,
+                  letterSpacing: 1,
+                  color: "#2B1D14",
+                  margin: 0,
+                  lineHeight: 1,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  textTransform: "uppercase",
+                }}
+              >
+                {inCategoriesView
+                  ? isEditMode
+                    ? `Pedido #${editing?.requestId ?? ""}`
+                    : "Carta"
+                  : view.category}
+              </h2>
+            </div>
           </div>
           <button
             type="button"
@@ -188,131 +320,48 @@ export function OrderRequestCart({
               fontSize: 18,
               color: "#6B4E2E",
               cursor: "pointer",
+              flexShrink: 0,
             }}
           >
             ✕
           </button>
         </header>
 
-        <div style={{ overflowY: "auto", padding: "14px 22px 18px" }}>
-          {Array.from(byCategory.entries()).map(([category, items]) => (
-            <section key={category} style={{ marginBottom: 18 }}>
-              <h3
-                style={{
-                  fontFamily: "var(--font-oswald)",
-                  fontSize: 10,
-                  letterSpacing: 3,
-                  color: "#A89883",
-                  textTransform: "uppercase",
-                  margin: "0 0 10px",
-                  fontWeight: 700,
-                }}
-              >
-                {category}
-              </h3>
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {items.map((p) => {
-                  const qty = cart[p.id] ?? 0;
-                  const soldOut = !p.is_active || p.stock === 0;
-                  const atCap = qty >= p.stock;
-                  return (
-                    <li
-                      key={p.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 12,
-                        padding: "10px 0",
-                        borderBottom: "1px solid #F8F1E4",
-                        opacity: soldOut ? 0.5 : 1,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontFamily: "var(--font-bebas)",
-                            fontSize: 18,
-                            color: "#2B1D14",
-                            letterSpacing: 0.4,
-                          }}
-                        >
-                          {p.name}
-                        </div>
-                        <div
-                          style={{
-                            fontFamily: "var(--font-oswald)",
-                            fontSize: 11,
-                            color: "#B8894A",
-                            letterSpacing: 1,
-                            marginTop: 2,
-                          }}
-                        >
-                          {fmt(Number(p.price))}
-                          {soldOut && (
-                            <span style={{ marginLeft: 10, color: "#8B2635" }}>
-                              Agotado
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => bump(p, -1)}
-                          disabled={qty === 0 || soldOut}
-                          aria-label={`Quitar ${p.name}`}
-                          style={stepperStyle(qty === 0 || soldOut)}
-                        >
-                          −
-                        </button>
-                        <span
-                          style={{
-                            fontFamily: "var(--font-bebas)",
-                            fontSize: 18,
-                            minWidth: 22,
-                            textAlign: "center",
-                            color: qty > 0 ? "#2B1D14" : "#A89883",
-                          }}
-                        >
-                          {qty}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => bump(p, 1)}
-                          disabled={soldOut || atCap}
-                          aria-label={`Agregar ${p.name}`}
-                          style={stepperStyle(soldOut || atCap)}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
-          {products.length === 0 && (
-            <p
-              style={{
-                padding: "40px 20px",
-                textAlign: "center",
-                fontFamily: "var(--font-oswald)",
-                fontSize: 11,
-                color: "#A89883",
-                letterSpacing: 2,
-                textTransform: "uppercase",
-              }}
-            >
-              No hay productos disponibles
-            </p>
-          )}
+        {/* Sliding rail: two views side by side, translate to switch. */}
+        <div
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              width: "200%",
+              height: "100%",
+              transform: inCategoriesView
+                ? "translateX(0)"
+                : "translateX(-50%)",
+              transition: "transform 220ms cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+          >
+            <CategoriesView
+              categories={categories}
+              empty={products.length === 0}
+              onPick={(name) => setView({ kind: "products", category: name })}
+            />
+            <ProductsView
+              category={view.kind === "products" ? view.category : null}
+              products={
+                view.kind === "products"
+                  ? (productsByCategory.get(view.category) ?? [])
+                  : []
+              }
+              cart={cart}
+              onBump={bump}
+            />
+          </div>
         </div>
 
         <footer
@@ -343,6 +392,7 @@ export function OrderRequestCart({
               justifyContent: "space-between",
               alignItems: "center",
               marginBottom: 10,
+              gap: 10,
             }}
           >
             <span
@@ -354,13 +404,15 @@ export function OrderRequestCart({
                 textTransform: "uppercase",
               }}
             >
-              Estimado
+              {cartUnitCount === 0
+                ? "Carrito vacío"
+                : `${cartUnitCount} ${cartUnitCount === 1 ? "producto" : "productos"}`}
             </span>
             <span
               style={{
                 fontFamily: "var(--font-bebas)",
                 fontSize: 26,
-                color: "#B8894A",
+                color: cartUnitCount === 0 ? "#A89883" : "#B8894A",
                 letterSpacing: 1,
               }}
             >
@@ -392,7 +444,11 @@ export function OrderRequestCart({
                   : "pointer",
             }}
           >
-            {submitting ? "Enviando..." : "Enviar pedido"}
+            {submitting
+              ? "Enviando..."
+              : isEditMode
+                ? "Guardar cambios"
+                : "Enviar pedido"}
           </button>
           <p
             style={{
@@ -409,6 +465,290 @@ export function OrderRequestCart({
           </p>
         </footer>
       </div>
+    </div>
+  );
+}
+
+// ─── View A: categories grid ─────────────────────────────────────────────
+function CategoriesView({
+  categories,
+  empty,
+  onPick,
+}: {
+  categories: {
+    name: string;
+    total: number;
+    available: number;
+    cartCount: number;
+  }[];
+  empty: boolean;
+  onPick: (name: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        width: "50%",
+        height: "100%",
+        overflowY: "auto",
+        padding: "16px 22px 18px",
+      }}
+    >
+      {empty && (
+        <p
+          style={{
+            padding: "40px 20px",
+            textAlign: "center",
+            fontFamily: "var(--font-oswald)",
+            fontSize: 11,
+            color: "#A89883",
+            letterSpacing: 2,
+            textTransform: "uppercase",
+          }}
+        >
+          No hay productos disponibles
+        </p>
+      )}
+
+      {!empty && categories.length === 0 && (
+        <p
+          style={{
+            padding: "40px 20px",
+            textAlign: "center",
+            fontFamily: "var(--font-oswald)",
+            fontSize: 11,
+            color: "#A89883",
+            letterSpacing: 2,
+            textTransform: "uppercase",
+          }}
+        >
+          Sin categorías
+        </p>
+      )}
+
+      {categories.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+            gap: 12,
+          }}
+        >
+          {categories.map((c) => {
+            const allSoldOut = c.available === 0;
+            return (
+              <button
+                key={c.name}
+                type="button"
+                onClick={() => onPick(c.name)}
+                aria-label={`Abrir ${c.name}${allSoldOut ? " (agotada)" : ""}`}
+                style={{
+                  position: "relative",
+                  textAlign: "left",
+                  padding: "16px 14px",
+                  border: `1px solid ${allSoldOut ? "#F1E6D2" : "#E6D8BF"}`,
+                  borderRadius: 14,
+                  background: allSoldOut
+                    ? "#F8F1E4"
+                    : "linear-gradient(160deg, #FFFDF8 0%, #FDF8EC 100%)",
+                  color: "#2B1D14",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  minHeight: 96,
+                  transition: "transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease",
+                  boxShadow:
+                    "0 1px 0 rgba(43,29,20,0.04), 0 8px 22px -16px rgba(107,78,46,0.28)",
+                  opacity: allSoldOut ? 0.65 : 1,
+                  fontFamily: "var(--font-manrope)",
+                  WebkitTapHighlightColor: "transparent",
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-bebas)",
+                    fontSize: 22,
+                    color: "#2B1D14",
+                    letterSpacing: 1,
+                    textTransform: "uppercase",
+                    lineHeight: 1.05,
+                  }}
+                >
+                  {c.name}
+                </div>
+                <div
+                  style={{
+                    fontFamily: "var(--font-oswald)",
+                    fontSize: 10,
+                    letterSpacing: 1.5,
+                    color: "#A89883",
+                    textTransform: "uppercase",
+                    fontWeight: 600,
+                    marginTop: "auto",
+                  }}
+                >
+                  {allSoldOut ? (
+                    <span style={{ color: "#8B2635" }}>Agotada</span>
+                  ) : c.available === c.total ? (
+                    <>{c.total} productos</>
+                  ) : (
+                    <>
+                      {c.available} disponibles · {c.total - c.available} agotados
+                    </>
+                  )}
+                </div>
+                {c.cartCount > 0 && (
+                  <span
+                    aria-label={`${c.cartCount} en carrito`}
+                    style={{
+                      position: "absolute",
+                      top: 10,
+                      right: 10,
+                      minWidth: 24,
+                      height: 24,
+                      padding: "0 8px",
+                      borderRadius: 999,
+                      background: "linear-gradient(135deg, #B8894A 0%, #C9944F 100%)",
+                      color: "#FFFDF8",
+                      fontFamily: "var(--font-bebas)",
+                      fontSize: 13,
+                      letterSpacing: 0.5,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {c.cartCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── View B: products inside one category ────────────────────────────────
+function ProductsView({
+  category,
+  products,
+  cart,
+  onBump,
+}: {
+  category: string | null;
+  products: Product[];
+  cart: CartState;
+  onBump: (p: Product, delta: number) => void;
+}) {
+  return (
+    <div
+      style={{
+        width: "50%",
+        height: "100%",
+        overflowY: "auto",
+        padding: "14px 22px 18px",
+      }}
+    >
+      {category == null && <div />}
+      {category != null && products.length === 0 && (
+        <p
+          style={{
+            padding: "40px 20px",
+            textAlign: "center",
+            fontFamily: "var(--font-oswald)",
+            fontSize: 11,
+            color: "#A89883",
+            letterSpacing: 2,
+            textTransform: "uppercase",
+          }}
+        >
+          Sin productos en esta categoría
+        </p>
+      )}
+      {category != null && products.length > 0 && (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {products.map((p) => {
+            const qty = cart[p.id] ?? 0;
+            const soldOut = !p.is_active || p.stock === 0;
+            const atCap = qty >= p.stock;
+            return (
+              <li
+                key={p.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "12px 0",
+                  borderBottom: "1px solid #F8F1E4",
+                  opacity: soldOut ? 0.5 : 1,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "var(--font-bebas)",
+                      fontSize: 18,
+                      color: "#2B1D14",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    {p.name}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--font-oswald)",
+                      fontSize: 11,
+                      color: "#B8894A",
+                      letterSpacing: 1,
+                      marginTop: 2,
+                    }}
+                  >
+                    {fmt(Number(p.price))}
+                    {soldOut && (
+                      <span style={{ marginLeft: 10, color: "#8B2635" }}>
+                        Agotado
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => onBump(p, -1)}
+                    disabled={qty === 0 || soldOut}
+                    aria-label={`Quitar ${p.name}`}
+                    style={stepperStyle(qty === 0 || soldOut)}
+                  >
+                    −
+                  </button>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-bebas)",
+                      fontSize: 18,
+                      minWidth: 22,
+                      textAlign: "center",
+                      color: qty > 0 ? "#2B1D14" : "#A89883",
+                    }}
+                  >
+                    {qty}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onBump(p, 1)}
+                    disabled={soldOut || atCap}
+                    aria-label={`Agregar ${p.name}`}
+                    style={stepperStyle(soldOut || atCap)}
+                  >
+                    +
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

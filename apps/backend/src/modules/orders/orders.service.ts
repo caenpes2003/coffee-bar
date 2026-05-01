@@ -135,9 +135,10 @@ export class OrdersService {
       order.table_session_id,
       this.serialize(result),
     );
-    this.realtime.emitTableUpdated({
-      id: order.table_session.table_id,
-    });
+    const snap = await this.projection.snapshotForBroadcast(
+      order.table_session.table_id,
+    );
+    if (snap) this.realtime.emitTableUpdated(snap);
     if (nextStatus === OrderStatus.delivered) {
       await this.consumptions.emitBillSnapshot(
         order.table_session_id,

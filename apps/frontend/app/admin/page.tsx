@@ -10,6 +10,7 @@ import {
   ordersApi,
   orderRequestsApi,
   playbackApi,
+  productsApi,
   musicApi,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
@@ -19,6 +20,7 @@ import type {
   Order,
   OrderRequest,
   PlaybackState,
+  Product,
   QueueItem,
   Table,
   YouTubeSearchResult,
@@ -766,9 +768,11 @@ function QueueColumn({ queue }: { queue: QueueItem[] }) {
 function PendingRequestsColumn({
   requests,
   tables,
+  products,
 }: {
   requests: OrderRequest[];
   tables: Table[];
+  products: Product[];
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [errorByRequest, setErrorByRequest] = useState<Record<number, string>>(
@@ -781,6 +785,11 @@ function PendingRequestsColumn({
       tableNumberBySessionId.set(t.current_session_id, t.number ?? t.id);
     }
   }
+
+  // OrderRequest stores items as a JSON array of {product_id, quantity};
+  // we resolve names through the public catalog snapshot loaded at boot.
+  const productById = new Map<number, Product>();
+  for (const p of products) productById.set(p.id, p);
 
   const run = async (id: number, action: "accept" | "reject") => {
     setBusyId(id);
@@ -817,9 +826,8 @@ function PendingRequestsColumn({
         const tableNumber =
           tableNumberBySessionId.get(r.table_session_id) ??
           r.table_session?.table_id;
-        const itemsCount = Array.isArray(r.items)
-          ? r.items.reduce((acc, it) => acc + (it.quantity ?? 0), 0)
-          : 0;
+        const items = Array.isArray(r.items) ? r.items : [];
+        const itemsCount = items.reduce((acc, it) => acc + (it.quantity ?? 0), 0);
         const busy = busyId === r.id;
         return (
           <div
@@ -863,6 +871,53 @@ function PendingRequestsColumn({
                 {itemsCount} {itemsCount === 1 ? "unidad" : "unidades"}
               </span>
             </div>
+
+            {items.length > 0 && (
+              <ul
+                style={{
+                  listStyle: "none",
+                  margin: "0 0 10px",
+                  padding: "8px 10px",
+                  background: C.parchment,
+                  border: `1px solid ${C.sand}`,
+                  borderRadius: 8,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                {items.map((it, idx) => {
+                  const p = productById.get(it.product_id);
+                  return (
+                    <li
+                      key={`${r.id}-${it.product_id}-${idx}`}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "baseline",
+                        gap: 8,
+                        fontFamily: FONT_MONO,
+                        fontSize: 11,
+                        letterSpacing: 0.4,
+                        color: C.ink,
+                      }}
+                    >
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <strong style={{ color: C.gold, fontWeight: 700 }}>
+                          {it.quantity}×
+                        </strong>{" "}
+                        {p ? p.name : `Producto #${it.product_id}`}
+                      </span>
+                      {p && (
+                        <span style={{ color: C.mute, fontSize: 10 }}>
+                          {p.category}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 onClick={() => run(r.id, "accept")}
@@ -1197,6 +1252,20 @@ export default function AdminPage() {
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Catalog snapshot, used to resolve product names inside OrderRequest.items
+  // (the JSON column on OrderRequest only stores product_id + quantity).
+  const [products, setProducts] = useState<Product[]>([]);
+  // Lightweight in-page toast queue. Currently used only for customer
+  // cancellations (the rest of the admin surface already has explicit UI
+  // for state changes — adding toasts there would be noise).
+  const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
+  const pushToast = useCallback((message: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 6000);
+  }, []);
   const [billDrawer, setBillDrawer] = useState<
     | { open: true; sessionId: number; tableNumber: number | null }
     | { open: false }
@@ -1249,8 +1318,33 @@ export default function AdminPage() {
     [upsertOrder],
   );
   const handleOrderRequestUpdated = useCallback(
-    (r: OrderRequest) => upsertOrderRequest(r),
-    [upsertOrderRequest],
+    (r: OrderRequest) => {
+      // Detect a customer-driven cancellation by comparing the incoming
+      // status against the prior copy in the store. If the previous row was
+      // pending and now arrives as cancelled, that transition can only have
+      // come from the customer (admin uses reject, not cancel, for pending
+      // requests). Surface a toast so staff sees the change without staring
+      // at the column.
+      const previous = useAppStore
+        .getState()
+        .orderRequests.find((existing) => existing.id === r.id);
+      if (
+        r.status === "cancelled" &&
+        previous &&
+        previous.status === "pending"
+      ) {
+        const tableNumber =
+          useAppStore
+            .getState()
+            .allTables.find(
+              (t) => t.current_session_id === r.table_session_id,
+            )?.number ?? r.table_session?.table_id ?? null;
+        const label = tableNumber != null ? `Mesa ${pad(tableNumber)}` : `Sesión ${r.table_session_id}`;
+        pushToast(`${label}: pedido #${r.id} cancelado por el cliente`);
+      }
+      upsertOrderRequest(r);
+    },
+    [upsertOrderRequest, pushToast],
   );
   const handlePlaybackUpdated = useCallback(
     (playback: PlaybackState) => setCurrentPlayback(playback),
@@ -1289,6 +1383,7 @@ export default function AdminPage() {
       .getAllForAdmin({ status: "pending" })
       .then(setOrderRequests)
       .catch(console.error);
+    productsApi.getAll().then(setProducts).catch(console.error);
     playbackApi.getCurrent().then(setCurrentPlayback).catch(console.error);
     refreshStats();
   }, [
@@ -1742,6 +1837,7 @@ export default function AdminPage() {
           <PendingRequestsColumn
             requests={pendingRequests}
             tables={allTables}
+            products={products}
           />
           <OrdersColumn orders={activeOrders} tables={allTables} />
         </div>
@@ -1758,6 +1854,57 @@ export default function AdminPage() {
         tableNumber={billDrawer.open ? billDrawer.tableNumber : null}
         onClose={() => setBillDrawer({ open: false })}
       />
+
+      <ToastStack toasts={toasts} />
     </>
+  );
+}
+
+// ─── Toast stack ──────────────────────────────────────────────────────────────
+// Bottom-right column of stacked toasts. Auto-dismiss is owned by the parent
+// (push helper sets the timeout); this component is purely presentational.
+function ToastStack({
+  toasts,
+}: {
+  toasts: { id: number; message: string }[];
+}) {
+  if (toasts.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 18,
+        right: 18,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        zIndex: 80,
+        pointerEvents: "none",
+      }}
+    >
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          role="status"
+          aria-live="polite"
+          style={{
+            pointerEvents: "auto",
+            background: C.ink,
+            color: C.paper,
+            padding: "12px 16px",
+            borderRadius: 12,
+            fontFamily: FONT_MONO,
+            fontSize: 12,
+            letterSpacing: 1,
+            maxWidth: 360,
+            boxShadow:
+              "0 8px 22px -8px rgba(43,29,20,0.45), 0 1px 0 rgba(43,29,20,0.04)",
+            borderLeft: `3px solid ${C.burgundy}`,
+          }}
+        >
+          {t.message}
+        </div>
+      ))}
+    </div>
   );
 }

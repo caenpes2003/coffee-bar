@@ -75,7 +75,8 @@ export class OrderRequestsService {
     });
 
     this.realtime.emitOrderRequestCreated(session.id, this.serialize(created));
-    this.realtime.emitTableUpdated({ id: session.table_id });
+    const snap = await this.projection.snapshotForBroadcast(session.table_id);
+    if (snap) this.realtime.emitTableUpdated(snap);
     return created;
   }
 
@@ -153,7 +154,10 @@ export class OrderRequestsService {
       request.table_session.id,
       this.serializeOrder(result.order),
     );
-    this.realtime.emitTableUpdated({ id: request.table_session.table_id });
+    const snap = await this.projection.snapshotForBroadcast(
+      request.table_session.table_id,
+    );
+    if (snap) this.realtime.emitTableUpdated(snap);
     return result.request;
   }
 
@@ -167,6 +171,69 @@ export class OrderRequestsService {
 
   async cancelByCustomer(requestId: number): Promise<OrderRequestFull> {
     return this.terminateRequest(requestId, OrderRequestStatus.cancelled);
+  }
+
+  /**
+   * Customer edits the items of a still-pending request. Stock is NOT
+   * touched (nothing was reserved at create-time). The status guard is
+   * mandatory: if admin accepted between the client's `read` and `write`,
+   * `updateMany` returns 0 and we surface ORDER_REQUEST_NOT_PENDING.
+   */
+  async updateItems(
+    requestId: number,
+    items: RequestItemInput[],
+  ): Promise<OrderRequestFull> {
+    const request = await this.prisma.orderRequest.findUnique({
+      where: { id: requestId },
+      include: {
+        table_session: { select: { id: true, table_id: true, status: true } },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException(`OrderRequest ${requestId} not found`);
+    }
+    if (request.status !== OrderRequestStatus.pending) {
+      throw new ConflictException({
+        message: `OrderRequest ${requestId} is not pending (status=${request.status})`,
+        code: "ORDER_REQUEST_NOT_PENDING",
+      });
+    }
+    if (request.table_session.status === TableSessionStatus.closed) {
+      throw new BadRequestException({
+        message: "Session is closed",
+        code: "TABLE_SESSION_CLOSED",
+      });
+    }
+
+    const normalizedItems = this.normalizeItems(items);
+    await this.validateProductsExistAndActive(normalizedItems);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const guarded = await tx.orderRequest.updateMany({
+        where: { id: requestId, status: OrderRequestStatus.pending },
+        data: {
+          items: normalizedItems as unknown as Prisma.InputJsonValue,
+        },
+      });
+      if (guarded.count === 0) {
+        // Admin accepted/rejected between our read and write; surface a
+        // distinct error so the UI can tell the customer to refresh.
+        throw new ConflictException({
+          message: `OrderRequest ${requestId} was already handled`,
+          code: "ORDER_REQUEST_NOT_PENDING",
+        });
+      }
+      return tx.orderRequest.findUnique({
+        where: { id: requestId },
+        include: INCLUDE_FOR_SERIALIZE,
+      });
+    });
+
+    this.realtime.emitOrderRequestUpdated(
+      request.table_session.id,
+      this.serialize(updated!),
+    );
+    return updated!;
   }
 
   async findAll(filter?: {
@@ -258,7 +325,10 @@ export class OrderRequestsService {
       request.table_session.id,
       this.serialize(updated!),
     );
-    this.realtime.emitTableUpdated({ id: request.table_session.table_id });
+    const snap = await this.projection.snapshotForBroadcast(
+      request.table_session.table_id,
+    );
+    if (snap) this.realtime.emitTableUpdated(snap);
     return updated!;
   }
 

@@ -135,7 +135,16 @@ export default function MesaPage({
   const [myRequests, setMyRequests] = useState<OrderRequest[]>([]);
   // Catalog: backend-owned, hydrated once. Cart inside modal is local-only.
   const [products, setProducts] = useState<Product[]>([]);
-  const [cartOpen, setCartOpen] = useState(false);
+  // The cart modal has two purposes — creating a fresh request and editing
+  // a still-pending one. Modeling the union makes the active mode explicit
+  // (no booleans + "did I forget the editing payload?" bugs).
+  type CartMode =
+    | { kind: "closed" }
+    | { kind: "create" }
+    | { kind: "edit"; request: OrderRequest };
+  const [cartMode, setCartMode] = useState<CartMode>({ kind: "closed" });
+  const cartOpen = cartMode.kind !== "closed";
+  const closeCart = useCallback(() => setCartMode({ kind: "closed" }), []);
 
   const {
     currentTable,
@@ -165,7 +174,7 @@ export default function MesaPage({
     setBill(null);
     setOrders([]);
     setMyRequests([]);
-    setCartOpen(false);
+    closeCart();
     setSearchOpen(false);
     setMySongs([]);
     updateFromSocket([]);
@@ -176,6 +185,7 @@ export default function MesaPage({
     setMySongs,
     updateFromSocket,
     setActiveTab,
+    closeCart,
   ]);
 
   const hydrateSessionData = useCallback(
@@ -565,8 +575,10 @@ export default function MesaPage({
                     o.status === "preparing" ||
                     o.status === "ready",
                 )}
+                products={products}
                 total={billTotal}
-                onOpenCart={() => setCartOpen(true)}
+                onOpenCart={() => setCartMode({ kind: "create" })}
+                onEditRequest={(r) => setCartMode({ kind: "edit", request: r })}
                 disableCreateOrder={orderCreationDisabled}
               />
             )}
@@ -580,7 +592,7 @@ export default function MesaPage({
           <NowPlayingCard playback={currentPlayback} />
           <div className="mesa-rightpanel-cta-wrap">
             <OrderProductsCTA
-              onClick={() => setCartOpen(true)}
+              onClick={() => setCartMode({ kind: "create" })}
               disabled={orderCreationDisabled}
             />
             <div style={{ height: 10 }} />
@@ -602,7 +614,7 @@ export default function MesaPage({
         <div className="mesa-mobile-dock">
           <div style={{ display: "flex", gap: 8 }}>
             <OrderProductsCTA
-              onClick={() => setCartOpen(true)}
+              onClick={() => setCartMode({ kind: "create" })}
               mobile
               disabled={orderCreationDisabled}
             />
@@ -642,7 +654,17 @@ export default function MesaPage({
 
         <OrderRequestCart
           open={cartOpen}
-          onClose={() => setCartOpen(false)}
+          onClose={closeCart}
+          editing={
+            cartMode.kind === "edit"
+              ? {
+                  requestId: cartMode.request.id,
+                  items: Array.isArray(cartMode.request.items)
+                    ? cartMode.request.items
+                    : [],
+                }
+              : null
+          }
           onSubmitted={() => {
             /* request enters via socket; nothing to refetch here */
           }}
@@ -832,16 +854,63 @@ function QueueRow({
 function OrdersTab({
   requests,
   activeOrders,
+  products,
   total,
   onOpenCart,
+  onEditRequest,
   disableCreateOrder,
 }: {
   requests: OrderRequest[];
   activeOrders: Order[];
+  products: Product[];
   total: number;
   onOpenCart: () => void;
+  onEditRequest: (r: OrderRequest) => void;
   disableCreateOrder: boolean;
 }) {
+  // Per-row state for the customer's cancel action. Local because it
+  // belongs to this view and dies with it; backend is the source of truth
+  // and the socket update will remove the row regardless.
+  const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
+  const [requestErrors, setRequestErrors] = useState<Record<number, string>>(
+    {},
+  );
+  // Replaces window.confirm with an in-design confirmation. State holds the
+  // request the user is about to cancel; null means no modal.
+  const [confirmingCancel, setConfirmingCancel] = useState<OrderRequest | null>(
+    null,
+  );
+
+  function requestCancelConfirmation(r: OrderRequest) {
+    if (busyRequestId != null) return;
+    setConfirmingCancel(r);
+  }
+
+  async function performCancel() {
+    const r = confirmingCancel;
+    if (!r) return;
+    setConfirmingCancel(null);
+    setBusyRequestId(r.id);
+    setRequestErrors((prev) => {
+      const next = { ...prev };
+      delete next[r.id];
+      return next;
+    });
+    try {
+      await orderRequestsApi.cancel(r.id);
+    } catch (err) {
+      const code = (err as { response?: { data?: { code?: string } } })
+        ?.response?.data?.code;
+      const msg =
+        code === "ORDER_REQUEST_NOT_PENDING"
+          ? "El bar ya aceptó tu pedido. Recarga para ver tu pedido."
+          : ((err as { message?: string })?.message ??
+            "No se pudo cancelar el pedido.");
+      setRequestErrors((prev) => ({ ...prev, [r.id]: msg }));
+    } finally {
+      setBusyRequestId(null);
+    }
+  }
   const statusLabel: Record<Order["status"], string> = {
     accepted: "Aceptado",
     preparing: "Preparando",
@@ -849,6 +918,12 @@ function OrdersTab({
     delivered: "Entregado",
     cancelled: "Cancelado",
   };
+
+  // OrderRequest stores items as a JSON list of {product_id, quantity};
+  // we resolve product names through the catalog snapshot the page loaded
+  // at boot. Order rows already arrive with order_items.product hydrated.
+  const productById = new Map<number, Product>();
+  for (const p of products) productById.set(p.id, p);
 
   const itemsCount = (r: OrderRequest) =>
     Array.isArray(r.items)
@@ -897,25 +972,135 @@ function OrdersTab({
             — En revisión
           </div>
           <ul className="mesa-list" role="list">
-            {requests.map((r) => (
-              <li
-                key={r.id}
-                className="mesa-row"
-                style={{ cursor: "default" }}
-              >
-                <div className="mesa-row-num">✎</div>
-                <div className="mesa-row-text">
-                  <div className="mesa-row-title">
-                    Solicitud #{r.id}
+            {requests.map((r) => {
+              const items = Array.isArray(r.items) ? r.items : [];
+              return (
+                <li
+                  key={r.id}
+                  className="mesa-row"
+                  style={{
+                    cursor: "default",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div className="mesa-row-num">✎</div>
+                  <div className="mesa-row-text" style={{ minWidth: 0 }}>
+                    <div className="mesa-row-title">
+                      Solicitud #{r.id}
+                    </div>
+                    <div className="mesa-row-meta">
+                      {itemsCount(r)}{" "}
+                      {itemsCount(r) === 1 ? "unidad" : "unidades"} · esperando
+                      al bar
+                    </div>
+                    {items.length > 0 && (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          margin: "8px 0 0",
+                          padding: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                        }}
+                      >
+                        {items.map((it, idx) => {
+                          const p = productById.get(it.product_id);
+                          return (
+                            <li
+                              key={`${r.id}-${it.product_id}-${idx}`}
+                              style={{
+                                fontFamily: FONT_MONO,
+                                fontSize: 11,
+                                letterSpacing: 0.4,
+                                color: C.cacao,
+                              }}
+                            >
+                              <span
+                                style={{ color: C.gold, fontWeight: 700 }}
+                              >
+                                {it.quantity}×
+                              </span>{" "}
+                              {p ? p.name : `Producto #${it.product_id}`}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        marginTop: 10,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onEditRequest(r)}
+                        disabled={busyRequestId === r.id}
+                        style={{
+                          padding: "6px 12px",
+                          border: `1px solid ${C.cacao}`,
+                          background: C.paper,
+                          color: C.ink,
+                          borderRadius: 999,
+                          fontFamily: FONT_MONO,
+                          fontSize: 10,
+                          letterSpacing: 1.5,
+                          cursor:
+                            busyRequestId === r.id ? "not-allowed" : "pointer",
+                          textTransform: "uppercase",
+                          fontWeight: 700,
+                          opacity: busyRequestId === r.id ? 0.6 : 1,
+                        }}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => requestCancelConfirmation(r)}
+                        disabled={busyRequestId === r.id}
+                        style={{
+                          padding: "6px 12px",
+                          border: `1px solid ${C.terracotta}`,
+                          background: C.paper,
+                          color: C.terracotta,
+                          borderRadius: 999,
+                          fontFamily: FONT_MONO,
+                          fontSize: 10,
+                          letterSpacing: 1.5,
+                          cursor:
+                            busyRequestId === r.id ? "not-allowed" : "pointer",
+                          textTransform: "uppercase",
+                          fontWeight: 700,
+                          opacity: busyRequestId === r.id ? 0.6 : 1,
+                        }}
+                      >
+                        {busyRequestId === r.id ? "Cancelando..." : "Cancelar"}
+                      </button>
+                    </div>
+
+                    {requestErrors[r.id] && (
+                      <p
+                        role="alert"
+                        style={{
+                          margin: "8px 0 0",
+                          fontFamily: FONT_MONO,
+                          fontSize: 10,
+                          letterSpacing: 1,
+                          color: C.terracotta,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {requestErrors[r.id]}
+                      </p>
+                    )}
                   </div>
-                  <div className="mesa-row-meta">
-                    {itemsCount(r)}{" "}
-                    {itemsCount(r) === 1 ? "unidad" : "unidades"} · esperando
-                    al bar
-                  </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -927,7 +1112,8 @@ function OrdersTab({
           </div>
           <ul className="mesa-list" role="list">
             {activeOrders.map((o) => {
-              const itemCount = (o.order_items ?? []).reduce(
+              const items = o.order_items ?? [];
+              const itemCount = items.reduce(
                 (a, it) => a + (it.quantity ?? 0),
                 0,
               );
@@ -935,15 +1121,56 @@ function OrdersTab({
                 <li
                   key={o.id}
                   className="mesa-row"
-                  style={{ cursor: "default" }}
+                  style={{
+                    cursor: "default",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                  }}
                 >
                   <div className="mesa-row-num">☕</div>
-                  <div className="mesa-row-text">
+                  <div className="mesa-row-text" style={{ minWidth: 0 }}>
                     <div className="mesa-row-title">Pedido #{o.id}</div>
                     <div className="mesa-row-meta">
                       {itemCount} {itemCount === 1 ? "unidad" : "unidades"} ·{" "}
                       {statusLabel[o.status]}
                     </div>
+                    {items.length > 0 && (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          margin: "8px 0 0",
+                          padding: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                        }}
+                      >
+                        {items.map((it) => {
+                          const name =
+                            it.product?.name ??
+                            productById.get(it.product_id)?.name ??
+                            `Producto #${it.product_id}`;
+                          return (
+                            <li
+                              key={it.id}
+                              style={{
+                                fontFamily: FONT_MONO,
+                                fontSize: 11,
+                                letterSpacing: 0.4,
+                                color: C.cacao,
+                              }}
+                            >
+                              <span
+                                style={{ color: C.gold, fontWeight: 700 }}
+                              >
+                                {it.quantity}×
+                              </span>{" "}
+                              {name}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </div>
                 </li>
               );
@@ -958,6 +1185,190 @@ function OrdersTab({
           <span className="mesa-total-amount">{fmt(total)}</span>
         </div>
       )}
+
+      {confirmingCancel && (
+        <CancelConfirmModal
+          request={confirmingCancel}
+          productById={productById}
+          onConfirm={performCancel}
+          onClose={() => setConfirmingCancel(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Cancel-confirmation modal ───────────────────────────────────────────
+// Replaces window.confirm so the dialog matches the rest of the mesa UI.
+// Shows the items the customer is about to lose so they don't cancel by
+// accident the wrong request when they have several pending.
+function CancelConfirmModal({
+  request,
+  productById,
+  onConfirm,
+  onClose,
+}: {
+  request: OrderRequest;
+  productById: Map<number, Product>;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const items = Array.isArray(request.items) ? request.items : [];
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Cancelar pedido"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 70,
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          background: C.paper,
+          borderRadius: 16,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            — Cancelar
+          </span>
+          <h3
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 22,
+              letterSpacing: 0.5,
+              color: C.ink,
+              margin: "2px 0 0",
+              textTransform: "uppercase",
+            }}
+          >
+            Pedido #{request.id}
+          </h3>
+        </div>
+
+        <p
+          style={{
+            margin: 0,
+            fontFamily: FONT_UI,
+            fontSize: 14,
+            color: C.cacao,
+            lineHeight: 1.45,
+          }}
+        >
+          ¿Seguro que quieres cancelar este pedido? No podrás recuperarlo.
+        </p>
+
+        {items.length > 0 && (
+          <ul
+            style={{
+              listStyle: "none",
+              margin: 0,
+              padding: "10px 12px",
+              background: C.parchment,
+              border: `1px solid ${C.sand}`,
+              borderRadius: 10,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}
+          >
+            {items.map((it, idx) => {
+              const p = productById.get(it.product_id);
+              return (
+                <li
+                  key={`${request.id}-${it.product_id}-${idx}`}
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 11,
+                    letterSpacing: 0.4,
+                    color: C.ink,
+                  }}
+                >
+                  <span style={{ color: C.gold, fontWeight: 700 }}>
+                    {it.quantity}×
+                  </span>{" "}
+                  {p ? p.name : `Producto #${it.product_id}`}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            justifyContent: "flex-end",
+            marginTop: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "10px 18px",
+              border: `1px solid ${C.sand}`,
+              background: "transparent",
+              color: C.cacao,
+              borderRadius: 999,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 2,
+              cursor: "pointer",
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            Volver
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            style={{
+              padding: "10px 22px",
+              border: "none",
+              borderRadius: 999,
+              background: C.terracotta,
+              color: C.paper,
+              fontFamily: FONT_DISPLAY,
+              fontSize: 13,
+              letterSpacing: 2.5,
+              cursor: "pointer",
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            Sí, cancelar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

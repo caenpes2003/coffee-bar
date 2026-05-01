@@ -35,6 +35,17 @@ function makeDeps() {
   const projection = {
     onSessionOpened: vi.fn().mockResolvedValue(undefined),
     onSessionClosed: vi.fn().mockResolvedValue(undefined),
+    snapshotForBroadcast: vi.fn(async (id: number) => ({
+      id,
+      number: id,
+      qr_code: `mesa-${id}`,
+      status: "occupied" as const,
+      current_session_id: 10,
+      total_consumption: 0,
+      active_order_count: 0,
+      pending_request_count: 0,
+      last_activity_at: null,
+    })),
   } as any;
 
   const realtime = {
@@ -80,7 +91,9 @@ describe("TableSessionsService.open", () => {
     expect(session.id).toBe(10);
     expect(d.projection.onSessionOpened).toHaveBeenCalledWith(1, 10, expect.anything());
     expect(d.realtime.emitTableSessionOpened).toHaveBeenCalled();
-    expect(d.realtime.emitTableUpdated).toHaveBeenCalledWith({ id: 1 });
+    expect(d.realtime.emitTableUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, status: "occupied" }),
+    );
   });
 
   it("throws NotFound when table does not exist", async () => {

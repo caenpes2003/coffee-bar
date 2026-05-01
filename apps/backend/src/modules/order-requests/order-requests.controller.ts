@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -13,6 +14,7 @@ import { OrderRequestStatus } from "@prisma/client";
 import { OrderRequestsService } from "./order-requests.service";
 import { CreateOrderRequestDto } from "./dto/create-order-request.dto";
 import { RejectOrderRequestDto } from "./dto/reject-order-request.dto";
+import { UpdateOrderRequestDto } from "./dto/update-order-request.dto";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
@@ -140,6 +142,37 @@ export class OrderRequestsController {
       }
     }
     const request = await this.service.cancelByCustomer(id);
+    return this.service.serialize(request);
+  }
+
+  /**
+   * Customer edits the items of its own pending request. Auth + ownership
+   * guard mirror cancel above. Service rejects if the request is no longer
+   * pending (admin accepted/rejected in the meantime) with
+   * ORDER_REQUEST_NOT_PENDING.
+   */
+  @Patch(":id")
+  @UseGuards(JwtGuard)
+  @AuthKinds("session")
+  async update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: UpdateOrderRequestDto,
+    @CurrentAuth() auth: AuthPayload,
+  ) {
+    if (auth.kind !== "session") {
+      throw new ForbiddenException({
+        message: "Session token required",
+        code: "AUTH_SESSION_REQUIRED",
+      });
+    }
+    const existing = await this.service.findOne(id);
+    if (existing.table_session_id !== auth.session_id) {
+      throw new ForbiddenException({
+        message: "Cross-session access denied",
+        code: "AUTH_CROSS_SESSION",
+      });
+    }
+    const request = await this.service.updateItems(id, dto.items);
     return this.service.serialize(request);
   }
 }
