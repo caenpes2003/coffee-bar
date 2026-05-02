@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/.env
+**/.env.local
+.git
+.github
+.claude
+.vscode
+*.tsbuildinfo
+*.log
+*.xlsx
+*.csv
+apps/backend/data
