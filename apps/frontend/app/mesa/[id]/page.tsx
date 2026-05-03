@@ -852,8 +852,14 @@ export default function MesaPage({
                 }
               : null
           }
-          onSubmitted={() => {
-            /* request enters via socket; nothing to refetch here */
+          onSubmitted={(request) => {
+            // Seed the new/updated request into local state right away.
+            // The matching socket event will arrive shortly after but on
+            // mobile Safari it sometimes drops the first event after
+            // joining a fresh room — without this seed the customer's
+            // first ever order would only appear after a manual refresh.
+            // `upsertById` makes the later socket event a harmless no-op.
+            setMyRequests((prev) => upsertById(prev, request));
           }}
           tableSessionId={session.id}
           products={products}

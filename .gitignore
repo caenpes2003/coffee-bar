@@ -13,3 +13,5 @@ coverage
 apps/backend/data/
 *.xlsx
 *.csv
+.vercel
+.env*.local

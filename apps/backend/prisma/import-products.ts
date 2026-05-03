@@ -111,9 +111,55 @@ async function main() {
   }
 
   const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json<RawRow>(sheet, { defval: null });
+
+  // The live workbook is laid out with a precise rectangle:
+  //   Headers:    row 4,  columns B..S
+  //   Data rows:  rows 56..98, columns B..S
+  // Above row 56 there are intermediate sections (cost analysis blocks,
+  // section dividers) that share the same headers — importing those gives
+  // false positives. Read the explicit ranges so the import stays stable
+  // even if the spreadsheet author rearranges the upper section.
+  const HEADER_RANGE = "B4:S4";
+  const DATA_RANGE = "B56:S98";
+
+  const headerMatrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: null,
+    range: HEADER_RANGE,
+  }) as unknown[][];
+  const headerRow = headerMatrix[0] ?? [];
+  const headers = headerRow.map((c) =>
+    c == null ? "" : String(c).trim(),
+  );
+  if (!headers.length) {
+    console.error(
+      `[import-products] No header cells found at ${HEADER_RANGE}.`,
+    );
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+
+  const dataMatrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: null,
+    range: DATA_RANGE,
+    blankrows: false,
+  }) as unknown[][];
+
+  const rows: RawRow[] = dataMatrix
+    .map((row) => {
+      const obj: RawRow = {};
+      for (let c = 0; c < headers.length; c++) {
+        const key = headers[c];
+        if (!key) continue;
+        obj[key] = row[c] ?? null;
+      }
+      return obj;
+    })
+    .filter((r) => Object.values(r).some((v) => v != null && v !== ""));
+
   console.log(
-    `[import-products] Sheet "${sheetName}" parsed: ${rows.length} rows`,
+    `[import-products] Sheet "${sheetName}" — header range ${HEADER_RANGE}, data range ${DATA_RANGE}: ${rows.length} non-empty rows`,
   );
 
   const parsed: ParsedRow[] = [];
@@ -164,36 +210,44 @@ async function main() {
   let created = 0;
   let updated = 0;
 
-  await prisma.$transaction(async (tx) => {
-    for (const row of parsed) {
-      const existing = await tx.product.findFirst({
-        where: { name: row.name },
-        select: { id: true },
-      });
-      if (existing) {
-        await tx.product.update({
-          where: { id: existing.id },
-          data: {
-            category: row.category,
-            price: row.price,
-            is_active: true,
-          },
+  // Generous timeout: when running against a remote Postgres (e.g. you
+  // sitting in Colombia importing into Railway in US-West) each row does
+  // two round trips and the default 5 s ceiling blows up halfway through
+  // the catalogue. 60 s comfortably absorbs ~200 products even on a slow
+  // residential link.
+  await prisma.$transaction(
+    async (tx) => {
+      for (const row of parsed) {
+        const existing = await tx.product.findFirst({
+          where: { name: row.name },
+          select: { id: true },
         });
-        updated += 1;
-      } else {
-        await tx.product.create({
-          data: {
-            name: row.name,
-            category: row.category,
-            price: row.price,
-            stock: 0,
-            is_active: true,
-          },
-        });
-        created += 1;
+        if (existing) {
+          await tx.product.update({
+            where: { id: existing.id },
+            data: {
+              category: row.category,
+              price: row.price,
+              is_active: true,
+            },
+          });
+          updated += 1;
+        } else {
+          await tx.product.create({
+            data: {
+              name: row.name,
+              category: row.category,
+              price: row.price,
+              stock: 0,
+              is_active: true,
+            },
+          });
+          created += 1;
+        }
       }
-    }
-  });
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 
   console.log(
     `[import-products] Done. created=${created}, updated=${updated}, skipped=${skipped.length}`,

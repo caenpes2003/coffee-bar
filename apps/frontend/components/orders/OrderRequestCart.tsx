@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { orderRequestsApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
-import type { Product } from "@coffee-bar/shared";
+import type { OrderRequest, Product } from "@coffee-bar/shared";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -46,7 +46,15 @@ type EditingTarget = {
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSubmitted: () => void;
+  /**
+   * Called after a successful create/update. We hand back the OrderRequest
+   * the server returned so the parent can seed it into local state
+   * immediately, without waiting for the socket. The socket may arrive
+   * before, after, or never (mobile Safari sometimes drops the first
+   * event of a freshly-joined room) — `upsertById` upstream means the
+   * extra event becomes a harmless no-op.
+   */
+  onSubmitted: (request: OrderRequest) => void;
   tableSessionId: number;
   products: Product[];
   /** When provided, the modal opens in edit mode. */
@@ -174,15 +182,18 @@ export function OrderRequestCart({
         product_id: e.id,
         quantity: e.qty,
       }));
-      if (isEditMode && editing) {
-        await orderRequestsApi.update(editing.requestId, { items });
-      } else {
-        await orderRequestsApi.create({
-          table_session_id: tableSessionId,
-          items,
-        });
-      }
-      onSubmitted();
+      // Always capture the server-returned row so the parent can seed it
+      // into local state without waiting for the socket. iOS Safari drops
+      // the first event of a freshly-joined room more often than chrome
+      // does, which is why the very first request used to "disappear"
+      // until a manual refresh.
+      const result = isEditMode && editing
+        ? await orderRequestsApi.update(editing.requestId, { items })
+        : await orderRequestsApi.create({
+            table_session_id: tableSessionId,
+            items,
+          });
+      onSubmitted(result);
       onClose();
     } catch (err) {
       // Surface the canonical "admin already accepted" case in plain words.
