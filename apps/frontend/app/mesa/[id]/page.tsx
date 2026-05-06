@@ -66,6 +66,12 @@ function buildMesaQueue(
   // `sessionStartIso` keeps the customer view scoped to the current
   // session — without it, items queued by a previous occupant of the same
   // physical table would still appear here.
+  //
+  // We include BOTH pending and playing items: when a song from this
+  // table is currently playing, the backend counts it toward the per-
+  // table limit (so does the customer counter "X/5"). Excluding it here
+  // caused a desync where the UI showed 4/5 but the server had already
+  // accepted 5 and rejected the 6th with QUEUE_LIMIT_REACHED.
   const sinceMs = sessionStartIso
     ? new Date(sessionStartIso).getTime()
     : null;
@@ -73,7 +79,7 @@ function buildMesaQueue(
     .filter(
       (item) =>
         item.table_id === tableId &&
-        item.status === "pending" &&
+        (item.status === "pending" || item.status === "playing") &&
         (sinceMs == null || new Date(item.created_at).getTime() >= sinceMs),
     )
     .sort((a, b) => a.position - b.position);

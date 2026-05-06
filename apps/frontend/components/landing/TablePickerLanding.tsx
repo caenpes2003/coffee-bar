@@ -51,7 +51,7 @@ export function TablePickerLanding() {
   const [codeError, setCodeError] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleCodeSubmit = (e: React.FormEvent) => {
+  const handleCodeSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
     const trimmed = code.trim();
     if (!trimmed) {
@@ -178,7 +178,7 @@ function CodeCard({
 }: {
   code: string;
   onChange: (v: string) => void;
-  onSubmit: (e: React.FormEvent) => void;
+  onSubmit: (e: React.SyntheticEvent) => void;
   error: string | null;
 }) {
   return (
@@ -242,7 +242,7 @@ function CodeCard({
           type="text"
           inputMode="text"
           autoComplete="off"
-          autoCapitalize="characters"
+          autoCapitalize="none"
           spellCheck={false}
           value={code}
           onChange={(e) => onChange(e.target.value)}

@@ -4,13 +4,28 @@ import {
   Query,
   BadRequestException,
   ServiceUnavailableException,
+  UseGuards,
 } from "@nestjs/common";
 import { MusicService } from "./music.service";
 import { YouTubeApiError } from "./youtube-data-api.provider";
+import { JwtGuard } from "../auth/guards/jwt.guard";
+import { AuthKinds } from "../auth/guards/decorators";
 
 @Controller("music")
 export class MusicController {
   constructor(private readonly musicService: MusicService) {}
+
+  /**
+   * Admin-only quota status for the dashboard widget. Returns null inside
+   * the response when the deploy is on a no-key (ytsr-only) configuration
+   * — the UI can render that as "no quota tracking" instead of crashing.
+   */
+  @Get("budget")
+  @UseGuards(JwtGuard)
+  @AuthKinds("admin")
+  budget() {
+    return { snapshot: this.musicService.getBudgetSnapshot() };
+  }
 
   @Get("search")
   async search(@Query("q") query: string) {

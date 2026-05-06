@@ -1021,6 +1021,100 @@ function EmptyMsg({ text }: { text: string }) {
  * logout control. Lives next to the brand so staff always know who is
  * signed in on this workstation.
  */
+/**
+ * Header banner that surfaces inventory in trouble. We hide it when
+ * everything is fine so the dashboard stays calm; on counts > 0 it
+ * shows a soft amber strip with a deep-link to /admin/products filtered
+ * to "Bajo stock". Only counts ACTIVE products — inactive items by
+ * definition aren't being sold and don't need restocking.
+ */
+function LowStockBanner({ products }: { products: Product[] }) {
+  const { lowCount, outCount } = (() => {
+    let low = 0;
+    let out = 0;
+    for (const p of products) {
+      if (!p.is_active) continue;
+      if (p.is_out_of_stock) out += 1;
+      else if (p.is_low_stock) low += 1;
+    }
+    return { lowCount: low, outCount: out };
+  })();
+
+  if (lowCount === 0 && outCount === 0) return null;
+
+  const parts: string[] = [];
+  if (outCount > 0) {
+    parts.push(`${outCount} agotado${outCount === 1 ? "" : "s"}`);
+  }
+  if (lowCount > 0) {
+    parts.push(`${lowCount} con stock bajo`);
+  }
+
+  return (
+    <Link
+      href="/admin/products?filter=low_stock"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        margin: "0 16px 8px",
+        padding: "10px 14px",
+        background: outCount > 0 ? `${C.terracotta}10` : `${C.gold}10`,
+        border: `1px solid ${outCount > 0 ? C.terracotta : C.gold}55`,
+        borderRadius: 12,
+        textDecoration: "none",
+        color: C.ink,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 999,
+          background: outCount > 0 ? C.terracotta : C.gold,
+          color: C.paper,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: FONT_DISPLAY,
+          fontSize: 16,
+          flexShrink: 0,
+        }}
+      >
+        !
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 9,
+            letterSpacing: 2.5,
+            color: outCount > 0 ? C.terracotta : C.gold,
+            fontWeight: 700,
+            textTransform: "uppercase",
+          }}
+        >
+          — Inventario
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_UI,
+            fontSize: 13,
+            color: C.ink,
+            marginTop: 2,
+          }}
+        >
+          {parts.join(" · ")}.{" "}
+          <span style={{ color: C.cacao, textDecoration: "underline" }}>
+            Ver productos →
+          </span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 function AdminWhoAmI() {
   const { user, logout } = useAdminAuth();
   if (!user) return null;
@@ -1402,10 +1496,21 @@ export default function AdminPage() {
             >
               Ventas →
             </Link>
+            <Link
+              href="/admin/auditoria"
+              className="crown-btn crown-btn-ghost"
+              style={{
+                ...btnGhost({ fg: C.cacao, border: C.sand }),
+                textDecoration: "none",
+              }}
+            >
+              Auditoría →
+            </Link>
           </div>
           <KpiStrip kpis={kpis} />
         </div>
 
+        <LowStockBanner products={products} />
 
         {/* Layout principal: mapa de mesas (sidebar) + zona central con
             las columnas de operación (cola, solicitudes, pedidos). El

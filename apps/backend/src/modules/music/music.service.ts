@@ -4,6 +4,7 @@ import {
   type MusicSearchProvider,
   type MusicSearchResult,
 } from "./music-search.provider";
+import { HybridMusicProvider } from "./hybrid.provider";
 
 @Injectable()
 export class MusicService {
@@ -14,6 +15,21 @@ export class MusicService {
     private readonly provider: MusicSearchProvider,
   ) {
     this.logger.log(`Music search provider: ${this.provider.name}`);
+  }
+
+  /**
+   * Per-key quota snapshot for the admin status widget. Returns null when
+   * the active provider doesn't track budgets (e.g. ytsr-only deploys
+   * with no API key configured). The numbers are best-effort: they live
+   * in the process memory and reset on backend restart, so they show
+   * "since last deploy" rather than absolute daily totals. For the
+   * authoritative count, the admin must look at console.cloud.google.com.
+   */
+  getBudgetSnapshot() {
+    if (this.provider instanceof HybridMusicProvider) {
+      return this.provider.getBudgetSnapshot();
+    }
+    return null;
   }
 
   async search(query: string, limit = 5): Promise<MusicSearchResult[]> {

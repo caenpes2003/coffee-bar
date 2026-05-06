@@ -4,7 +4,53 @@ import * as jwt from "jsonwebtoken";
 
 const prisma = new PrismaClient();
 
+/**
+ * Production safety: this seed wipes EVERY table in the schema. Running
+ * it against the live cluster nukes products, sessions, the ledger —
+ * irrecoverable without a Postgres restore. We refuse to proceed when
+ * DATABASE_URL looks like a production hostname unless the operator
+ * explicitly opts in with `I_KNOW_THIS_IS_PROD=true`.
+ *
+ * The hostname patterns below cover Railway / Render / Supabase / Neon
+ * / Heroku — the most common managed Postgres providers. Add more as
+ * needed; the cost of a false positive (rejecting a legitimate run) is
+ * a 30-second restart, the cost of a false negative (silently nuking
+ * prod) is hours of recovery.
+ */
+const PROD_HOST_PATTERNS = [
+  "railway",
+  "render.com",
+  "supabase",
+  "neon.tech",
+  "amazonaws.com",
+  "heroku",
+  "rds.amazonaws",
+];
+
+function refuseIfProduction() {
+  const url = process.env.DATABASE_URL ?? "";
+  const looksProd = PROD_HOST_PATTERNS.some((p) => url.includes(p));
+  if (!looksProd) return;
+  if (process.env.I_KNOW_THIS_IS_PROD === "true") {
+    console.warn(
+      "[seed] WARNING: running against what looks like a PRODUCTION database (DATABASE_URL matches a managed-host pattern).",
+    );
+    console.warn(
+      "[seed] Proceeding because I_KNOW_THIS_IS_PROD=true was set explicitly.",
+    );
+    return;
+  }
+  console.error(
+    "[seed] REFUSING TO RUN: DATABASE_URL points at a managed Postgres provider (Railway/Render/Supabase/Neon/etc.).",
+  );
+  console.error(
+    "[seed] This script wipes every table. If you really want to seed production, set I_KNOW_THIS_IS_PROD=true and try again.",
+  );
+  process.exit(1);
+}
+
 async function main() {
+  refuseIfProduction();
   await prisma.playbackState.deleteMany();
   await prisma.consumption.deleteMany();
   await prisma.orderItem.deleteMany();

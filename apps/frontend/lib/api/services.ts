@@ -542,6 +542,49 @@ export const playbackApi = {
 };
 
 // ─── Music ────────────────────────────────────────────────────────────────────
+export interface MusicBudgetSlot {
+  slot: number;
+  name: string;
+  used: number;
+  remaining: number;
+  limit: number;
+}
+
+export interface MusicBudgetSnapshot {
+  cache_size: number;
+  slots: MusicBudgetSlot[];
+}
+
+// ─── Audit log (admin) ──────────────────────────────────────────────────────
+export type AuditEventKind =
+  | "bill_adjustment"
+  | "refund"
+  | "inventory_restock"
+  | "inventory_waste"
+  | "inventory_adjust";
+
+export interface AuditEvent {
+  id: string;
+  kind: AuditEventKind;
+  created_at: string;
+  created_by: string | null;
+  summary: string;
+  context: {
+    session_id?: number;
+    product_id?: number;
+    product_name?: string | null;
+    table_id?: number;
+    amount?: number;
+  };
+}
+
+export const auditLogApi = {
+  list: (limit = 100): Promise<AuditEvent[]> =>
+    adminApi
+      .get<AuditEvent[]>(`/audit-log?limit=${limit}`)
+      .then((r) => r.data),
+};
+
 export const musicApi = {
   search: (query: string): Promise<YouTubeSearchResult[]> =>
     publicApi
@@ -549,4 +592,11 @@ export const musicApi = {
         `/music/search?q=${encodeURIComponent(query)}`,
       )
       .then((r) => r.data),
+  /**
+   * In-memory budget snapshot per YouTube API key. Resets on backend
+   * restart — useful for "did I burn my quota in the last hour?" but
+   * the source of truth is console.cloud.google.com.
+   */
+  getBudget: (): Promise<{ snapshot: MusicBudgetSnapshot | null }> =>
+    adminApi.get("/music/budget").then((r) => r.data),
 };

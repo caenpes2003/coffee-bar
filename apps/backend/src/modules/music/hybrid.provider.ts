@@ -151,6 +151,25 @@ export class HybridMusicProvider implements MusicSearchProvider {
     }
   }
 
+  /**
+   * In-memory snapshot of every key's daily budget. Used by the admin
+   * `/admin/music/budget` endpoint to render a small status widget.
+   * Note: this resets to zero whenever the backend process restarts —
+   * for accurate aggregate quota, look at console.cloud.google.com.
+   */
+  getBudgetSnapshot() {
+    return {
+      cache_size: this.cache.size,
+      slots: this.slots.map((s, i) => ({
+        slot: i + 1,
+        name: s.provider.name,
+        used: s.budget.used,
+        remaining: s.budget.remaining,
+        limit: s.budget.used + s.budget.remaining,
+      })),
+    };
+  }
+
   private logSearch(source: string, query: string, count: number): void {
     this.logger.log(
       JSON.stringify({

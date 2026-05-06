@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   housePlaylistApi,
+  musicApi,
   type HousePlaylistItem,
   type HousePlaylistValidation,
+  type MusicBudgetSnapshot,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import {
@@ -149,6 +151,8 @@ export default function HousePlaylistPage() {
           </Link>
         </header>
 
+        <BudgetWidget />
+
         <AddSongCard
           onAdded={(item) => {
             setItems((prev) => [...prev, item]);
@@ -200,6 +204,189 @@ export default function HousePlaylistPage() {
 
       <ToastStack toasts={toasts} />
     </>
+  );
+}
+
+// ─── Budget widget ───────────────────────────────────────────────────────────
+
+function BudgetWidget() {
+  const [snapshot, setSnapshot] = useState<MusicBudgetSnapshot | null | undefined>(
+    undefined,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await musicApi.getBudget();
+        if (!cancelled) setSnapshot(res.snapshot);
+      } catch (err) {
+        if (!cancelled) setError(getErrorMessage(err));
+      }
+    };
+    load();
+    // Refresh every 30s while the page is open. The numbers move slowly
+    // on a normal day, so this is plenty.
+    const interval = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Hide silently while we're still loading, on errors, or on ytsr-only
+  // deploys where there's no quota to track.
+  if (!snapshot) return null;
+
+  return (
+    <section
+      style={{
+        marginTop: 16,
+        padding: "14px 18px",
+        background: C.paper,
+        border: `1px solid ${C.sand}`,
+        borderRadius: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        boxShadow:
+          "0 1px 0 rgba(43,29,20,0.04), 0 8px 22px -16px rgba(107,78,46,0.28)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 6,
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 3,
+              color: C.mute,
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            — Cuota YouTube API
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 18,
+              color: C.ink,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              marginTop: 2,
+            }}
+          >
+            Estado de las llaves
+          </div>
+        </div>
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 10,
+            color: C.mute,
+            letterSpacing: 0.5,
+          }}
+        >
+          Reinicia con cada deploy · auditoría real en Google Cloud
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 8,
+        }}
+      >
+        {snapshot.slots.map((slot) => {
+          const pct = slot.limit > 0 ? slot.used / slot.limit : 0;
+          const tone =
+            pct > 0.85 ? C.terracotta : pct > 0.6 ? C.gold : C.olive;
+          return (
+            <div
+              key={slot.slot}
+              style={{
+                padding: "10px 12px",
+                border: `1px solid ${C.sand}`,
+                borderRadius: 10,
+                background: C.cream,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 1.5,
+                    color: C.cacao,
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                  }}
+                >
+                  Llave #{slot.slot}
+                </span>
+                <span
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 14,
+                    color: tone,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  {slot.used} / {slot.limit}
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 999,
+                  background: C.sand,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.min(100, pct * 100)}%`,
+                    height: "100%",
+                    background: tone,
+                    transition: "width 0.4s ease",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  color: C.mute,
+                  letterSpacing: 0.5,
+                }}
+              >
+                {slot.remaining.toLocaleString()} unidades disponibles
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

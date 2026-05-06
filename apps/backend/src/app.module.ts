@@ -14,6 +14,7 @@ import { TableSessionsModule } from "./modules/table-sessions/table-sessions.mod
 import { TablesModule } from "./modules/tables/tables.module";
 import { MusicModule } from "./modules/music/music.module";
 import { HousePlaylistModule } from "./modules/house-playlist/house-playlist.module";
+import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { rateLimitMiddleware } from "./common/rate-limit.middleware";
 import { loggingMiddleware } from "./common/logging.middleware";
 import { PlaybackModule } from "./modules/playback/playback.module";
@@ -26,6 +27,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     HealthModule,
     MusicModule,
     HousePlaylistModule,
+    AuditLogModule,
     OrderRequestsModule,
     OrdersModule,
     ProductsModule,
