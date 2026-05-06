@@ -41,6 +41,11 @@ export class HousePlaylistService {
   findAll() {
     return this.prisma.housePlaylistItem.findMany({
       orderBy: [{ sort_order: "asc" }, { created_at: "asc" }],
+      include: {
+        categories: {
+          select: { id: true, name: true },
+        },
+      },
     });
   }
 
@@ -279,21 +284,191 @@ export class HousePlaylistService {
     };
   }
 
+  // ─── Categories ───────────────────────────────────────────────────────────
+
+  listCategories() {
+    return this.prisma.housePlaylistCategory.findMany({
+      orderBy: { name: "asc" },
+      include: { _count: { select: { items: true } } },
+    });
+  }
+
+  async createCategory(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      throw new BadRequestException({
+        message: "El nombre de la categoría no puede estar vacío",
+        code: "HOUSE_PLAYLIST_CATEGORY_INVALID_NAME",
+      });
+    }
+    try {
+      return await this.prisma.housePlaylistCategory.create({
+        data: { name: trimmed },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === "P2002"
+      ) {
+        throw new BadRequestException({
+          message: "Ya existe una categoría con ese nombre",
+          code: "HOUSE_PLAYLIST_CATEGORY_DUPLICATE",
+        });
+      }
+      throw e;
+    }
+  }
+
+  async renameCategory(id: number, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      throw new BadRequestException({
+        message: "El nombre de la categoría no puede estar vacío",
+        code: "HOUSE_PLAYLIST_CATEGORY_INVALID_NAME",
+      });
+    }
+    try {
+      return await this.prisma.housePlaylistCategory.update({
+        where: { id },
+        data: { name: trimmed },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === "P2002"
+      ) {
+        throw new BadRequestException({
+          message: "Ya existe una categoría con ese nombre",
+          code: "HOUSE_PLAYLIST_CATEGORY_DUPLICATE",
+        });
+      }
+      throw e;
+    }
+  }
+
+  async deleteCategory(id: number) {
+    // If we're deleting the active category, clear the active setting
+    // first so the fallback logic doesn't keep trying to load songs from
+    // a phantom id.
+    const active = await this.getActiveCategoryId();
+    if (active === id) {
+      await this.setActiveCategoryId(null);
+    }
+    await this.prisma.housePlaylistCategory.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  async setItemCategories(itemId: number, categoryIds: number[]) {
+    await this.findOne(itemId);
+    return this.prisma.housePlaylistItem.update({
+      where: { id: itemId },
+      data: {
+        categories: {
+          set: categoryIds.map((id) => ({ id })),
+        },
+      },
+      include: { categories: true },
+    });
+  }
+
+  // ─── Active category (Setting bag) ────────────────────────────────────────
+
+  private static readonly ACTIVE_KEY = "house_playlist_active_category_id";
+
+  async getActiveCategoryId(): Promise<number | null> {
+    const row = await this.prisma.setting.findUnique({
+      where: { key: HousePlaylistService.ACTIVE_KEY },
+    });
+    if (!row) return null;
+    const v = row.value as unknown;
+    if (typeof v === "number") return v;
+    if (v == null) return null;
+    return null;
+  }
+
+  async setActiveCategoryId(categoryId: number | null) {
+    if (categoryId != null) {
+      // Reject empty categories — the runtime fallback would otherwise
+      // crash into silence the moment the queue empties.
+      const count = await this.prisma.housePlaylistItem.count({
+        where: {
+          is_active: true,
+          categories: { some: { id: categoryId } },
+        },
+      });
+      if (count === 0) {
+        throw new BadRequestException({
+          message:
+            "Esa categoría no tiene canciones activas. Agrega al menos una antes de activarla.",
+          code: "HOUSE_PLAYLIST_CATEGORY_EMPTY",
+        });
+      }
+    }
+    await this.prisma.setting.upsert({
+      where: { key: HousePlaylistService.ACTIVE_KEY },
+      update: {
+        value: (categoryId ?? null) as Prisma.InputJsonValue,
+      },
+      create: {
+        key: HousePlaylistService.ACTIVE_KEY,
+        value: (categoryId ?? null) as Prisma.InputJsonValue,
+      },
+    });
+    return { active_category_id: categoryId };
+  }
+
   // ─── Fallback selection ───────────────────────────────────────────────────
 
   /**
-   * Picks the next house song to play when the customer queue is empty.
-   * Strategy: oldest `last_played_at` first (NULLs first → never played),
-   * then by sort_order. Returns null if no active items exist.
+   * Picks the next house song when the customer queue is empty. The
+   * strategy is "shuffle with cooldown": pick uniformly at random from
+   * the active category's pool, but exclude the last 10 songs we played
+   * so the same track doesn't surface back-to-back. If the cooldown
+   * window leaves the pool empty (e.g. category has only 5 songs), we
+   * relax it and pick from the full pool — better a near-repeat than
+   * silence.
+   *
+   * Returns null when no active category is selected, the active
+   * category was deleted, or no items are active.
    */
   async pickNextHouseSong() {
-    return this.prisma.housePlaylistItem.findFirst({
-      where: { is_active: true },
-      orderBy: [
-        { last_played_at: { sort: "asc", nulls: "first" } },
-        { sort_order: "asc" },
-        { id: "asc" },
-      ],
+    const activeCategoryId = await this.getActiveCategoryId();
+    const baseWhere: Prisma.HousePlaylistItemWhereInput = activeCategoryId
+      ? {
+          is_active: true,
+          categories: { some: { id: activeCategoryId } },
+        }
+      : { is_active: true };
+
+    const COOLDOWN = 10;
+    const recents = await this.prisma.housePlaylistItem.findMany({
+      where: { ...baseWhere, last_played_at: { not: null } },
+      orderBy: { last_played_at: "desc" },
+      take: COOLDOWN,
+      select: { id: true },
+    });
+    const cooldownIds = recents.map((r) => r.id);
+
+    let pool = await this.prisma.housePlaylistItem.findMany({
+      where: {
+        ...baseWhere,
+        id: cooldownIds.length > 0 ? { notIn: cooldownIds } : undefined,
+      },
+      select: { id: true },
+    });
+    // Cooldown bigger than the pool → relax. The bar still gets music
+    // instead of silence; the same song just may repeat sooner.
+    if (pool.length === 0) {
+      pool = await this.prisma.housePlaylistItem.findMany({
+        where: baseWhere,
+        select: { id: true },
+      });
+    }
+    if (pool.length === 0) return null;
+
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    return this.prisma.housePlaylistItem.findUnique({
+      where: { id: pick.id },
     });
   }
 

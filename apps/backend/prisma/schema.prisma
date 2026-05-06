@@ -181,6 +181,10 @@ model QueueItem {
  * Bar-curated fallback playlist. Loaded one item at a time into the live
  * QueueItem stream when there's no customer music in the queue. Edited
  * only by admin via /admin/musica-base.
+ *
+ * Songs can belong to multiple categories (vallenato + mix, for example)
+ * via the implicit M2M relation. The active category is stored in the
+ * `Setting` table under key "house_playlist_active_category_id".
  */
 model HousePlaylistItem {
   id             Int       @id @default(autoincrement())
@@ -194,9 +198,39 @@ model HousePlaylistItem {
   last_played_at DateTime?
   created_at     DateTime  @default(now())
   updated_at     DateTime  @updatedAt
+  categories     HousePlaylistCategory[] @relation("HousePlaylistItemCategories")
 
   @@index([is_active, sort_order])
   @@index([is_active, last_played_at])
+}
+
+/**
+ * Admin-curated music categories (Mix, Vallenato, Rock, etc.). Names are
+ * free-form strings; the only constraint is that name is unique so the
+ * admin can't accidentally create two "Vallenato" categories.
+ *
+ * One category at a time can be marked as "active" — the player picks
+ * fallback songs from that category's pool. If the active category has
+ * no songs, the system falls back to silence (the UI prevents picking
+ * an empty category, but the runtime check protects against deletes).
+ */
+model HousePlaylistCategory {
+  id         Int                 @id @default(autoincrement())
+  name       String              @unique
+  created_at DateTime            @default(now())
+  updated_at DateTime            @updatedAt
+  items      HousePlaylistItem[] @relation("HousePlaylistItemCategories")
+}
+
+/**
+ * Generic key-value bag for cross-cutting toggles. Keys are app-defined
+ * strings (e.g. "house_playlist_active_category_id"), values are JSON so
+ * we can store ints, strings, or future objects without schema changes.
+ */
+model Setting {
+  key        String   @id
+  value      Json
+  updated_at DateTime @updatedAt
 }
 
 model Product {

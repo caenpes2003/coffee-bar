@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -19,11 +20,18 @@ import { HousePlaylistService } from "./house-playlist.service";
  * because customers should never see (or edit) this catalogue.
  *
  * Routes:
- *   GET    /house-playlist                 — list all
- *   GET    /house-playlist/validate?url=…  — live YouTube validation
- *   POST   /house-playlist                 — add (server re-validates)
- *   PATCH  /house-playlist/:id             — toggle active / rename / reorder
+ *   GET    /house-playlist                          — list all
+ *   GET    /house-playlist/validate?url=…           — live YouTube validation
+ *   POST   /house-playlist                          — add (server re-validates)
+ *   PATCH  /house-playlist/:id                      — toggle active / rename / reorder
+ *   PATCH  /house-playlist/:id/categories           — assign categories
  *   DELETE /house-playlist/:id
+ *   GET    /house-playlist/categories               — list
+ *   POST   /house-playlist/categories               — create
+ *   PATCH  /house-playlist/categories/:id           — rename
+ *   DELETE /house-playlist/categories/:id
+ *   GET    /house-playlist/active-category          — currently active id
+ *   PUT    /house-playlist/active-category          — set active (or null)
  */
 @Controller("house-playlist")
 @UseGuards(JwtGuard)
@@ -34,6 +42,41 @@ export class HousePlaylistController {
   @Get()
   list() {
     return this.service.findAll();
+  }
+
+  // ─── Categories ─────────────────────────────────────────────────────────
+
+  @Get("categories")
+  listCategories() {
+    return this.service.listCategories();
+  }
+
+  @Post("categories")
+  createCategory(@Body() body: { name: string }) {
+    return this.service.createCategory(body.name);
+  }
+
+  @Patch("categories/:id")
+  renameCategory(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() body: { name: string },
+  ) {
+    return this.service.renameCategory(id, body.name);
+  }
+
+  @Delete("categories/:id")
+  deleteCategory(@Param("id", ParseIntPipe) id: number) {
+    return this.service.deleteCategory(id);
+  }
+
+  @Get("active-category")
+  async getActive() {
+    return { active_category_id: await this.service.getActiveCategoryId() };
+  }
+
+  @Put("active-category")
+  setActive(@Body() body: { category_id: number | null }) {
+    return this.service.setActiveCategoryId(body.category_id ?? null);
   }
 
   /**
@@ -99,6 +142,15 @@ export class HousePlaylistController {
     body: Partial<{ is_active: boolean; sort_order: number; title: string }>,
   ) {
     return this.service.update(id, body);
+  }
+
+  @Patch(":id/categories")
+  setItemCategories(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() body: { category_ids: number[] },
+  ) {
+    const ids = Array.isArray(body.category_ids) ? body.category_ids : [];
+    return this.service.setItemCategories(id, ids);
   }
 
   @Delete(":id")

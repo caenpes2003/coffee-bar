@@ -391,6 +391,11 @@ export const songsApi = {
 };
 
 // ─── House Playlist (admin) ──────────────────────────────────────────────────
+export interface HousePlaylistCategorySlim {
+  id: number;
+  name: string;
+}
+
 export interface HousePlaylistItem {
   id: number;
   youtube_id: string;
@@ -402,6 +407,15 @@ export interface HousePlaylistItem {
   last_played_at: string | null;
   created_at: string;
   updated_at: string;
+  categories?: HousePlaylistCategorySlim[];
+}
+
+export interface HousePlaylistCategory {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  _count?: { items: number };
 }
 
 export type HousePlaylistValidation =
@@ -440,9 +454,56 @@ export const housePlaylistApi = {
     adminApi
       .patch<HousePlaylistItem>(`/house-playlist/${id}`, patch)
       .then((r) => r.data),
+  setItemCategories: (
+    id: number,
+    categoryIds: number[],
+  ): Promise<HousePlaylistItem> =>
+    adminApi
+      .patch<HousePlaylistItem>(`/house-playlist/${id}/categories`, {
+        category_ids: categoryIds,
+      })
+      .then((r) => r.data),
   remove: (id: number): Promise<{ ok: true }> =>
     adminApi
       .delete<{ ok: true }>(`/house-playlist/${id}`)
+      .then((r) => r.data),
+
+  // ─── Categories ─────────────────────────────────────────────────────────
+  listCategories: (): Promise<HousePlaylistCategory[]> =>
+    adminApi
+      .get<HousePlaylistCategory[]>("/house-playlist/categories")
+      .then((r) => r.data),
+  createCategory: (name: string): Promise<HousePlaylistCategory> =>
+    adminApi
+      .post<HousePlaylistCategory>("/house-playlist/categories", { name })
+      .then((r) => r.data),
+  renameCategory: (
+    id: number,
+    name: string,
+  ): Promise<HousePlaylistCategory> =>
+    adminApi
+      .patch<HousePlaylistCategory>(`/house-playlist/categories/${id}`, {
+        name,
+      })
+      .then((r) => r.data),
+  deleteCategory: (id: number): Promise<{ ok: true }> =>
+    adminApi
+      .delete<{ ok: true }>(`/house-playlist/categories/${id}`)
+      .then((r) => r.data),
+  getActiveCategory: (): Promise<{ active_category_id: number | null }> =>
+    adminApi
+      .get<{ active_category_id: number | null }>(
+        "/house-playlist/active-category",
+      )
+      .then((r) => r.data),
+  setActiveCategory: (
+    categoryId: number | null,
+  ): Promise<{ active_category_id: number | null }> =>
+    adminApi
+      .put<{ active_category_id: number | null }>(
+        "/house-playlist/active-category",
+        { category_id: categoryId },
+      )
       .then((r) => r.data),
 };
 
