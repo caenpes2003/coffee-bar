@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AdminPlaybackPlayer } from "@/components/music/AdminPlaybackPlayer";
-import { playbackApi, queueApi } from "@/lib/api/services";
+import { accessCodeApi, playbackApi, queueApi } from "@/lib/api/services";
 import { useSocket } from "@/lib/socket/useSocket";
 import { useAppStore } from "@/store";
 import type { PlaybackState, QueueItem } from "@coffee-bar/shared";
@@ -154,6 +154,7 @@ export default function PlayerPage() {
         }}
         className="crown-player-grain"
       >
+        <PlayerAccessCode />
         {/* Watermark logo */}
         <div
           aria-hidden
@@ -344,5 +345,83 @@ export default function PlayerPage() {
         </section>
       </main>
     </>
+  );
+}
+
+/**
+ * The 4-digit bar code, pinned to the top-right of the player TV. The
+ * customer screen scans the QR → ends up at the access-code gate → and
+ * here we show the same code that the gate is waiting for. Refreshes
+ * itself once a minute (the code rotates lazily on the backend; this
+ * widget only displays whatever's currently active).
+ */
+function PlayerAccessCode() {
+  const [code, setCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await accessCodeApi.getForDisplay();
+        if (!cancelled) setCode(data.code);
+      } catch {
+        // Public endpoint, but don't crash the whole player if it fails.
+        if (!cancelled) setCode(null);
+      }
+    };
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (!code) return null;
+
+  return (
+    <div
+      aria-label="Código del bar"
+      style={{
+        position: "absolute",
+        top: 18,
+        right: 22,
+        zIndex: 5,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 2,
+        padding: "10px 14px",
+        background: "rgba(11,15,20,0.55)",
+        border: `1px solid ${D.gold}33`,
+        borderRadius: 12,
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 9,
+          letterSpacing: 3,
+          color: D.gold,
+          textTransform: "uppercase",
+          fontWeight: 700,
+        }}
+      >
+        Código del bar
+      </span>
+      <span
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 32,
+          color: D.cream,
+          letterSpacing: 10,
+          lineHeight: 1,
+        }}
+      >
+        {code}
+      </span>
+    </div>
   );
 }

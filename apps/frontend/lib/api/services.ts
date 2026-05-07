@@ -33,32 +33,40 @@ export const tablesApi = {
     adminApi.get<Table>(`/tables/${id}/detail`).then((r) => r.data),
 };
 
-// ─── Public table picker (temporary) ─────────────────────────────────────────
-// Used by the landing while physical QRs aren't out yet. Both endpoints
-// are gated by `BAR_ACCESS_CODE` server-side and disabled wholesale by
-// `ALLOW_PUBLIC_TABLE_TOKENS=false`. When that flag flips, this whole
-// surface starts returning 503 — no client breakage, just the temporary
-// flow gracefully shuts off.
-export interface PublicTableSummary {
-  id: number;
-  number: number;
-  status: string;
-}
-export const publicTablesApi = {
-  listAvailable: (): Promise<PublicTableSummary[]> =>
+// ─── Bar access code (gate before opening a session) ────────────────────────
+// 4-digit numeric code that rotates daily. Customers type it on the mesa
+// page before they can open a session; admins see it (and rotate it) in
+// the dashboard widget.
+export const accessCodeApi = {
+  validate: (code: string): Promise<{ ok: true }> =>
     publicApi
-      .get<PublicTableSummary[]>("/public/tables/available")
+      .post<{ ok: true }>("/access-code/validate", { code })
       .then((r) => r.data),
-  requestAccess: (
-    tableId: number,
-    code: string,
-  ): Promise<{
-    table: { id: number; number: number };
-    table_token: string;
-    expires_in: string;
-  }> =>
+  getCurrent: (): Promise<{ code: string; expires_at: string }> =>
+    adminApi.get("/access-code/current").then((r) => r.data),
+  /**
+   * Public read for the player TV. No admin token needed — the code is
+   * meant to be visible on a public screen anyway.
+   */
+  getForDisplay: (): Promise<{ code: string; expires_at: string }> =>
+    publicApi.get("/access-code/display").then((r) => r.data),
+  rotate: (): Promise<{ code: string; expires_at: string }> =>
+    adminApi.post("/access-code/rotate").then((r) => r.data),
+};
+
+// ─── Auth (password reset) ──────────────────────────────────────────────────
+export const authApi = {
+  forgotPassword: (email: string): Promise<{ ok: true }> =>
     publicApi
-      .post(`/public/tables/${tableId}/access`, { code })
+      .post<{ ok: true }>("/auth/forgot-password", { email })
+      .then((r) => r.data),
+  resetPassword: (
+    email: string,
+    token: string,
+    password: string,
+  ): Promise<{ ok: true }> =>
+    publicApi
+      .post<{ ok: true }>("/auth/reset-password", { email, token, password })
       .then((r) => r.data),
 };
 
@@ -286,7 +294,7 @@ export const adminProductsApi = {
       .then((r) => r.data),
 };
 
-// ─── Sales insights (Phase H5) ────────────────────────────────────────────────
+// ─── Sales insights (Phase H5 + dashboard ejecutivo) ─────────────────────────
 export type ProductSalesSummary = {
   product_id: number;
   name: string;
@@ -295,13 +303,60 @@ export type ProductSalesSummary = {
   revenue: number;
 };
 
+export type DailySalesPoint = {
+  /** YYYY-MM-DD, hora local del servidor. */
+  date: string;
+  /** 0=Domingo … 6=Sábado (JS getDay). */
+  weekday: number;
+  units: number;
+  revenue: number;
+  /** Tickets (sesiones únicas con ventas) que cayeron en ese día. */
+  tickets: number;
+};
+
+export type HourlySalesPoint = {
+  /** 0..23, hora local del servidor. */
+  hour: number;
+  units: number;
+  revenue: number;
+};
+
+export type WeekdaySalesPoint = {
+  weekday: number;
+  avg_units: number;
+  avg_revenue: number;
+  /** Cantidad de ese weekday dentro del rango (denominador del avg). */
+  sample_count: number;
+};
+
+export type CategorySalesPoint = {
+  category: string;
+  units: number;
+  revenue: number;
+};
+
+export type SalesPeriodTotals = {
+  total_units: number;
+  total_revenue: number;
+  tickets_count: number;
+  avg_ticket: number;
+};
+
 export type SalesInsightsResponse = {
   range: { from: string; to: string; days: number };
   summary: {
     total_units: number;
     total_revenue: number;
     distinct_products_sold: number;
+    tickets_count: number;
+    avg_ticket: number;
   };
+  /** Período inmediatamente anterior de igual tamaño. Útil para deltas. */
+  previous_period: SalesPeriodTotals;
+  daily_breakdown: DailySalesPoint[];
+  hourly_breakdown: HourlySalesPoint[];
+  weekday_breakdown: WeekdaySalesPoint[];
+  revenue_by_category: CategorySalesPoint[];
   top_selling: ProductSalesSummary[];
   revenue_by_product: ProductSalesSummary[];
   low_rotation: {
@@ -316,19 +371,63 @@ export type SalesInsightsResponse = {
   })[];
 };
 
+export type ProductSalesHistoryResponse = {
+  product: { id: number; name: string; category: string };
+  range: { from: string; to: string; days: number };
+  daily_sales: {
+    date: string;
+    weekday: number;
+    units: number;
+    revenue: number;
+  }[];
+  weekday_avg: {
+    weekday: number;
+    avg_units: number;
+    avg_revenue: number;
+    sample_count: number;
+  }[];
+  totals: { units: number; revenue: number };
+};
+
 export const salesInsightsApi = {
   get: (params?: {
     day?: string;
     days?: number;
+    /** YYYY-MM-DD inclusivo. Requiere también `to`. */
+    from?: string;
+    /** YYYY-MM-DD inclusivo. Requiere también `from`. */
+    to?: string;
     top_limit?: number;
   }): Promise<SalesInsightsResponse> => {
     const q = new URLSearchParams();
     if (params?.day) q.set("day", params.day);
     if (params?.days) q.set("days", String(params.days));
+    if (params?.from) q.set("from", params.from);
+    if (params?.to) q.set("to", params.to);
     if (params?.top_limit) q.set("top_limit", String(params.top_limit));
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return adminApi
       .get<SalesInsightsResponse>(`/admin/sales/insights${suffix}`)
+      .then((r) => r.data);
+  },
+
+  /**
+   * Histórico día-por-día de un producto. Default 60 días.
+   * Útil para identificar patrones de fin de semana / días pico.
+   */
+  getProductHistory: (
+    productId: number,
+    params?: { days?: number; from?: string; to?: string },
+  ): Promise<ProductSalesHistoryResponse> => {
+    const q = new URLSearchParams();
+    if (params?.days) q.set("days", String(params.days));
+    if (params?.from) q.set("from", params.from);
+    if (params?.to) q.set("to", params.to);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return adminApi
+      .get<ProductSalesHistoryResponse>(
+        `/admin/sales/products/${productId}/history${suffix}`,
+      )
       .then((r) => r.data);
   },
 };

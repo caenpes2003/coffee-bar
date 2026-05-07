@@ -9,6 +9,7 @@ import {
 } from "@/store";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
+  accessCodeApi,
   tableSessionsApi,
   queueApi,
   ordersApi,
@@ -171,6 +172,28 @@ export default function MesaPage({
   // token has expired or been revoked; we cannot keep operating, so we render
   // a recovery card asking the user to scan the QR again.
   const [sessionInvalid, setSessionInvalid] = useState(false);
+  // Per-device gate: every customer device must validate the daily 4-digit
+  // bar code once before they can open or join a session. We persist the
+  // OK in sessionStorage so the customer doesn't get re-prompted on
+  // navigation. Cleared automatically when the session is closed because
+  // sessionStorage dies with the tab anyway, and clearMesaSessionState
+  // wipes it explicitly when the admin/customer closes the table.
+  const [accessCodeOk, setAccessCodeOk] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return sessionStorage.getItem("bar_access_ok") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const markAccessCodeOk = useCallback(() => {
+    setAccessCodeOk(true);
+    try {
+      sessionStorage.setItem("bar_access_ok", "1");
+    } catch {
+      // ignore — Safari private mode etc.
+    }
+  }, []);
   // Session-scoped OrderRequests (mine). Catalog / cart stay separated.
   const [myRequests, setMyRequests] = useState<OrderRequest[]>([]);
   // Catalog: backend-owned, hydrated once. Cart inside modal is local-only.
@@ -211,6 +234,15 @@ export default function MesaPage({
     // Clear ONLY the session token. The table token survives so the same
     // device can scan-less re-enter the entry view and start a new session.
     clearSessionToken();
+    // The bar access code gate must be re-validated for the next
+    // session — we cleared the session, so the device shouldn't carry
+    // the green light from the previous one.
+    try {
+      sessionStorage.removeItem("bar_access_ok");
+    } catch {
+      /* ignore */
+    }
+    setAccessCodeOk(false);
     setSession(null);
     setBill(null);
     setOrders([]);
@@ -624,6 +656,14 @@ export default function MesaPage({
 
   // ─── Entry state — no open session yet ───────────────────────────────────
   if (session === null) {
+    if (!accessCodeOk) {
+      return (
+        <AccessCodeGate
+          tableNumber={currentTable.number ?? tableId}
+          onSuccess={markAccessCodeOk}
+        />
+      );
+    }
     return (
       <TableEntryView
         table={currentTable}
@@ -1800,6 +1840,211 @@ function OrderProductsCTA({
         Pedir productos
       </span>
     </button>
+  );
+}
+
+// ─── Bar access code gate ────────────────────────────────────────────────────
+// Daily 4-digit code that the staff posts on the dashboard / player TV.
+// Every device joining the table types it once. The code itself rotates
+// every 24h (or on-demand from /admin), so a customer who screenshots
+// the URL after their visit can't keep coming back next week.
+function AccessCodeGate({
+  tableNumber,
+  onSuccess,
+}: {
+  tableNumber: number;
+  onSuccess: () => void;
+}) {
+  const [digits, setDigits] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (digits.length !== 4 || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await accessCodeApi.validate(digits);
+      onSuccess();
+    } catch (err) {
+      const code = (err as { response?: { data?: { code?: string } } })
+        ?.response?.data?.code;
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (code === "BAR_CODE_INVALID") {
+        setError("Código incorrecto. Pídeselo al staff.");
+      } else if (status === 429) {
+        setError(
+          "Demasiados intentos. Espera un momento e intenta de nuevo.",
+        );
+      } else {
+        setError("No se pudo validar. Intenta de nuevo.");
+      }
+      setDigits("");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main
+      style={{
+        minHeight: "100dvh",
+        background: `radial-gradient(ellipse at 50% 0%, ${C.parchment} 0%, ${C.cream} 60%)`,
+        color: C.ink,
+        fontFamily: FONT_UI,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "24px 18px",
+      }}
+    >
+      <header style={{ textAlign: "center", paddingTop: 24 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/logo.png"
+          alt="Crown Bar 4.90"
+          style={{
+            width: "min(48vw, 180px)",
+            height: "auto",
+            display: "block",
+            margin: "0 auto",
+            filter:
+              "drop-shadow(0 6px 16px rgba(107,78,46,0.18)) drop-shadow(0 1px 2px rgba(43,29,20,0.12))",
+          }}
+        />
+      </header>
+
+      <form
+        onSubmit={submit}
+        style={{
+          marginTop: 20,
+          width: "100%",
+          maxWidth: 380,
+          background: C.paper,
+          border: `1px solid ${C.sand}`,
+          borderRadius: 16,
+          padding: "22px 22px 18px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow:
+            "0 1px 0 rgba(43,29,20,0.04), 0 22px 50px -32px rgba(107,78,46,0.4)",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 2.5,
+              color: C.gold,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Mesa {String(tableNumber).padStart(2, "0")}
+          </span>
+          <h1
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              color: C.ink,
+              letterSpacing: 2,
+              margin: "4px 0 0",
+              lineHeight: 1.05,
+              textTransform: "uppercase",
+            }}
+          >
+            Código del bar
+          </h1>
+          <p
+            style={{
+              margin: "6px 0 0",
+              fontSize: 13,
+              color: C.cacao,
+              fontFamily: FONT_UI,
+              lineHeight: 1.45,
+            }}
+          >
+            Escribe el código de 4 dígitos que verás en la pantalla del bar.
+          </p>
+        </div>
+
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="\d*"
+          autoComplete="one-time-code"
+          autoFocus
+          value={digits}
+          onChange={(e) => {
+            const next = e.target.value.replace(/\D/g, "").slice(0, 4);
+            setDigits(next);
+            if (error) setError(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && digits.length === 4) {
+              void submit();
+            }
+          }}
+          placeholder="••••"
+          maxLength={4}
+          aria-label="Código del bar de 4 dígitos"
+          style={{
+            padding: "14px 16px",
+            border: `1px solid ${error ? C.terracotta : C.sand}`,
+            borderRadius: 12,
+            background: C.cream,
+            color: C.ink,
+            fontFamily: FONT_DISPLAY,
+            fontSize: 28,
+            letterSpacing: 12,
+            textAlign: "center",
+            outline: "none",
+          }}
+        />
+        {error && (
+          <span
+            role="alert"
+            style={{
+              fontSize: 12,
+              color: C.terracotta,
+              fontFamily: FONT_UI,
+              letterSpacing: 0.3,
+              textAlign: "center",
+            }}
+          >
+            {error}
+          </span>
+        )}
+
+        <button
+          type="submit"
+          disabled={digits.length !== 4 || submitting}
+          style={{
+            padding: "13px 18px",
+            border: "none",
+            borderRadius: 999,
+            background:
+              digits.length !== 4 || submitting
+                ? C.sand
+                : `linear-gradient(135deg, ${C.olive} 0%, #7E8F58 100%)`,
+            color: digits.length !== 4 || submitting ? C.mute : C.paper,
+            fontFamily: FONT_DISPLAY,
+            fontSize: 15,
+            letterSpacing: 2.5,
+            fontWeight: 600,
+            cursor:
+              digits.length !== 4 || submitting ? "not-allowed" : "pointer",
+            textTransform: "uppercase",
+          }}
+        >
+          {submitting ? "Validando..." : "Continuar"}
+        </button>
+      </form>
+    </main>
   );
 }
 

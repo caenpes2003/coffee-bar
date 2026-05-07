@@ -1,15 +1,11 @@
-import { TablePickerLanding } from "@/components/landing/TablePickerLanding";
+import { ScanQrLanding } from "@/components/landing/ScanQrLanding";
 
 /**
- * Temporary landing for the soft-launch period: no physical QR codes have
- * been printed yet, so customers reach the site directly and choose their
- * table from a public picker. Two-step gate:
- *   1. Bar access code (server-side validated against BAR_ACCESS_CODE).
- *   2. Pick from the list of free tables.
- *
- * On success the backend mints a 12h table token and the picker stores it
- * + redirects to /mesa/:id?t=<token> — exactly the path the QR would use.
+ * Public root. The customer flow now happens exclusively through the
+ * physical QR each table has stuck on it (`crown490.com/mesa/:id?t=…`).
+ * Visiting the bare domain shouldn't expose any UI that lets a remote
+ * user open a session, so we render a static "scan the QR" page.
  */
 export default function Home() {
-  return <TablePickerLanding />;
+  return <ScanQrLanding />;
 }

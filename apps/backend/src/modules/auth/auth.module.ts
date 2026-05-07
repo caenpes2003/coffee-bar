@@ -3,6 +3,7 @@ import { JwtModule } from "@nestjs/jwt";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { TokenService } from "./token.service";
+import { EmailService } from "./email.service";
 import { JwtGuard } from "./guards/jwt.guard";
 import { RolesGuard } from "./guards/roles.guard";
 import { SessionAccessGuard } from "./guards/session-access.guard";
@@ -19,6 +20,7 @@ import { SessionAccessGuard } from "./guards/session-access.guard";
   providers: [
     AuthService,
     TokenService,
+    EmailService,
     JwtGuard,
     RolesGuard,
     SessionAccessGuard,

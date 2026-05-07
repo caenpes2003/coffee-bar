@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import type { SyntheticEvent } from "react";
 import { useAdminAuth } from "@/lib/auth/auth-context";
 
 const C = {
@@ -26,17 +28,16 @@ export default function AdminLoginPage() {
   const { status, login } = useAdminAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capsLockOn, setCapsLockOn] = useState(false);
 
-  // If we land on /admin/login while already authenticated (refresh of a
-  // stale tab, for example), punt back to the dashboard instead of making
-  // the user log in again.
   useEffect(() => {
     if (status === "authenticated") router.replace("/admin");
   }, [status, router]);
 
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+  async function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
     setSubmitting(true);
@@ -48,14 +49,14 @@ export default function AdminLoginPage() {
       const code =
         (err as { response?: { data?: { code?: string; message?: string } } })
           ?.response?.data?.code;
-      const message =
-        (err as { response?: { data?: { message?: string } } })?.response?.data
-          ?.message ?? "No se pudo iniciar sesión";
-      setError(
-        code === "LOGIN_RATE_LIMITED"
-          ? "Demasiados intentos. Espera un momento."
-          : message,
-      );
+      // Always surface the same message regardless of which side failed
+      // (wrong email vs wrong password vs locked account). That stops a
+      // probe from telling them which axis of attack is "working".
+      if (code === "LOGIN_RATE_LIMITED") {
+        setError("Demasiados intentos. Espera un momento e intenta de nuevo.");
+      } else {
+        setError("Email o contraseña incorrectos.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -75,6 +76,8 @@ export default function AdminLoginPage() {
     >
       <form
         onSubmit={onSubmit}
+        noValidate
+        aria-label="Iniciar sesión administrativa"
         style={{
           width: "100%",
           maxWidth: 380,
@@ -115,51 +118,100 @@ export default function AdminLoginPage() {
           </h1>
         </div>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              letterSpacing: 2,
-              color: C.mute,
-              textTransform: "uppercase",
-              fontWeight: 600,
-            }}
-          >
-            Email
-          </span>
+        <label
+          htmlFor="login-email"
+          style={{ display: "flex", flexDirection: "column", gap: 5 }}
+        >
+          <span style={labelStyle}>Email</span>
           <input
+            id="login-email"
             type="email"
             required
-            autoComplete="email"
+            autoComplete="username"
+            // No spellcheck/autocorrect — both eat the @ on iOS sometimes.
+            spellCheck={false}
+            autoCapitalize="none"
+            inputMode="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="admin@cafe.local"
+            placeholder="correo admin"
+            aria-label="Correo del administrador"
             style={inputStyle}
           />
         </label>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              letterSpacing: 2,
-              color: C.mute,
-              textTransform: "uppercase",
-              fontWeight: 600,
-            }}
-          >
-            Contraseña
-          </span>
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={inputStyle}
-          />
+        <label
+          htmlFor="login-password"
+          style={{ display: "flex", flexDirection: "column", gap: 5 }}
+        >
+          <span style={labelStyle}>Contraseña</span>
+          <div style={{ position: "relative" }}>
+            <input
+              id="login-password"
+              // The visibility toggle flips the type without losing focus.
+              type={showPassword ? "text" : "password"}
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyUp={(e) => {
+                // Best-effort caps-lock indicator. KeyboardEvent.getModifierState
+                // is available on every modern browser; we silently skip if not.
+                const fn = (
+                  e as unknown as { getModifierState?: (k: string) => boolean }
+                ).getModifierState;
+                if (typeof fn === "function") {
+                  setCapsLockOn(fn.call(e, "CapsLock"));
+                }
+              }}
+              placeholder="Ingresa la contraseña"
+              aria-label="Contraseña"
+              style={{ ...inputStyle, paddingRight: 44 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={
+                showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
+              }
+              aria-pressed={showPassword}
+              tabIndex={0}
+              style={{
+                position: "absolute",
+                right: 6,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 32,
+                height: 32,
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                color: C.cacao,
+                fontSize: 16,
+                lineHeight: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {showPassword ? "🙈" : "👁"}
+            </button>
+          </div>
+          {capsLockOn && (
+            <span
+              role="status"
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                color: C.gold,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+                fontWeight: 700,
+              }}
+            >
+              ⚠ Mayúsculas activadas
+            </span>
+          )}
         </label>
 
         {error && (
@@ -204,6 +256,22 @@ export default function AdminLoginPage() {
           {submitting ? "Entrando..." : "Entrar"}
         </button>
 
+        <Link
+          href="/admin/forgot-password"
+          style={{
+            margin: "4px 0 0",
+            textAlign: "center",
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            letterSpacing: 1.5,
+            color: C.cacao,
+            textDecoration: "underline",
+            textUnderlineOffset: 3,
+          }}
+        >
+          ¿Olvidaste tu contraseña?
+        </Link>
+
         <p
           style={{
             margin: "4px 0 0",
@@ -222,6 +290,15 @@ export default function AdminLoginPage() {
   );
 }
 
+const labelStyle: React.CSSProperties = {
+  fontFamily: FONT_MONO,
+  fontSize: 10,
+  letterSpacing: 2,
+  color: C.mute,
+  textTransform: "uppercase",
+  fontWeight: 600,
+};
+
 const inputStyle: React.CSSProperties = {
   padding: "10px 12px",
   border: `1px solid ${C.sand}`,
@@ -231,4 +308,5 @@ const inputStyle: React.CSSProperties = {
   fontFamily: FONT_UI,
   fontSize: 14,
   outline: "none",
+  width: "100%",
 };

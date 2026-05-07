@@ -19,11 +19,14 @@ const rules: RuleSet = {
   // counted separately, so the bucket key prefers user_id when present.
   "/api/bill-adjustments": { windowMs: 60_000, max: 20 },
   "/api/refunds": { windowMs: 60_000, max: 10 },
-  // Temporary public table picker: 60 attempts/min by IP. Generous enough
-  // that a real customer never hits it (typo retries + auto-refresh of
-  // the available list while picking) but still capped so a bot can't
-  // spray the bar-code dictionary at line-rate.
-  "/api/public/tables": { windowMs: 60_000, max: 60 },
+  // Bar access-code validation. The code is 4 digits (10k combinations);
+  // we cap at 8 attempts/min/IP to make brute-force impractical without
+  // hurting real customers who typo once.
+  "/api/access-code/validate": { windowMs: 60_000, max: 8 },
+  // Forgot-password is a public surface; cap to 3/min/IP so a single
+  // address can't be used to spam reset emails to a victim's inbox.
+  "/api/auth/forgot-password": { windowMs: 60_000, max: 3 },
+  "/api/auth/reset-password": { windowMs: 60_000, max: 5 },
 };
 
 type Bucket = number[];
@@ -90,10 +93,20 @@ function findRule(path: string): { rule: RateLimitRule; bucketPath: string } | n
       rule: rules["/api/table-sessions/open"],
       bucketPath: "/api/table-sessions/open",
     };
-  if (path.startsWith("/api/public/tables"))
+  if (path.startsWith("/api/access-code/validate"))
     return {
-      rule: rules["/api/public/tables"],
-      bucketPath: "/api/public/tables",
+      rule: rules["/api/access-code/validate"],
+      bucketPath: "/api/access-code/validate",
+    };
+  if (path.startsWith("/api/auth/forgot-password"))
+    return {
+      rule: rules["/api/auth/forgot-password"],
+      bucketPath: "/api/auth/forgot-password",
+    };
+  if (path.startsWith("/api/auth/reset-password"))
+    return {
+      rule: rules["/api/auth/reset-password"],
+      bucketPath: "/api/auth/reset-password",
     };
   // /api/bill/:sessionId/adjustments — match the action, not the session id.
   if (/^\/api\/bill\/\d+\/adjustments/.test(path))

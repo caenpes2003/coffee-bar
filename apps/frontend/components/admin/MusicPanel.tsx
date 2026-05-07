@@ -20,8 +20,10 @@
  */
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PlaybackState, QueueItem } from "@coffee-bar/shared";
+import { accessCodeApi } from "@/lib/api/services";
+import { getErrorMessage } from "@/lib/errors";
 import {
   C,
   FONT_DISPLAY,
@@ -358,6 +360,8 @@ function ExpandedView({
               ⤢
             </a>
           </div>
+          <AccessCodeWidget />
+
           {/* Discreet shortcut to manage the bar's fallback playlist
               (the "house" songs that auto-fill when no customer queues
               anything). Lives here so it's contextually grouped with all
@@ -710,6 +714,152 @@ function QueueRow({
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+// ─── Access code widget ────────────────────────────────────────────────────
+// The 4-digit code customers must type once per device before opening a
+// session. We expose it inline in the music panel so the staff can read
+// it out loud or write it on a whiteboard, and rotate it on demand
+// (e.g. when a customer leaves and we want their copy to stop working).
+function AccessCodeWidget() {
+  const [code, setCode] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await accessCodeApi.getCurrent();
+        if (!cancelled) {
+          setCode(data.code);
+          setExpiresAt(data.expires_at);
+        }
+      } catch (err) {
+        if (!cancelled) setError(getErrorMessage(err));
+      }
+    };
+    load();
+    // Refresh once a minute so the "expires in" countdown stays
+    // honest even if the staff leaves the dashboard open all night.
+    const interval = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const rotate = async () => {
+    if (!window.confirm("¿Generar un nuevo código? El actual dejará de funcionar."))
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await accessCodeApi.rotate();
+      setCode(data.code);
+      setExpiresAt(data.expires_at);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "10px 12px",
+        background: `${C.gold}0e`,
+        border: `1px solid ${C.gold}55`,
+        borderRadius: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 2.5,
+              color: C.gold,
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            — Código del bar
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 30,
+              color: C.ink,
+              letterSpacing: 8,
+              lineHeight: 1,
+              marginTop: 2,
+            }}
+            aria-live="polite"
+          >
+            {code ?? "····"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={rotate}
+          disabled={busy}
+          className="crown-btn crown-btn-ghost"
+          style={{
+            ...btnGhost({ fg: C.cacao, border: C.sand }),
+            fontSize: 10,
+            padding: "6px 10px",
+            letterSpacing: 1.2,
+            whiteSpace: "nowrap",
+          }}
+          title="Generar un código nuevo"
+        >
+          ↻ Rotar
+        </button>
+      </div>
+      {error && (
+        <span
+          role="alert"
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 10,
+            color: C.terracotta,
+            letterSpacing: 0.4,
+          }}
+        >
+          {error}
+        </span>
+      )}
+      {!error && expiresAt && (
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 9,
+            color: C.mute,
+            letterSpacing: 0.4,
+          }}
+        >
+          Vence: {new Date(expiresAt).toLocaleTimeString("es-CO", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+      )}
     </div>
   );
 }

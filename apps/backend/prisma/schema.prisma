@@ -80,6 +80,18 @@ model User {
   password_hash String
   role          UserRole @default(staff)
   is_active     Boolean  @default(true)
+  // Lockout state. We rate-limit at the user level (not just by IP)
+  // because a determined attacker can rotate IPs cheaper than they can
+  // guess the password. After LOGIN_LOCKOUT_THRESHOLD failed attempts
+  // we set `locked_until` and reject every login until it clears.
+  failed_attempts   Int       @default(0)
+  locked_until      DateTime?
+  last_failed_at    DateTime?
+  // Password reset flow. The token is a single-use random string sent
+  // via email. We store its bcrypt hash, never the raw value, so a DB
+  // dump doesn't hand someone a working reset link.
+  reset_token_hash  String?
+  reset_expires_at  DateTime?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 }
@@ -231,6 +243,27 @@ model Setting {
   key        String   @id
   value      Json
   updated_at DateTime @updatedAt
+}
+
+/**
+ * Daily-rotating 4-digit numeric code that gates session opening from
+ * each device. Generated lazily: when a customer tries to open a session
+ * and the active code is older than 24h, the system rotates it to a new
+ * random one. Admin can also force a rotation at any time from the
+ * dashboard. Only the most recent active row is "the current code" —
+ * older rows stay around for audit (we cap at 60 days).
+ */
+model BarAccessCode {
+  id         Int      @id @default(autoincrement())
+  code       String   @db.VarChar(4)
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  expires_at DateTime
+  // The user/email of the admin who triggered a manual regeneration, or
+  // null for system-generated rotations.
+  rotated_by String?
+
+  @@index([is_active, created_at])
 }
 
 model Product {
