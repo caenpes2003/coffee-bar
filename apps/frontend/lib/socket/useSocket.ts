@@ -90,6 +90,23 @@ function getSocket(): Socket {
   return socket;
 }
 
+/**
+ * Force the socket to reconnect with the latest auth payload. Used
+ * after acquiring a fresh session_token (e.g. a second device joining
+ * an existing table) so the server upgrades the anonymous connection
+ * to an authenticated one and lets `tableSession:join` succeed.
+ *
+ * Safe to call before the socket has been created — it'll be a no-op
+ * and the next `getSocket()` will pick the auth up naturally.
+ */
+export function reconnectSocketWithFreshAuth() {
+  if (!socket) return;
+  // Disconnect → connect: the second connect re-invokes the auth
+  // callback, which now returns the up-to-date token.
+  socket.disconnect();
+  socket.connect();
+}
+
 type SocketListener<K extends keyof SocketEvents> = (
   payload: SocketEvents[K],
 ) => void;

@@ -11,6 +11,7 @@ import {
   getTableToken,
   setSessionToken,
 } from "../auth/token-storage";
+import { reconnectSocketWithFreshAuth } from "../socket/useSocket";
 
 /**
  * Three API clients, one per audience. Each one attaches a fixed kind of
@@ -152,6 +153,10 @@ async function refreshSessionToken(): Promise<string | null> {
       const token = res.data?.session_token;
       if (typeof token === "string" && token.length > 0) {
         setSessionToken(token);
+        // The refreshed JWT may carry a different session_id than the
+        // socket's last handshake (when the bar closed/reopened the
+        // table). Force a re-handshake so room joins keep working.
+        reconnectSocketWithFreshAuth();
         return token;
       }
       return null;

@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { adminApi, registerAdminAuthFailureHandler } from "../api/clients";
+import { reconnectSocketWithFreshAuth } from "../socket/useSocket";
 import {
   clearAdminToken,
   getAdminToken,
@@ -95,6 +96,9 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       { email, password },
     );
     setAdminToken(res.data.token);
+    // Re-handshake the socket so it picks up the new admin auth — the
+    // singleton may already be connected anonymously (player TV path).
+    reconnectSocketWithFreshAuth();
     setUser(res.data.user);
     setStatus("authenticated");
   }, []);

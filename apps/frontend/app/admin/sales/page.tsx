@@ -8,33 +8,15 @@ import {
   type SalesInsightsResponse,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
-
-const C = {
-  cream: "#FDF8EC",
-  parchment: "#F8F1E4",
-  paper: "#FFFDF8",
-  sand: "#F1E6D2",
-  sandDark: "#E6D8BF",
-  gold: "#B8894A",
-  goldSoft: "#E8D4A8",
-  burgundy: "#8B2635",
-  burgundySoft: "#E8CDD2",
-  olive: "#6B7E4A",
-  oliveSoft: "#E5EAD3",
-  cacao: "#6B4E2E",
-  ink: "#2B1D14",
-  mute: "#A89883",
-};
-const FONT_DISPLAY = "var(--font-bebas)";
-const FONT_MONO = "var(--font-manrope)";
-const FONT_UI = "var(--font-manrope)";
-
-const fmt = (n: number) =>
-  new Intl.NumberFormat("es-CO", {
-    style: "currency",
-    currency: "COP",
-    maximumFractionDigits: 0,
-  }).format(n);
+import {
+  C,
+  FONT_DISPLAY,
+  FONT_MONO,
+  FONT_UI,
+  fmt,
+  btnGhost,
+  BUTTON_STYLES,
+} from "@/lib/theme";
 
 export default function AdminSalesPage() {
   const [days, setDays] = useState<1 | 7 | 30>(1);
@@ -60,6 +42,8 @@ export default function AdminSalesPage() {
   }, [refresh]);
 
   return (
+    <>
+    <style>{BUTTON_STYLES}</style>
     <main
       style={{
         minHeight: "100dvh",
@@ -107,18 +91,10 @@ export default function AdminSalesPage() {
         </div>
         <Link
           href="/admin"
+          className="crown-btn crown-btn-ghost"
           style={{
-            fontFamily: FONT_MONO,
-            fontSize: 11,
-            letterSpacing: 2,
-            color: C.cacao,
+            ...btnGhost({ fg: C.cacao, border: C.sand }),
             textDecoration: "none",
-            border: `1px solid ${C.sand}`,
-            padding: "8px 14px",
-            borderRadius: 999,
-            background: C.paper,
-            textTransform: "uppercase",
-            fontWeight: 700,
           }}
         >
           ← Tablero
@@ -153,6 +129,8 @@ export default function AdminSalesPage() {
               key={n}
               type="button"
               onClick={() => setDays(n)}
+              className="crown-btn"
+              aria-pressed={active}
               style={{
                 padding: "6px 14px",
                 borderRadius: 999,
@@ -179,8 +157,8 @@ export default function AdminSalesPage() {
           style={{
             padding: 10,
             borderRadius: 8,
-            background: C.burgundySoft,
-            color: C.burgundy,
+            background: C.terracottaSoft,
+            color: C.terracotta,
             fontFamily: FONT_MONO,
             fontSize: 11,
             letterSpacing: 1.5,
@@ -282,7 +260,7 @@ export default function AdminSalesPage() {
                           }}
                         >
                           {p.category} · vendidos {p.units_sold} · stock{" "}
-                          <strong style={{ color: C.burgundy }}>
+                          <strong style={{ color: C.terracotta }}>
                             {p.stock}
                           </strong>
                           {p.low_stock_threshold > 0 && (
@@ -294,8 +272,8 @@ export default function AdminSalesPage() {
                         style={{
                           padding: "2px 10px",
                           borderRadius: 999,
-                          background: C.burgundySoft,
-                          color: C.burgundy,
+                          background: C.terracottaSoft,
+                          color: C.terracotta,
                           fontFamily: FONT_MONO,
                           fontSize: 9,
                           letterSpacing: 1.5,
@@ -360,6 +338,7 @@ export default function AdminSalesPage() {
         </>
       )}
     </main>
+    </>
   );
 }
 

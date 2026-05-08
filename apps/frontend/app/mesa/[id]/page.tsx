@@ -7,7 +7,7 @@ import {
   selectCurrentPlayback,
   selectMyQueueCount,
 } from "@/store";
-import { useSocket } from "@/lib/socket/useSocket";
+import { useSocket, reconnectSocketWithFreshAuth } from "@/lib/socket/useSocket";
 import {
   accessCodeApi,
   tableSessionsApi,
@@ -569,6 +569,12 @@ export default function MesaPage({
       // - the socket's auth callback (re-)resolves to a session token and
       //   auto-joins tableSession:{id} on reconnect.
       setSessionToken(created.session_token);
+      // Force the shared socket to handshake again so the server sees
+      // the new auth (and so tableSession:join succeeds). Without this
+      // a second device that connected anonymously stays anonymous and
+      // the backend silently denies its room joins, leading to "events
+      // never arrive until I refresh".
+      reconnectSocketWithFreshAuth();
       const { session_token: _ignored, ...session } = created;
       void _ignored;
       setSession(session);
