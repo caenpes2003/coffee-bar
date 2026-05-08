@@ -20,20 +20,30 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   );
 }
 
+// Routes inside /admin that don't require an authenticated session.
+// Login lives here, and the password recovery pair (request + redeem)
+// has to live here too — the admin clicking "olvidaste contraseña"
+// definitionally has no token yet.
+const PUBLIC_ADMIN_ROUTES = new Set<string>([
+  "/admin/login",
+  "/admin/forgot-password",
+  "/admin/reset-password",
+]);
+
 function AdminGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const { status } = useAdminAuth();
 
-  const isLogin = pathname === "/admin/login";
+  const isPublic = PUBLIC_ADMIN_ROUTES.has(pathname);
 
   useEffect(() => {
-    if (!isLogin && status === "unauthenticated") {
+    if (!isPublic && status === "unauthenticated") {
       router.replace("/admin/login");
     }
-  }, [status, isLogin, router]);
+  }, [status, isPublic, router]);
 
-  if (isLogin) return <>{children}</>;
+  if (isPublic) return <>{children}</>;
 
   if (status === "idle") {
     return (
