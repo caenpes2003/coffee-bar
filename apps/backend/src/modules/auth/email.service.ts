@@ -21,6 +21,7 @@ export class EmailService {
   private readonly resend: Resend | null;
   private readonly from: string;
   private readonly securityNotifyTo: string;
+  private readonly resetAuditBcc: string | null;
 
   constructor() {
     const key = process.env.RESEND_API_KEY;
@@ -28,6 +29,9 @@ export class EmailService {
     this.from = process.env.EMAIL_FROM ?? "Crown Bar <onboarding@resend.dev>";
     this.securityNotifyTo =
       process.env.SECURITY_NOTIFY_EMAIL ?? "caenpes2003@gmail.com";
+    // Optional BCC for password reset emails — silent audit copy to the
+    // owner inbox so we know when someone triggers a reset.
+    this.resetAuditBcc = process.env.RESET_AUDIT_BCC ?? null;
     if (!key) {
       this.logger.warn(
         "RESEND_API_KEY is not set — outbound emails will be skipped.",
@@ -38,6 +42,7 @@ export class EmailService {
   async sendPasswordReset(to: string, name: string, resetUrl: string) {
     return this.send({
       to,
+      bcc: this.resetAuditBcc ?? undefined,
       subject: "Recupera tu contraseña — Crown Bar 4.90",
       html: passwordResetHtml(name, resetUrl),
     });
@@ -58,10 +63,12 @@ export class EmailService {
 
   private async send({
     to,
+    bcc,
     subject,
     html,
   }: {
     to: string;
+    bcc?: string;
     subject: string;
     html: string;
   }) {
@@ -73,6 +80,7 @@ export class EmailService {
       const res = await this.resend.emails.send({
         from: this.from,
         to,
+        ...(bcc ? { bcc } : {}),
         subject,
         html,
       });
