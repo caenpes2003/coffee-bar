@@ -46,7 +46,7 @@ const FONT_DISPLAY = "var(--font-bebas)";
 const FONT_MONO = "var(--font-manrope)";
 const FONT_UI = "var(--font-manrope)";
 
-type ActionKind = "adjustment" | "discount" | "refund";
+type ActionKind = "adjustment" | "discount" | "refund" | "partial_payment";
 
 interface Props {
   open: boolean;
@@ -297,6 +297,13 @@ export function AdminBillDrawer({
                 borderTop: `1px solid ${C.sand}`,
               }}
             >
+              <button
+                type="button"
+                onClick={() => setActionOpen({ kind: "partial_payment" })}
+                style={primaryActionStyle(false, C.gold)}
+              >
+                Registrar pago parcial
+              </button>
               <button
                 type="button"
                 onClick={() => setConfirmOpen({ kind: "mark-paid" })}
@@ -779,15 +786,21 @@ function ActionModal({
       ? "Cargo manual"
       : kind === "discount"
         ? "Descuento"
-        : "Devolver consumo";
+        : kind === "partial_payment"
+          ? "Pago parcial"
+          : "Devolver consumo";
 
   const amountNum = Number(amountStr);
   const amountValid =
     kind === "refund"
       ? true
-      : amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum !== 0;
+      : kind === "partial_payment"
+        ? amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum > 0
+        : amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum !== 0;
 
-  const reasonValid = reason.trim().length >= 3;
+  // Partial payments don't ask for a reason — the receipt label is auto.
+  const reasonValid =
+    kind === "partial_payment" ? true : reason.trim().length >= 3;
   const canSubmit = amountValid && reasonValid && !submitting;
 
   const submit = async () => {
@@ -803,6 +816,8 @@ function ActionModal({
           reason: reason.trim(),
           notes: notes.trim() || undefined,
         });
+      } else if (kind === "partial_payment") {
+        await billApi.recordPartialPayment(sessionId, amountNum);
       } else {
         await billApi.createAdjustment(sessionId, {
           type: kind,
@@ -903,6 +918,17 @@ function ActionModal({
                   se registra como negativo
                 </span>
               )}
+              {kind === "partial_payment" && (
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 9,
+                    color: C.mute,
+                  }}
+                >
+                  se descuenta del pendiente
+                </span>
+              )}
             </span>
             <input
               type="number"
@@ -915,28 +941,32 @@ function ActionModal({
           </label>
         )}
 
-        <label style={labelStyle}>
-          <span style={labelTextStyle}>Razón (obligatoria)</span>
-          <input
-            type="text"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Ej: cortesía, corrección manual, rotura…"
-            maxLength={200}
-            style={inputStyle}
-          />
-        </label>
+        {kind !== "partial_payment" && (
+          <>
+            <label style={labelStyle}>
+              <span style={labelTextStyle}>Razón (obligatoria)</span>
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Ej: cortesía, corrección manual, rotura…"
+                maxLength={200}
+                style={inputStyle}
+              />
+            </label>
 
-        <label style={labelStyle}>
-          <span style={labelTextStyle}>Notas internas (opcional)</span>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            maxLength={500}
-            style={{ ...inputStyle, resize: "vertical", fontFamily: FONT_UI }}
-          />
-        </label>
+            <label style={labelStyle}>
+              <span style={labelTextStyle}>Notas internas (opcional)</span>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                maxLength={500}
+                style={{ ...inputStyle, resize: "vertical", fontFamily: FONT_UI }}
+              />
+            </label>
+          </>
+        )}
 
 
         {error && (

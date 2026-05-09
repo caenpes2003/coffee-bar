@@ -1534,6 +1534,9 @@ export default function AdminPage() {
               if (sessionId == null) return;
               setBillDrawer({ open: true, sessionId, tableNumber });
             }}
+            onMutated={() => {
+              tablesApi.getAll().then(setAllTables).catch(console.error);
+            }}
           />
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             <PendingRequestsColumn

@@ -31,6 +31,12 @@ export const tablesApi = {
     adminApi.get<Table>(`/tables/${id}`).then((r) => r.data),
   getDetail: (id: number): Promise<Table> =>
     adminApi.get<Table>(`/tables/${id}/detail`).then((r) => r.data),
+  /** Create a virtual BAR account. Name is shown to staff in the grid. */
+  createBar: (name: string): Promise<Table> =>
+    adminApi.post<Table>("/tables/bars", { name }).then((r) => r.data),
+  /** Delete a virtual BAR. Refused while it has an open session. */
+  deleteBar: (id: number): Promise<{ ok: true }> =>
+    adminApi.delete<{ ok: true }>(`/tables/bars/${id}`).then((r) => r.data),
 };
 
 // ─── Bar access code (gate before opening a session) ────────────────────────
@@ -86,6 +92,21 @@ export const tableSessionsApi = {
   close: (sessionId: number): Promise<TableSession> =>
     adminApi
       .post<TableSession>(`/table-sessions/${sessionId}/close`)
+      .then((r) => r.data),
+  /**
+   * Admin opens (or joins) a session on behalf of the customer. Used
+   * when staff seats a guest who didn't scan, or when opening a virtual
+   * BAR account. `custom_name` becomes the label in the admin grid.
+   */
+  openByAdmin: (
+    tableId: number,
+    customName?: string,
+  ): Promise<TableSession> =>
+    adminApi
+      .post<TableSession>("/admin/table-sessions/open", {
+        table_id: tableId,
+        custom_name: customName,
+      })
       .then((r) => r.data),
   /** Admin side of the bill drawer. */
   getById: (sessionId: number): Promise<TableSession> =>
@@ -234,6 +255,18 @@ export const billApi = {
   ): Promise<Consumption> =>
     adminApi
       .post<Consumption>(`/consumptions/${consumptionId}/refund`, payload)
+      .then((r) => r.data),
+  /**
+   * Admin records cash collected mid-session. Lands as a Consumption
+   * with type=partial_payment and a negative amount, so the bill total
+   * automatically becomes "remaining to pay".
+   */
+  recordPartialPayment: (
+    sessionId: number,
+    amount: number,
+  ): Promise<Consumption> =>
+    adminApi
+      .post<Consumption>(`/bill/${sessionId}/partial-payment`, { amount })
       .then((r) => r.data),
 };
 

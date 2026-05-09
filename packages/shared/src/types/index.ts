@@ -65,6 +65,8 @@ export interface Table {
     payment_requested_at: string | null;
     paid_at: string | null;
     opened_at: string;
+    custom_name?: string | null;
+    opened_by?: string;
     song_credits: {
       earned: number;
       spent: number;

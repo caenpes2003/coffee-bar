@@ -23,6 +23,10 @@ const tableListInclude = {
       status: true,
       payment_requested_at: true,
       paid_at: true,
+      // Surface the staff-set label so the admin grid can show it on
+      // bar cells ("Cuenta de Camilo" instead of "Cuenta 47").
+      custom_name: true,
+      opened_by: true,
     },
   },
 } satisfies Prisma.TableInclude;
@@ -216,6 +220,8 @@ export class TablesService {
             status: table.current_session.status,
             payment_requested_at: table.current_session.payment_requested_at,
             paid_at: table.current_session.paid_at,
+            custom_name: table.current_session.custom_name,
+            opened_by: table.current_session.opened_by,
           }
         : null,
     };

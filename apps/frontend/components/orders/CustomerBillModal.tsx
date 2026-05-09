@@ -463,8 +463,18 @@ export function CustomerBillModal({
                   value={bill.summary.adjustments_total}
                 />
               )}
+              {bill.summary.partial_payments_total !== 0 && (
+                <SummaryRow
+                  label="Pagos parciales"
+                  value={bill.summary.partial_payments_total}
+                />
+              )}
               <SummaryRow
-                label="Total"
+                label={
+                  bill.summary.partial_payments_total !== 0
+                    ? "Pendiente"
+                    : "Total"
+                }
                 value={bill.summary.total}
                 emphasis
               />

@@ -3,26 +3,32 @@
 /**
  * Mapa de mesas — sidebar izquierdo compacto del panel admin.
  *
- * Cambio de IA: la columna anterior mostraba cards verticales largas con
- * scroll. Aquí mostramos TODAS las mesas a la vez en un grid de 2 columnas
- * para que el operador vea el estado del salón de un solo vistazo, sin
- * mover el cursor. El detalle (cuenta, items, etc.) se abre en drawer al
- * click — el card es el "trigger", no el "container".
+ * Dos secciones: "Mesas" (físicas, kind=TABLE) y "Barras" (virtuales,
+ * kind=BAR). Las mesas son fijas (su QR está impreso en la superficie
+ * del local); las barras se crean/eliminan desde el botón "+" inline.
  *
- * Cada celda muestra:
- *   - Número de mesa grande (Bebas).
- *   - Dot de status (success/alert/idle según ocupación + atención).
- *   - Mini-badges sutiles para: solicitud pendiente, pedido en curso,
- *     pago solicitado.
- *   - Consumo en pequeño abajo, solo si está ocupada.
+ * Click en una celda con sesión abierta → drawer de cuenta. Click en
+ * una celda sin sesión → modal "Abrir cuenta" (input de nombre + open).
  *
- * Orden de prioridad (para que la primera fila sea siempre lo que pide
- * atención): atención > ocupada > cerrando > disponible.
+ * El operador ve TODO el salón de un vistazo, sin scroll horizontal y
+ * con jerarquía visual clara: atención > ocupada > libre.
  */
 
+import { useState, type FormEvent } from "react";
 import { motion } from "framer-motion";
 import type { Table } from "@coffee-bar/shared";
-import { C, FONT_DISPLAY, FONT_MONO, fmt, pad, EASE_OUT_EXPO, DUR_BASE } from "@/lib/theme";
+import {
+  C,
+  FONT_DISPLAY,
+  FONT_MONO,
+  FONT_UI,
+  fmt,
+  pad,
+  EASE_OUT_EXPO,
+  DUR_BASE,
+} from "@/lib/theme";
+import { tablesApi, tableSessionsApi } from "@/lib/api/services";
+import { getErrorMessage } from "@/lib/errors";
 
 interface Props {
   tables: Table[];
@@ -31,6 +37,12 @@ interface Props {
     tableNumber: number | null,
     table: Table,
   ) => void;
+  /**
+   * Called after a successful open/create/delete so the parent can
+   * re-fetch tables. We intentionally lift the side-effect: this
+   * component only knows how to ask, not where state lives.
+   */
+  onMutated?: () => void;
 }
 
 const STATUS_RANK: Record<string, number> = {
@@ -55,9 +67,27 @@ function sortTables(tables: Table[]): Table[] {
   });
 }
 
-export function TablesMap({ tables, onSelect }: Props) {
-  const sorted = sortTables(tables);
-  const occupiedCount = tables.filter((t) => t.status === "occupied").length;
+export function TablesMap({ tables, onSelect, onMutated }: Props) {
+  // Default kind to "TABLE" for any rows that came from a backend
+  // without the kind column (defensive — the backend always sends it
+  // post-migration, but this keeps the UI robust if the cache is stale).
+  const realTables = tables.filter((t) => (t.kind ?? "TABLE") === "TABLE");
+  const bars = tables.filter((t) => t.kind === "BAR");
+
+  const sortedTables = sortTables(realTables);
+  const sortedBars = sortTables(bars);
+
+  const [openTarget, setOpenTarget] = useState<Table | null>(null);
+  const [creatingBar, setCreatingBar] = useState(false);
+
+  const handleSelect: Props["onSelect"] = (sessionId, number, table) => {
+    if (sessionId != null) {
+      onSelect(sessionId, number, table);
+      return;
+    }
+    // No session yet → prompt for an optional custom name and open.
+    setOpenTarget(table);
+  };
 
   return (
     <aside
@@ -101,17 +131,7 @@ export function TablesMap({ tables, onSelect }: Props) {
               textTransform: "uppercase",
             }}
           >
-            Mesas
-          </span>
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              color: C.mute,
-              fontWeight: 600,
-            }}
-          >
-            {occupiedCount}/{tables.length} ocupadas
+            Mesas y barras
           </span>
         </div>
       </header>
@@ -121,24 +141,622 @@ export function TablesMap({ tables, onSelect }: Props) {
           flex: 1,
           overflowY: "auto",
           padding: 12,
-          display: "grid",
-          gridTemplateColumns: "repeat(2, 1fr)",
-          gap: 10,
-          alignContent: "start",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
         }}
       >
-        {sorted.map((t, i) => (
-          <TableCell
-            key={t.id}
-            table={t}
-            index={i}
-            onSelect={onSelect}
-          />
-        ))}
+        <Section
+          label="Mesas"
+          count={`${realTables.filter((t) => t.status === "occupied").length}/${realTables.length}`}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, 1fr)",
+              gap: 10,
+            }}
+          >
+            {sortedTables.map((t, i) => (
+              <TableCell
+                key={t.id}
+                table={t}
+                index={i}
+                onSelect={handleSelect}
+              />
+            ))}
+          </div>
+        </Section>
+
+        <Section
+          label="Barras"
+          count={`${bars.filter((t) => t.status === "occupied").length}/${bars.length}`}
+          action={
+            <button
+              type="button"
+              onClick={() => setCreatingBar(true)}
+              aria-label="Crear nueva barra"
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 2,
+                color: C.cacao,
+                background: "transparent",
+                border: `1px solid ${C.sand}`,
+                borderRadius: 999,
+                padding: "3px 10px",
+                cursor: "pointer",
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              + Nueva
+            </button>
+          }
+        >
+          {bars.length === 0 ? (
+            <p
+              style={{
+                margin: 0,
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                color: C.mute,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+                padding: "8px 4px",
+              }}
+            >
+              Sin barras abiertas
+            </p>
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(1, 1fr)",
+                gap: 8,
+              }}
+            >
+              {sortedBars.map((t, i) => (
+                <BarCell
+                  key={t.id}
+                  table={t}
+                  index={i}
+                  onSelect={handleSelect}
+                  onDelete={async () => {
+                    try {
+                      await tablesApi.deleteBar(t.id);
+                      onMutated?.();
+                    } catch (err) {
+                      alert(getErrorMessage(err));
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </Section>
       </div>
+
+      {openTarget && (
+        <OpenSessionModal
+          table={openTarget}
+          onCancel={() => setOpenTarget(null)}
+          onOpened={() => {
+            setOpenTarget(null);
+            onMutated?.();
+          }}
+        />
+      )}
+      {creatingBar && (
+        <CreateBarModal
+          onCancel={() => setCreatingBar(false)}
+          onCreated={() => {
+            setCreatingBar(false);
+            onMutated?.();
+          }}
+        />
+      )}
     </aside>
   );
 }
+
+function Section({
+  label,
+  count,
+  action,
+  children,
+}: {
+  label: string;
+  count: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "0 2px 6px",
+          marginBottom: 4,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 2.5,
+              color: C.cacao,
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            {label}
+          </span>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              color: C.mute,
+              fontWeight: 600,
+            }}
+          >
+            {count}
+          </span>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Bar cell — wider, single column, shows the custom_name prominently.
+ * Visually distinct from TableCell so staff don't confuse the two.
+ */
+function BarCell({
+  table,
+  index,
+  onSelect,
+  onDelete,
+}: {
+  table: Table;
+  index: number;
+  onSelect: Props["onSelect"];
+  onDelete: () => void | Promise<void>;
+}) {
+  const isOccupied = table.status === "occupied";
+  const customName = table.current_session?.custom_name ?? null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 6 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{
+        duration: DUR_BASE / 1000,
+        ease: [0.16, 1, 0.3, 1],
+        delay: Math.min(index * 0.02, 0.2),
+      }}
+      style={{
+        position: "relative",
+        background: isOccupied
+          ? `color-mix(in srgb, ${C.goldSoft} 50%, ${C.paper})`
+          : C.paper,
+        border: `1px dashed ${isOccupied ? C.gold : C.sand}`,
+        borderRadius: 12,
+        padding: "10px 12px",
+        opacity: isOccupied ? 1 : 0.78,
+        boxShadow: C.shadow,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          onSelect(
+            table.current_session_id ?? null,
+            table.number ?? table.id,
+            table,
+          )
+        }
+        style={{
+          all: "unset",
+          cursor: "pointer",
+          display: "flex",
+          width: "100%",
+          flexDirection: "column",
+          gap: 4,
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 2.5,
+              color: isOccupied ? C.cacao : C.mute,
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            Barra
+          </span>
+          <StatusDot
+            status={table.status}
+            attention={table.pending_request_count > 0}
+          />
+        </div>
+        <span
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontSize: 18,
+            color: isOccupied ? C.ink : C.mute,
+            letterSpacing: 0.5,
+            lineHeight: 1.1,
+          }}
+        >
+          {customName ??
+            (isOccupied
+              ? `Cuenta ${table.current_session_id ?? table.id}`
+              : "Disponible")}
+        </span>
+        {isOccupied && (
+          <span
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 13,
+              color: C.gold,
+              letterSpacing: 0.3,
+            }}
+          >
+            {fmt(table.total_consumption)}
+          </span>
+        )}
+      </button>
+      {!isOccupied && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (
+              window.confirm(
+                "¿Eliminar esta barra? Solo se puede si no tiene cuenta abierta.",
+              )
+            ) {
+              void onDelete();
+            }
+          }}
+          aria-label="Eliminar barra"
+          title="Eliminar"
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            width: 22,
+            height: 22,
+            borderRadius: 999,
+            border: "none",
+            background: "transparent",
+            color: C.mute,
+            fontSize: 12,
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
+      )}
+    </motion.div>
+  );
+}
+
+function OpenSessionModal({
+  table,
+  onCancel,
+  onOpened,
+}: {
+  table: Table;
+  onCancel: () => void;
+  onOpened: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isBar = table.kind === "BAR";
+
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (submitting) return;
+    if (isBar && !name.trim()) {
+      setError("Ingresa un nombre para la cuenta");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await tableSessionsApi.openByAdmin(table.id, name.trim() || undefined);
+      onOpened();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title={isBar ? "Abrir cuenta" : `Mesa ${pad(table.number)}`} subtitle={isBar ? "Barra" : "Abrir mesa"}>
+      <form onSubmit={submit} noValidate style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 2,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            Nombre {isBar ? "(requerido)" : "(opcional)"}
+          </span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={isBar ? "Ej. Camilo" : "Sin nombre"}
+            maxLength={80}
+            autoFocus
+            style={modalInputStyle}
+          />
+        </label>
+        {error && <ErrorBanner text={error} />}
+        <ModalButtons
+          submitting={submitting}
+          submitLabel={isBar ? "Abrir cuenta" : "Abrir mesa"}
+          onCancel={onCancel}
+        />
+      </form>
+    </ModalShell>
+  );
+}
+
+function CreateBarModal({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (submitting) return;
+    if (!name.trim()) {
+      setError("Ingresa un nombre para la barra");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await tablesApi.createBar(name.trim());
+      onCreated();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title="Nueva barra" subtitle="Cuenta sin mesa">
+      <form onSubmit={submit} noValidate style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 2,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            Nombre de la barra
+          </span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ej. Barra 1"
+            maxLength={80}
+            autoFocus
+            style={modalInputStyle}
+          />
+        </label>
+        {error && <ErrorBanner text={error} />}
+        <ModalButtons
+          submitting={submitting}
+          submitLabel="Crear barra"
+          onCancel={onCancel}
+        />
+      </form>
+    </ModalShell>
+  );
+}
+
+function ModalShell({
+  onClose,
+  title,
+  subtitle,
+  children,
+}: {
+  onClose: () => void;
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.45)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          background: C.paper,
+          border: `1px solid ${C.sand}`,
+          borderRadius: 16,
+          padding: 22,
+          boxShadow: "0 30px 80px -30px rgba(43,29,20,0.5)",
+          fontFamily: FONT_UI,
+        }}
+      >
+        <div style={{ marginBottom: 14 }}>
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.gold,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — {subtitle}
+          </div>
+          <h2
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 22,
+              color: C.ink,
+              letterSpacing: 1,
+              margin: "4px 0 0",
+              lineHeight: 1.1,
+            }}
+          >
+            {title}
+          </h2>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ModalButtons({
+  submitting,
+  submitLabel,
+  onCancel,
+}: {
+  submitting: boolean;
+  submitLabel: string;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={submitting}
+        style={{
+          padding: "8px 14px",
+          fontSize: 11,
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          fontFamily: FONT_MONO,
+          fontWeight: 700,
+          color: C.cacao,
+          background: "transparent",
+          border: `1px solid ${C.sand}`,
+          borderRadius: 999,
+          cursor: submitting ? "not-allowed" : "pointer",
+        }}
+      >
+        Cancelar
+      </button>
+      <button
+        type="submit"
+        disabled={submitting}
+        style={{
+          padding: "8px 16px",
+          fontSize: 11,
+          letterSpacing: 1.5,
+          textTransform: "uppercase",
+          fontFamily: FONT_DISPLAY,
+          fontWeight: 700,
+          color: C.paper,
+          background: submitting
+            ? C.sand
+            : `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
+          border: "none",
+          borderRadius: 999,
+          cursor: submitting ? "not-allowed" : "pointer",
+        }}
+      >
+        {submitting ? "Guardando..." : submitLabel}
+      </button>
+    </div>
+  );
+}
+
+function ErrorBanner({ text }: { text: string }) {
+  return (
+    <p
+      role="alert"
+      style={{
+        margin: 0,
+        padding: 8,
+        borderRadius: 8,
+        background: C.terracottaSoft,
+        color: C.terracotta,
+        fontFamily: FONT_MONO,
+        fontSize: 11,
+        letterSpacing: 0.5,
+      }}
+    >
+      {text}
+    </p>
+  );
+}
+
+const modalInputStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  border: `1px solid ${C.sand}`,
+  borderRadius: 10,
+  background: C.parchment,
+  color: C.ink,
+  fontFamily: FONT_UI,
+  fontSize: 14,
+  outline: "none",
+  width: "100%",
+};
 
 function TableCell({
   table,
