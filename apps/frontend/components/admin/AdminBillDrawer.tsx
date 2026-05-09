@@ -68,6 +68,13 @@ interface Props {
   onClose: () => void;
   sessionId: number | null;
   tableNumber: number | null;
+  /**
+   * Pre-computed display label for the account ("Mesa 03", "Camilo",
+   * etc.). The drawer renders it as-is — so the parent stays the
+   * single source of truth for naming. Falls back to a sensible
+   * default when omitted, but new callers should always provide it.
+   */
+  accountLabel?: string;
 }
 
 export function AdminBillDrawer({
@@ -75,6 +82,7 @@ export function AdminBillDrawer({
   onClose,
   sessionId,
   tableNumber,
+  accountLabel,
 }: Props) {
   const [bill, setBill] = useState<BillView | null>(null);
   const [session, setSession] = useState<TableSession | null>(null);
@@ -222,6 +230,7 @@ export function AdminBillDrawer({
       >
         <BillHeader
           tableNumber={tableNumber}
+          accountLabel={accountLabel}
           bill={bill}
           onClose={onClose}
         />
@@ -371,7 +380,7 @@ export function AdminBillDrawer({
                   >
                     {paymentBusy === "mark-paid"
                       ? "Cobrando..."
-                      : "Cobrar y cerrar"}
+                      : "Cobrar y cerrar cuenta"}
                   </button>
                 </>
               )}
@@ -386,7 +395,7 @@ export function AdminBillDrawer({
                   ? "Cerrando..."
                   : bill.summary.total > 0
                     ? "Cerrar sin cobrar"
-                    : "Cerrar"}
+                    : "Cerrar cuenta"}
               </button>
             </div>
           </footer>
@@ -438,17 +447,23 @@ export function AdminBillDrawer({
         <ConfirmModal
           tone={confirmOpen.kind === "mark-paid" ? "olive" : "burgundy"}
           eyebrow={
-            confirmOpen.kind === "mark-paid" ? "— Cobrar mesa" : "— Cerrar mesa"
+            confirmOpen.kind === "mark-paid"
+              ? "— Cobrar cuenta"
+              : "— Cerrar cuenta"
           }
           title={
             confirmOpen.kind === "mark-paid"
-              ? "¿Cobrar y cerrar mesa?"
-              : "¿Cerrar sin cobrar?"
+              ? "¿Cobrar y cerrar la cuenta?"
+              : (bill?.summary.total ?? 0) > 0
+                ? "¿Cerrar sin cobrar?"
+                : "¿Cerrar la cuenta?"
           }
           body={
             confirmOpen.kind === "mark-paid"
-              ? "La sesión se cerrará y la mesa quedará disponible."
-              : "El total quedará sin pagar y la sesión se cerrará."
+              ? "La cuenta se cerrará y la mesa quedará disponible."
+              : (bill?.summary.total ?? 0) > 0
+                ? "El total quedará sin pagar y la cuenta se cerrará."
+                : "La cuenta se cerrará."
           }
           confirmLabel={
             confirmOpen.kind === "mark-paid" ? "Sí, cobrar" : "Sí, cerrar"
@@ -468,10 +483,12 @@ export function AdminBillDrawer({
 // ─── Header ──────────────────────────────────────────────────────────────────
 function BillHeader({
   tableNumber,
+  accountLabel,
   bill,
   onClose,
 }: {
   tableNumber: number | null;
+  accountLabel?: string;
   bill: BillView | null;
   onClose: () => void;
 }) {
@@ -519,7 +536,7 @@ function BillHeader({
             lineHeight: 1,
           }}
         >
-          Mesa {tableNumber != null ? pad(tableNumber) : "—"}
+          {accountLabel ?? (tableNumber != null ? `Mesa ${pad(tableNumber)}` : "—")}
         </h2>
         {bill && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
@@ -1348,6 +1365,12 @@ function ProductsAddModal({
   const [cart, setCart] = useState<Record<number, number>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Drill-down navigation: categories grid → products inside one
+  // category. Mirrors the customer-facing OrderRequestCart so staff
+  // and customers see the same shape.
+  const [view, setView] = useState<
+    { kind: "categories" } | { kind: "products"; category: string }
+  >({ kind: "categories" });
 
   useEffect(() => {
     let cancelled = false;
@@ -1452,38 +1475,70 @@ function ProductsAddModal({
           style={{
             padding: "18px 22px 12px",
             borderBottom: `1px solid ${C.sand}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
           }}
         >
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              letterSpacing: 3,
-              color: C.gold,
-              textTransform: "uppercase",
-              fontWeight: 700,
-            }}
-          >
-            — Cargar a la cuenta
-          </span>
-          <h3
-            style={{
-              fontFamily: FONT_DISPLAY,
-              fontSize: 24,
-              letterSpacing: 0.5,
-              color: C.ink,
-              margin: "2px 0 0",
-            }}
-          >
-            Agregar productos
-          </h3>
+          {view.kind === "products" && (
+            <button
+              type="button"
+              aria-label="Volver a categorías"
+              onClick={() => setView({ kind: "categories" })}
+              style={{
+                background: "transparent",
+                border: `1px solid ${C.sand}`,
+                borderRadius: 999,
+                width: 32,
+                height: 32,
+                fontFamily: FONT_DISPLAY,
+                fontSize: 18,
+                lineHeight: 1,
+                color: C.cacao,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              ←
+            </button>
+          )}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 3,
+                color: C.gold,
+                textTransform: "uppercase",
+                fontWeight: 700,
+              }}
+            >
+              — {view.kind === "categories" ? "Cargar a la cuenta" : "Categoría"}
+            </span>
+            <h3
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 24,
+                letterSpacing: 0.5,
+                color: C.ink,
+                margin: "2px 0 0",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {view.kind === "categories"
+                ? "Agregar productos"
+                : view.category}
+            </h3>
+          </div>
         </header>
 
         <div
           style={{
             flex: 1,
             overflowY: "auto",
-            padding: "12px 18px",
+            padding: "14px 18px",
             display: "flex",
             flexDirection: "column",
             gap: 14,
@@ -1517,109 +1572,201 @@ function ProductsAddModal({
               Sin productos disponibles
             </p>
           )}
-          {categories.map((cat) => (
-            <section key={cat}>
-              <div
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: 10,
-                  letterSpacing: 2.5,
-                  color: C.cacao,
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  marginBottom: 6,
-                }}
-              >
-                {cat}
-              </div>
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {grouped[cat].map((p) => {
-                  const qty = cart[p.id] ?? 0;
-                  const soldOut = p.stock === 0;
-                  const atCap = qty >= p.stock;
-                  return (
-                    <li
-                      key={p.id}
+
+          {view.kind === "categories" && categories.length > 0 && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 10,
+              }}
+            >
+              {categories.map((cat) => {
+                const items = grouped[cat] ?? [];
+                const total = items.length;
+                const available = items.filter((p) => p.stock > 0).length;
+                const cartCount = items.reduce(
+                  (acc, p) => acc + (cart[p.id] ?? 0),
+                  0,
+                );
+                const allSoldOut = available === 0;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setView({ kind: "products", category: cat })}
+                    style={{
+                      position: "relative",
+                      textAlign: "left",
+                      padding: "14px 14px",
+                      border: `1px solid ${allSoldOut ? C.sand : C.sandDark}`,
+                      borderRadius: 14,
+                      background: allSoldOut
+                        ? C.cream
+                        : `linear-gradient(160deg, ${C.paper} 0%, ${C.cream} 100%)`,
+                      color: C.ink,
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      minHeight: 86,
+                      boxShadow:
+                        "0 1px 0 rgba(43,29,20,0.04), 0 8px 22px -16px rgba(107,78,46,0.28)",
+                      opacity: allSoldOut ? 0.6 : 1,
+                      fontFamily: FONT_UI,
+                    }}
+                  >
+                    <div
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "10px 0",
-                        borderBottom: `1px solid ${C.sand}`,
-                        opacity: soldOut ? 0.45 : 1,
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: 18,
+                        letterSpacing: 0.5,
+                        color: C.ink,
+                        textTransform: "uppercase",
+                        lineHeight: 1.05,
                       }}
                     >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontFamily: FONT_DISPLAY,
-                            fontSize: 16,
-                            color: C.ink,
-                            letterSpacing: 0.3,
-                          }}
-                        >
-                          {p.name}
-                        </div>
-                        <div
-                          style={{
-                            fontFamily: FONT_MONO,
-                            fontSize: 10,
-                            letterSpacing: 1,
-                            color: C.gold,
-                            marginTop: 2,
-                          }}
-                        >
-                          {fmt(Number(p.price))}
-                          {soldOut && (
-                            <span style={{ marginLeft: 8, color: C.burgundy }}>
-                              Agotado
-                            </span>
-                          )}
-                        </div>
+                      {cat}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: FONT_MONO,
+                        fontSize: 10,
+                        letterSpacing: 1.4,
+                        color: C.mute,
+                        textTransform: "uppercase",
+                        fontWeight: 600,
+                        marginTop: "auto",
+                      }}
+                    >
+                      {allSoldOut ? (
+                        <span style={{ color: C.burgundy }}>Agotada</span>
+                      ) : available === total ? (
+                        <>{total} productos</>
+                      ) : (
+                        <>
+                          {available} disponibles · {total - available} agotados
+                        </>
+                      )}
+                    </div>
+                    {cartCount > 0 && (
+                      <span
+                        aria-label={`${cartCount} en carrito`}
+                        style={{
+                          position: "absolute",
+                          top: 8,
+                          right: 8,
+                          minWidth: 22,
+                          height: 22,
+                          padding: "0 7px",
+                          borderRadius: 999,
+                          background: `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
+                          color: C.paper,
+                          fontFamily: FONT_DISPLAY,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {cartCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {view.kind === "products" && (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {(grouped[view.category] ?? []).map((p) => {
+                const qty = cart[p.id] ?? 0;
+                const soldOut = p.stock === 0;
+                const atCap = qty >= p.stock;
+                return (
+                  <li
+                    key={p.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 0",
+                      borderBottom: `1px solid ${C.sand}`,
+                      opacity: soldOut ? 0.45 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontFamily: FONT_DISPLAY,
+                          fontSize: 16,
+                          color: C.ink,
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {p.name}
                       </div>
                       <div
                         style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
+                          fontFamily: FONT_MONO,
+                          fontSize: 10,
+                          letterSpacing: 1,
+                          color: C.gold,
+                          marginTop: 2,
                         }}
                       >
-                        <button
-                          type="button"
-                          onClick={() => bump(p, -1)}
-                          disabled={qty === 0 || soldOut}
-                          aria-label={`Quitar ${p.name}`}
-                          style={stepperBtn(qty === 0 || soldOut)}
-                        >
-                          −
-                        </button>
-                        <span
-                          style={{
-                            minWidth: 22,
-                            textAlign: "center",
-                            fontFamily: FONT_DISPLAY,
-                            fontSize: 16,
-                            color: qty > 0 ? C.ink : C.mute,
-                          }}
-                        >
-                          {qty}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => bump(p, 1)}
-                          disabled={soldOut || atCap}
-                          aria-label={`Agregar ${p.name}`}
-                          style={stepperBtn(soldOut || atCap)}
-                        >
-                          +
-                        </button>
+                        {fmt(Number(p.price))}
+                        {soldOut && (
+                          <span style={{ marginLeft: 8, color: C.burgundy }}>
+                            Agotado
+                          </span>
+                        )}
                       </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => bump(p, -1)}
+                        disabled={qty === 0 || soldOut}
+                        aria-label={`Quitar ${p.name}`}
+                        style={stepperBtn(qty === 0 || soldOut)}
+                      >
+                        −
+                      </button>
+                      <span
+                        style={{
+                          minWidth: 22,
+                          textAlign: "center",
+                          fontFamily: FONT_DISPLAY,
+                          fontSize: 16,
+                          color: qty > 0 ? C.ink : C.mute,
+                        }}
+                      >
+                        {qty}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => bump(p, 1)}
+                        disabled={soldOut || atCap}
+                        aria-label={`Agregar ${p.name}`}
+                        style={stepperBtn(soldOut || atCap)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
         <footer

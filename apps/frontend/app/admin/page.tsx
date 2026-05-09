@@ -498,10 +498,16 @@ function PendingRequestsColumn({
     {},
   );
 
-  const tableNumberBySessionId = new Map<number, number>();
+  const labelBySessionId = new Map<number, string>();
   for (const t of tables) {
     if (t.current_session_id != null) {
-      tableNumberBySessionId.set(t.current_session_id, t.number ?? t.id);
+      const customName = t.current_session?.custom_name?.trim();
+      labelBySessionId.set(
+        t.current_session_id,
+        customName && customName.length > 0
+          ? customName
+          : `Mesa ${pad(t.number ?? t.id)}`,
+      );
     }
   }
 
@@ -543,9 +549,9 @@ function PendingRequestsColumn({
       <ColumnHeader label="Solicitudes" count={requests.length} />
       <AnimatePresence initial={false}>
       {requests.map((r) => {
-        const tableNumber =
-          tableNumberBySessionId.get(r.table_session_id) ??
-          r.table_session?.table_id;
+        const accountLabel =
+          labelBySessionId.get(r.table_session_id) ??
+          `Cuenta ${r.table_session_id}`;
         const items = Array.isArray(r.items) ? r.items : [];
         const itemsCount = items.reduce((acc, it) => acc + (it.quantity ?? 0), 0);
         const busy = busyId === r.id;
@@ -602,9 +608,7 @@ function PendingRequestsColumn({
                     letterSpacing: 0.5,
                   }}
                 >
-                  {tableNumber != null
-                    ? `Mesa ${pad(tableNumber)}`
-                    : `Sesión ${r.table_session_id}`}
+                  {accountLabel}
                 </span>
                 <Badge label={r.status} status={r.status} />
               </div>
@@ -724,10 +728,18 @@ function OrdersColumn({
     await ordersApi.updateStatus(id, status);
   };
 
-  const tableNumberBySessionId = new Map<number, number>();
+  const labelBySessionId = new Map<number, string>();
   for (const t of tables) {
     if (t.current_session_id != null) {
-      tableNumberBySessionId.set(t.current_session_id, t.number ?? t.id);
+      const customName = t.current_session?.custom_name?.trim();
+      if (customName) {
+        labelBySessionId.set(t.current_session_id, customName);
+      } else {
+        labelBySessionId.set(
+          t.current_session_id,
+          `Mesa ${pad(t.number ?? t.id)}`,
+        );
+      }
     }
   }
 
@@ -756,9 +768,9 @@ function OrdersColumn({
       <ColumnHeader label="Pedidos" count={orders.length} />
       <AnimatePresence initial={false}>
       {orders.map((o) => {
-        const tableNumber =
-          tableNumberBySessionId.get(o.table_session_id) ??
-          o.table_session?.table_id;
+        const accountLabel =
+          labelBySessionId.get(o.table_session_id) ??
+          `Cuenta ${o.table_session_id}`;
         const transitionable =
           o.status === "accepted" ||
           o.status === "preparing" ||
@@ -817,7 +829,7 @@ function OrdersColumn({
                   letterSpacing: 0.5,
                 }}
               >
-                {tableNumber != null ? `Mesa ${pad(tableNumber)}` : `Sesión ${o.table_session_id}`}
+                {accountLabel}
               </span>
               <Badge label={o.status} status={o.status} />
             </div>
@@ -1183,7 +1195,12 @@ export default function AdminPage() {
     }, 6000);
   }, []);
   const [billDrawer, setBillDrawer] = useState<
-    | { open: true; sessionId: number; tableNumber: number | null }
+    | {
+        open: true;
+        sessionId: number;
+        tableNumber: number | null;
+        accountLabel: string;
+      }
     | { open: false }
   >({ open: false });
   const {
@@ -1244,13 +1261,15 @@ export default function AdminPage() {
         previous &&
         previous.status === "pending"
       ) {
-        const tableNumber =
-          useAppStore
-            .getState()
-            .allTables.find(
-              (t) => t.current_session_id === r.table_session_id,
-            )?.number ?? r.table_session?.table_id ?? null;
-        const label = tableNumber != null ? `Mesa ${pad(tableNumber)}` : `Sesión ${r.table_session_id}`;
+        const matchingTable = useAppStore
+          .getState()
+          .allTables.find((t) => t.current_session_id === r.table_session_id);
+        const customName = matchingTable?.current_session?.custom_name?.trim();
+        const label = customName
+          ? customName
+          : matchingTable?.number != null
+            ? `Mesa ${pad(matchingTable.number)}`
+            : `Cuenta ${r.table_session_id}`;
         pushToast(`${label}: pedido #${r.id} cancelado por el cliente`);
       }
       upsertOrderRequest(r);
@@ -1271,8 +1290,12 @@ export default function AdminPage() {
       const matching = tables.find((t) => t.current_session_id === s.id);
       const previous = matching?.current_session?.payment_requested_at ?? null;
       if (s.payment_requested_at && !previous) {
-        const tableNumber = matching?.number ?? null;
-        const label = tableNumber != null ? `Mesa ${pad(tableNumber)}` : `Sesión ${s.id}`;
+        const customName = matching?.current_session?.custom_name?.trim();
+        const label = customName
+          ? customName
+          : matching?.number != null
+            ? `Mesa ${pad(matching.number)}`
+            : `Cuenta ${s.id}`;
         pushToast(`${label}: pidió la cuenta`);
       }
       // Always refresh the tables snapshot so badges stay accurate after
@@ -1530,9 +1553,21 @@ export default function AdminPage() {
         >
           <TablesMap
             tables={allTables}
-            onSelect={(sessionId, tableNumber) => {
+            onSelect={(sessionId, tableNumber, table) => {
               if (sessionId == null) return;
-              setBillDrawer({ open: true, sessionId, tableNumber });
+              const customName = table.current_session?.custom_name;
+              const accountLabel =
+                customName && customName.trim().length > 0
+                  ? customName
+                  : tableNumber != null
+                    ? `Mesa ${pad(tableNumber)}`
+                    : `Cuenta ${sessionId}`;
+              setBillDrawer({
+                open: true,
+                sessionId,
+                tableNumber,
+                accountLabel,
+              });
             }}
             onMutated={() => {
               tablesApi.getAll().then(setAllTables).catch(console.error);
@@ -1568,6 +1603,7 @@ export default function AdminPage() {
         open={billDrawer.open}
         sessionId={billDrawer.open ? billDrawer.sessionId : null}
         tableNumber={billDrawer.open ? billDrawer.tableNumber : null}
+        accountLabel={billDrawer.open ? billDrawer.accountLabel : undefined}
         onClose={() => setBillDrawer({ open: false })}
       />
 
