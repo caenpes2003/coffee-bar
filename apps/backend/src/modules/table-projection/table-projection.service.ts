@@ -137,6 +137,7 @@ export class TableProjectionService {
     id: number;
     number: number;
     qr_code: string;
+    kind: string;
     status: TableStatus;
     current_session_id: number | null;
     total_consumption: number;
@@ -149,6 +150,8 @@ export class TableProjectionService {
       payment_requested_at: Date | null;
       paid_at: Date | null;
       opened_at: Date;
+      custom_name: string | null;
+      opened_by: string;
       song_credits: SongCredits;
     } | null;
   } | null> {
@@ -162,6 +165,8 @@ export class TableProjectionService {
             payment_requested_at: true,
             paid_at: true,
             opened_at: true,
+            custom_name: true,
+            opened_by: true,
           },
         },
       },
@@ -178,6 +183,7 @@ export class TableProjectionService {
       id: t.id,
       number: t.number,
       qr_code: t.qr_code,
+      kind: t.kind,
       status: t.status,
       current_session_id: t.current_session_id,
       total_consumption: Number(t.total_consumption),
@@ -191,6 +197,8 @@ export class TableProjectionService {
             payment_requested_at: t.current_session.payment_requested_at,
             paid_at: t.current_session.paid_at,
             opened_at: t.current_session.opened_at,
+            custom_name: t.current_session.custom_name,
+            opened_by: t.current_session.opened_by,
             song_credits: credits,
           }
         : null,
