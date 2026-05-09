@@ -77,6 +77,14 @@ export class TablesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll() {
+    // Sweep closed BAR rows before serving — they're ephemeral by
+    // design (one bar account per customer, dies with its session).
+    // Best-effort: a delete failure here shouldn't break the listing.
+    try {
+      await this.pruneClosedBars();
+    } catch {
+      /* non-fatal */
+    }
     const tables = await this.prisma.table.findMany({
       include: tableListInclude,
       orderBy: {
@@ -199,6 +207,29 @@ export class TablesService {
     }
     await this.prisma.table.delete({ where: { id } });
     return { ok: true };
+  }
+
+  /**
+   * Auto-prune all closed BAR rows. We call this opportunistically when
+   * the admin lists tables, so accounts that were closed (e.g. cashier
+   * pressed "Cobrar y cerrar" on a virtual bar) disappear from the
+   * grid without an explicit cleanup step. Physical tables are never
+   * touched.
+   *
+   * Safe to run as a side-effect of findAll — it only deletes BARs that
+   * have no current_session and no rows referencing them through
+   * sessions (orders/consumptions live on session, which is gone after
+   * close → cascades). If a delete races against a re-open, the unique
+   * index on current_session_id will surface the conflict.
+   */
+  async pruneClosedBars(): Promise<number> {
+    const result = await this.prisma.table.deleteMany({
+      where: {
+        kind: TableKind.BAR,
+        current_session_id: null,
+      },
+    });
+    return result.count;
   }
 
   private serializeTable(table: Table) {

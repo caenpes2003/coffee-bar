@@ -110,6 +110,20 @@ export class OrderRequestsController {
     return this.service.serialize(request);
   }
 
+  /**
+   * Admin shortcut: take a list of items and turn them into an
+   * already-accepted order in one call. This is what the "+ Productos"
+   * button in the bill drawer hits — staff doesn't want a 2-step flow
+   * (request → accept) for things they themselves typed.
+   */
+  @Post("admin/quick-add")
+  @UseGuards(JwtGuard)
+  @AuthKinds("admin")
+  async quickAdd(@Body() dto: CreateOrderRequestDto) {
+    const request = await this.service.createAndAccept(dto);
+    return this.service.serialize(request);
+  }
+
   @Post(":id/reject")
   @UseGuards(JwtGuard)
   @AuthKinds("admin")

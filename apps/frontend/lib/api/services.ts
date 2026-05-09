@@ -37,26 +37,48 @@ export const tablesApi = {
   /** Delete a virtual BAR. Refused while it has an open session. */
   deleteBar: (id: number): Promise<{ ok: true }> =>
     adminApi.delete<{ ok: true }>(`/tables/bars/${id}`).then((r) => r.data),
+  /**
+   * Atomic "open a walk-in account": create the virtual BAR row and
+   * open its session in a single round-trip. Used by the "+ Nueva
+   * cuenta" button in the admin grid.
+   */
+  openWalkInAccount: (
+    name: string,
+  ): Promise<{ table: Table; session: TableSession }> =>
+    adminApi
+      .post<{ table: Table; session: TableSession }>(
+        "/tables/bars/walkin",
+        { name },
+      )
+      .then((r) => r.data),
 };
 
 // ─── Bar access code (gate before opening a session) ────────────────────────
 // 4-digit numeric code that rotates daily. Customers type it on the mesa
 // page before they can open a session; admins see it (and rotate it) in
-// the dashboard widget.
+// the dashboard widget. The `id` is exposed alongside the code so the
+// customer device can tell when it has been rotated since the device
+// last validated it.
+type AccessCodePayload = {
+  id: number;
+  code: string;
+  expires_at: string;
+};
+
 export const accessCodeApi = {
   validate: (code: string): Promise<{ ok: true }> =>
     publicApi
       .post<{ ok: true }>("/access-code/validate", { code })
       .then((r) => r.data),
-  getCurrent: (): Promise<{ code: string; expires_at: string }> =>
+  getCurrent: (): Promise<AccessCodePayload> =>
     adminApi.get("/access-code/current").then((r) => r.data),
   /**
    * Public read for the player TV. No admin token needed — the code is
    * meant to be visible on a public screen anyway.
    */
-  getForDisplay: (): Promise<{ code: string; expires_at: string }> =>
+  getForDisplay: (): Promise<AccessCodePayload> =>
     publicApi.get("/access-code/display").then((r) => r.data),
-  rotate: (): Promise<{ code: string; expires_at: string }> =>
+  rotate: (): Promise<AccessCodePayload> =>
     adminApi.post("/access-code/rotate").then((r) => r.data),
 };
 
@@ -183,6 +205,18 @@ export const orderRequestsApi = {
   accept: (id: number): Promise<OrderRequest> =>
     adminApi
       .post<OrderRequest>(`/order-requests/${id}/accept`)
+      .then((r) => r.data),
+  /**
+   * Admin shortcut: create + immediately accept. Used when staff adds
+   * products to a session from the bill drawer; the resulting Order
+   * goes straight to "accepted" without sitting in the pending column.
+   */
+  quickAdd: (payload: {
+    table_session_id: number;
+    items: OrderRequestItemInput[];
+  }): Promise<OrderRequest> =>
+    adminApi
+      .post<OrderRequest>("/order-requests/admin/quick-add", payload)
       .then((r) => r.data),
   /** Admin rejects with optional reason. */
   reject: (id: number, reason?: string): Promise<OrderRequest> =>

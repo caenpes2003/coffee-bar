@@ -42,19 +42,32 @@ export class AccessCodeService {
    * Returns the current active code, generating one if there's none or
    * the latest one expired. Idempotent within a single tick so two
    * parallel requests don't both create a row.
+   *
+   * The `id` is exposed alongside the code so the customer device can
+   * pin its "I already typed the code" flag to a specific row. When
+   * the code rotates the id changes, and the gate reappears on the
+   * next visit even if the device kept its sessionStorage.
    */
-  async getOrRotate(): Promise<{ code: string; expires_at: Date }> {
+  async getOrRotate(): Promise<{
+    id: number;
+    code: string;
+    expires_at: Date;
+  }> {
     const latest = await this.prisma.barAccessCode.findFirst({
       where: { is_active: true },
       orderBy: { created_at: "desc" },
     });
     if (latest && latest.expires_at > new Date()) {
-      return { code: latest.code, expires_at: latest.expires_at };
+      return { id: latest.id, code: latest.code, expires_at: latest.expires_at };
     }
     return this.rotate("system");
   }
 
-  async rotate(rotatedBy: string | null): Promise<{ code: string; expires_at: Date }> {
+  async rotate(rotatedBy: string | null): Promise<{
+    id: number;
+    code: string;
+    expires_at: Date;
+  }> {
     // Mark all previous active codes as inactive in one shot. A stale
     // active row hanging around means rotating manually wouldn't take
     // effect immediately if `getCurrent` always picks the most recent.
@@ -76,7 +89,11 @@ export class AccessCodeService {
     this.logger.log(
       `Bar access code rotated by ${rotatedBy ?? "system"}; expires ${expiresAt.toISOString()}`,
     );
-    return { code: created.code, expires_at: created.expires_at };
+    return {
+      id: created.id,
+      code: created.code,
+      expires_at: created.expires_at,
+    };
   }
 
   /**

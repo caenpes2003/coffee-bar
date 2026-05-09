@@ -172,24 +172,60 @@ export default function MesaPage({
   // token has expired or been revoked; we cannot keep operating, so we render
   // a recovery card asking the user to scan the QR again.
   const [sessionInvalid, setSessionInvalid] = useState(false);
-  // Per-device gate: every customer device must validate the daily 4-digit
-  // bar code once before they can open or join a session. We persist the
-  // OK in sessionStorage so the customer doesn't get re-prompted on
-  // navigation. Cleared automatically when the session is closed because
-  // sessionStorage dies with the tab anyway, and clearMesaSessionState
-  // wipes it explicitly when the admin/customer closes the table.
-  const [accessCodeOk, setAccessCodeOk] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return sessionStorage.getItem("bar_access_ok") === "1";
-    } catch {
-      return false;
-    }
-  });
-  const markAccessCodeOk = useCallback(() => {
+  // Per-device gate: every customer device must validate the current
+  // 4-digit bar code before opening/joining a session. We persist the
+  // ID of the validated code in sessionStorage; on every visit we read
+  // the current code id from the backend and compare. If the staff has
+  // rotated the code since this device validated, the IDs won't match
+  // and the gate reappears. This closes the bug where a stale
+  // sessionStorage flag let an old device skip the gate forever.
+  const [accessCodeOk, setAccessCodeOk] = useState<boolean>(false);
+  const [accessCodeChecking, setAccessCodeChecking] = useState<boolean>(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    accessCodeApi
+      .getForDisplay()
+      .then((current) => {
+        if (cancelled) return;
+        let storedId: number | null = null;
+        try {
+          const raw = sessionStorage.getItem("bar_access_ok");
+          if (raw && /^\d+$/.test(raw)) storedId = Number(raw);
+        } catch {
+          /* ignore — Safari private mode */
+        }
+        // Match? device already passed the gate for *this* code.
+        if (storedId === current.id) {
+          setAccessCodeOk(true);
+        } else {
+          // Either no flag, or the code rotated since validation. Wipe
+          // the stale value so we don't accidentally re-trust it on a
+          // race with a future rotation.
+          try {
+            sessionStorage.removeItem("bar_access_ok");
+          } catch {
+            /* ignore */
+          }
+          setAccessCodeOk(false);
+        }
+      })
+      .catch(() => {
+        // If the public endpoint fails, fall back to "ask for code".
+        setAccessCodeOk(false);
+      })
+      .finally(() => {
+        if (!cancelled) setAccessCodeChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const markAccessCodeOk = useCallback((codeId: number) => {
     setAccessCodeOk(true);
     try {
-      sessionStorage.setItem("bar_access_ok", "1");
+      sessionStorage.setItem("bar_access_ok", String(codeId));
     } catch {
       // ignore — Safari private mode etc.
     }
@@ -662,6 +698,29 @@ export default function MesaPage({
 
   // ─── Entry state — no open session yet ───────────────────────────────────
   if (session === null) {
+    // Avoid a flash of the gate while we're still resolving whether
+    // sessionStorage already has a valid id. Once `accessCodeChecking`
+    // flips to false, we know whether to render gate or entry view.
+    if (accessCodeChecking) {
+      return (
+        <div
+          style={{
+            minHeight: "100dvh",
+            background: C.cream,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: C.mute,
+            fontFamily: FONT_MONO,
+            letterSpacing: 3,
+            fontSize: 11,
+            textTransform: "uppercase",
+          }}
+        >
+          Verificando acceso...
+        </div>
+      );
+    }
     if (!accessCodeOk) {
       return (
         <AccessCodeGate
@@ -1859,7 +1918,7 @@ function AccessCodeGate({
   onSuccess,
 }: {
   tableNumber: number;
-  onSuccess: () => void;
+  onSuccess: (codeId: number) => void;
 }) {
   const [digits, setDigits] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1872,7 +1931,10 @@ function AccessCodeGate({
     setError(null);
     try {
       await accessCodeApi.validate(digits);
-      onSuccess();
+      // Re-read the current id so the device pins to the right code,
+      // even if the cashier rotated between us reading and validating.
+      const current = await accessCodeApi.getForDisplay();
+      onSuccess(current.id);
     } catch (err) {
       const code = (err as { response?: { data?: { code?: string } } })
         ?.response?.data?.code;

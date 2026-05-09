@@ -175,6 +175,87 @@ export class OrderRequestsService {
     return result.request;
   }
 
+  /**
+   * Admin shortcut: create an OrderRequest and immediately accept it.
+   * Used when staff adds products to a session from the dashboard —
+   * those entries shouldn't appear in the "pending requests" column
+   * because the staff just typed them, and they bypass the
+   * "customer asked for the bill" gate (staff can still add a final
+   * round even after the bill was requested).
+   */
+  async createAndAccept(
+    dto: CreateOrderRequestDto,
+  ): Promise<OrderRequestFull> {
+    const session = await this.prisma.tableSession.findUnique({
+      where: { id: dto.table_session_id },
+      select: { id: true, table_id: true, status: true },
+    });
+    if (!session) {
+      throw new NotFoundException({
+        message: `TableSession ${dto.table_session_id} not found`,
+        code: "TABLE_SESSION_NOT_FOUND",
+      });
+    }
+    if (session.status === TableSessionStatus.closed) {
+      throw new BadRequestException({
+        message: "Session is closed",
+        code: "TABLE_SESSION_CLOSED",
+      });
+    }
+
+    const normalizedItems = this.normalizeItems(dto.items);
+    await this.validateProductsExistAndActive(normalizedItems);
+
+    // Single transaction: create as accepted from the start, decrement
+    // stock, create the Order. We deliberately skip the pending →
+    // accepted state machine because the customer never sees the
+    // intermediate state and the staff didn't ask for it.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.orderRequest.create({
+        data: {
+          table_session_id: session.id,
+          status: OrderRequestStatus.accepted,
+          accepted_at: new Date(),
+          items: normalizedItems as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      await this.decrementStockOrThrow(tx, normalizedItems);
+
+      const order = await tx.order.create({
+        data: {
+          table_session_id: session.id,
+          order_request_id: request.id,
+          status: OrderStatus.accepted,
+          order_items: {
+            create: await this.buildOrderItemCreates(tx, normalizedItems),
+          },
+        },
+        include: { order_items: { include: { product: true } } },
+      });
+
+      await this.projection.onOrderRequestAccepted(session.table_id, tx);
+
+      const fresh = await tx.orderRequest.findUnique({
+        where: { id: request.id },
+        include: INCLUDE_FOR_SERIALIZE,
+      });
+      return { request: fresh!, order };
+    });
+
+    this.realtime.emitOrderRequestCreated(
+      session.id,
+      this.serialize(result.request),
+    );
+    this.realtime.emitOrderCreated(
+      session.id,
+      this.serializeOrder(result.order),
+    );
+    const snap = await this.projection.snapshotForBroadcast(session.table_id);
+    if (snap) this.realtime.emitTableUpdated(snap);
+    return result.request;
+  }
+
   async reject(requestId: number, reason?: string): Promise<OrderRequestFull> {
     return this.terminateRequest(
       requestId,

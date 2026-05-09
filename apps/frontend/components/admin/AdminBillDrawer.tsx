@@ -14,9 +14,19 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useSocket } from "@/lib/socket/useSocket";
-import { billApi, tableSessionsApi } from "@/lib/api/services";
+import {
+  billApi,
+  orderRequestsApi,
+  productsApi,
+  tableSessionsApi,
+} from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
-import type { BillView, Consumption, TableSession } from "@coffee-bar/shared";
+import type {
+  BillView,
+  Consumption,
+  Product,
+  TableSession,
+} from "@coffee-bar/shared";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -46,7 +56,12 @@ const FONT_DISPLAY = "var(--font-bebas)";
 const FONT_MONO = "var(--font-manrope)";
 const FONT_UI = "var(--font-manrope)";
 
-type ActionKind = "adjustment" | "discount" | "refund" | "partial_payment";
+type ActionKind =
+  | "adjustment"
+  | "discount"
+  | "refund"
+  | "partial_payment"
+  | "products";
 
 interface Props {
   open: boolean;
@@ -164,6 +179,35 @@ export function AdminBillDrawer({
       }}
       onClick={onClose}
     >
+      <style>{`
+        .crown-btn-action,
+        .crown-btn-primary,
+        .crown-btn-ghost {
+          transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                      box-shadow 200ms ease,
+                      background 160ms ease,
+                      color 160ms ease,
+                      border-color 160ms ease;
+        }
+        .crown-btn-action:hover:not(:disabled) {
+          transform: translateY(-1px);
+          background: ${C.cream};
+          box-shadow: 0 8px 18px -10px rgba(107,78,46,0.45);
+        }
+        .crown-btn-primary:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: brightness(1.07);
+          box-shadow: 0 12px 22px -12px rgba(43,29,20,0.5);
+        }
+        .crown-btn-primary:active:not(:disabled) {
+          transform: translateY(0);
+        }
+        .crown-btn-ghost:hover:not(:disabled) {
+          background: ${C.cream};
+          color: ${C.ink};
+          border-color: ${C.cacao};
+        }
+      `}</style>
       <aside
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -274,20 +318,28 @@ export function AdminBillDrawer({
             <div style={{ display: "flex", gap: 10 }}>
               <button
                 type="button"
-                onClick={() => setActionOpen({ kind: "adjustment" })}
+                onClick={() => setActionOpen({ kind: "products" })}
+                className="crown-btn-action"
                 style={adjustmentButtonStyle(C.gold)}
               >
-                + Cargo
+                + Productos
               </button>
               <button
                 type="button"
                 onClick={() => setActionOpen({ kind: "discount" })}
+                className="crown-btn-action"
                 style={adjustmentButtonStyle(C.cacao)}
               >
                 − Descuento
               </button>
             </div>
 
+            {/* Payment + close cluster.
+                Contextual rules:
+                  - total = 0 → only "Cerrar" (renamed from
+                    "Cerrar sin cobrar" since there's nothing to charge).
+                  - total > 0 → "Pago parcial" + "Cobrar y cerrar" +
+                    "Cerrar sin cobrar". */}
             <div
               style={{
                 display: "flex",
@@ -297,33 +349,44 @@ export function AdminBillDrawer({
                 borderTop: `1px solid ${C.sand}`,
               }}
             >
-              <button
-                type="button"
-                onClick={() => setActionOpen({ kind: "partial_payment" })}
-                style={primaryActionStyle(false, C.gold)}
-              >
-                Registrar pago parcial
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmOpen({ kind: "mark-paid" })}
-                disabled={paymentBusy != null}
-                style={primaryActionStyle(
-                  paymentBusy === "mark-paid",
-                  C.olive,
-                )}
-              >
-                {paymentBusy === "mark-paid"
-                  ? "Cobrando..."
-                  : "Cobrar y cerrar mesa"}
-              </button>
+              {bill.summary.total > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActionOpen({ kind: "partial_payment" })}
+                    className="crown-btn-primary"
+                    style={primaryActionStyle(false, C.gold)}
+                  >
+                    Registrar pago parcial
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmOpen({ kind: "mark-paid" })}
+                    disabled={paymentBusy != null}
+                    className="crown-btn-primary"
+                    style={primaryActionStyle(
+                      paymentBusy === "mark-paid",
+                      C.olive,
+                    )}
+                  >
+                    {paymentBusy === "mark-paid"
+                      ? "Cobrando..."
+                      : "Cobrar y cerrar"}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => setConfirmOpen({ kind: "close" })}
                 disabled={paymentBusy != null}
+                className="crown-btn-ghost"
                 style={secondaryActionStyle(paymentBusy === "close")}
               >
-                {paymentBusy === "close" ? "Cerrando..." : "Cerrar sin cobrar"}
+                {paymentBusy === "close"
+                  ? "Cerrando..."
+                  : bill.summary.total > 0
+                    ? "Cerrar sin cobrar"
+                    : "Cerrar"}
               </button>
             </div>
           </footer>
@@ -348,7 +411,17 @@ export function AdminBillDrawer({
         )}
       </aside>
 
-      {actionOpen && sessionId != null && (
+      {actionOpen && sessionId != null && actionOpen.kind === "products" && (
+        <ProductsAddModal
+          sessionId={sessionId}
+          onClose={() => setActionOpen(null)}
+          onDone={() => {
+            setActionOpen(null);
+            // bill:updated will refresh the drawer; no manual refetch.
+          }}
+        />
+      )}
+      {actionOpen && sessionId != null && actionOpen.kind !== "products" && (
         <ActionModal
           kind={actionOpen.kind}
           sessionId={sessionId}
@@ -357,7 +430,6 @@ export function AdminBillDrawer({
           onClose={() => setActionOpen(null)}
           onDone={() => {
             setActionOpen(null);
-            // bill:updated will refresh the drawer; no manual refetch.
           }}
         />
       )}
@@ -759,7 +831,9 @@ function LedgerList({
   );
 }
 
-// ─── Action modal (adjustment | discount | refund) ───────────────────────────
+type SimpleActionKind = Exclude<ActionKind, "products">;
+
+// ─── Action modal (adjustment | discount | refund | partial_payment) ────────
 function ActionModal({
   kind,
   sessionId,
@@ -768,7 +842,7 @@ function ActionModal({
   onClose,
   onDone,
 }: {
-  kind: ActionKind;
+  kind: SimpleActionKind;
   sessionId: number;
   consumptionId?: number;
   defaultDescription?: string;
@@ -819,8 +893,10 @@ function ActionModal({
       } else if (kind === "partial_payment") {
         await billApi.recordPartialPayment(sessionId, amountNum);
       } else {
+        // Narrows to "adjustment" | "discount" — the only two kinds
+        // left after refund/partial_payment branches above.
         await billApi.createAdjustment(sessionId, {
-          type: kind,
+          type: kind as "adjustment" | "discount",
           amount: amountNum,
           reason: reason.trim(),
           notes: notes.trim() || undefined,
@@ -1092,13 +1168,16 @@ function primaryActionStyle(busy: boolean, accent: string): React.CSSProperties 
 }
 
 function secondaryActionStyle(busy: boolean): React.CSSProperties {
+  // Ghost / muted secondary action. Neutral on rest, fills in slightly
+  // on hover (handled in the <style> block above). Reads as "not the
+  // primary thing here" without screaming danger like burgundy did.
   return {
     flex: 1,
     padding: "10px 14px",
-    border: `1px solid ${C.burgundy}`,
+    border: `1px solid ${C.sandDark}`,
     borderRadius: 999,
-    background: C.paper,
-    color: C.burgundy,
+    background: "transparent",
+    color: C.cacao,
     fontFamily: FONT_MONO,
     fontSize: 11,
     letterSpacing: 2,
@@ -1243,4 +1322,439 @@ function ConfirmModal({
       </div>
     </div>
   );
+}
+
+// ─── Products add modal ──────────────────────────────────────────────────────
+/**
+ * Staff-side "+ Productos" modal. Lists the catalog grouped by
+ * category with quantity steppers; submit hits orderRequestsApi.quickAdd
+ * which creates an already-accepted order on the session, decrements
+ * stock and broadcasts a `bill:updated` so the drawer refreshes.
+ *
+ * No "pending" intermediate state — staff doesn't want to confirm
+ * something they themselves typed.
+ */
+function ProductsAddModal({
+  sessionId,
+  onClose,
+  onDone,
+}: {
+  sessionId: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cart, setCart] = useState<Record<number, number>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    productsApi
+      .getAll()
+      .then((p) => {
+        if (cancelled) return;
+        setProducts(p);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const bump = (p: Product, delta: number) => {
+    setCart((prev) => {
+      const next = { ...prev };
+      const current = next[p.id] ?? 0;
+      const updated = Math.max(0, Math.min(current + delta, p.stock));
+      if (updated === 0) {
+        delete next[p.id];
+      } else {
+        next[p.id] = updated;
+      }
+      return next;
+    });
+  };
+
+  const cartEntries = Object.entries(cart)
+    .map(([id, qty]) => ({ id: Number(id), qty }))
+    .filter((e) => e.qty > 0);
+  const totalUnits = cartEntries.reduce((acc, e) => acc + e.qty, 0);
+  const totalAmount = cartEntries.reduce((acc, e) => {
+    const p = products.find((x) => x.id === e.id);
+    return acc + (p ? Number(p.price) * e.qty : 0);
+  }, 0);
+
+  // Group catalog by category for the simple drill-less list.
+  const grouped = products.reduce<Record<string, Product[]>>((acc, p) => {
+    if (!p.is_active) return acc;
+    (acc[p.category] = acc[p.category] ?? []).push(p);
+    return acc;
+  }, {});
+  const categories = Object.keys(grouped).sort();
+
+  const submit = async () => {
+    if (cartEntries.length === 0 || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await orderRequestsApi.quickAdd({
+        table_session_id: sessionId,
+        items: cartEntries.map((e) => ({ product_id: e.id, quantity: e.qty })),
+      });
+      onDone();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Agregar productos"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.55)",
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "center",
+        zIndex: 70,
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          background: C.paper,
+          borderRadius: 16,
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+          maxHeight: "100%",
+          overflow: "hidden",
+        }}
+      >
+        <header
+          style={{
+            padding: "18px 22px 12px",
+            borderBottom: `1px solid ${C.sand}`,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.gold,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Cargar a la cuenta
+          </span>
+          <h3
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              letterSpacing: 0.5,
+              color: C.ink,
+              margin: "2px 0 0",
+            }}
+          >
+            Agregar productos
+          </h3>
+        </header>
+
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "12px 18px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
+          {loading && (
+            <p
+              style={{
+                margin: 0,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                color: C.mute,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+              }}
+            >
+              Cargando productos...
+            </p>
+          )}
+          {!loading && categories.length === 0 && (
+            <p
+              style={{
+                margin: 0,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                color: C.mute,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+              }}
+            >
+              Sin productos disponibles
+            </p>
+          )}
+          {categories.map((cat) => (
+            <section key={cat}>
+              <div
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  letterSpacing: 2.5,
+                  color: C.cacao,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
+                {cat}
+              </div>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {grouped[cat].map((p) => {
+                  const qty = cart[p.id] ?? 0;
+                  const soldOut = p.stock === 0;
+                  const atCap = qty >= p.stock;
+                  return (
+                    <li
+                      key={p.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 0",
+                        borderBottom: `1px solid ${C.sand}`,
+                        opacity: soldOut ? 0.45 : 1,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontFamily: FONT_DISPLAY,
+                            fontSize: 16,
+                            color: C.ink,
+                            letterSpacing: 0.3,
+                          }}
+                        >
+                          {p.name}
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: FONT_MONO,
+                            fontSize: 10,
+                            letterSpacing: 1,
+                            color: C.gold,
+                            marginTop: 2,
+                          }}
+                        >
+                          {fmt(Number(p.price))}
+                          {soldOut && (
+                            <span style={{ marginLeft: 8, color: C.burgundy }}>
+                              Agotado
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => bump(p, -1)}
+                          disabled={qty === 0 || soldOut}
+                          aria-label={`Quitar ${p.name}`}
+                          style={stepperBtn(qty === 0 || soldOut)}
+                        >
+                          −
+                        </button>
+                        <span
+                          style={{
+                            minWidth: 22,
+                            textAlign: "center",
+                            fontFamily: FONT_DISPLAY,
+                            fontSize: 16,
+                            color: qty > 0 ? C.ink : C.mute,
+                          }}
+                        >
+                          {qty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => bump(p, 1)}
+                          disabled={soldOut || atCap}
+                          aria-label={`Agregar ${p.name}`}
+                          style={stepperBtn(soldOut || atCap)}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+
+        <footer
+          style={{
+            padding: "14px 18px",
+            borderTop: `1px solid ${C.sand}`,
+            background: C.cream,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 2.5,
+                color: C.mute,
+                textTransform: "uppercase",
+              }}
+            >
+              {totalUnits === 0
+                ? "Carrito vacío"
+                : `${totalUnits} ${totalUnits === 1 ? "producto" : "productos"}`}
+            </span>
+            <span
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 22,
+                color: totalUnits === 0 ? C.mute : C.gold,
+                letterSpacing: 1,
+              }}
+            >
+              {fmt(totalAmount)}
+            </span>
+          </div>
+          {error && (
+            <p
+              role="alert"
+              style={{
+                margin: 0,
+                padding: 8,
+                background: C.burgundySoft,
+                color: C.burgundy,
+                borderRadius: 8,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                letterSpacing: 0.5,
+              }}
+            >
+              {error}
+            </p>
+          )}
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              style={{
+                padding: "10px 18px",
+                border: `1px solid ${C.sand}`,
+                background: "transparent",
+                color: C.cacao,
+                borderRadius: 999,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                letterSpacing: 2,
+                textTransform: "uppercase",
+                cursor: submitting ? "not-allowed" : "pointer",
+                fontWeight: 700,
+              }}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={cartEntries.length === 0 || submitting}
+              style={{
+                padding: "10px 22px",
+                border: "none",
+                borderRadius: 999,
+                background:
+                  cartEntries.length === 0 || submitting
+                    ? C.sand
+                    : C.olive,
+                color:
+                  cartEntries.length === 0 || submitting ? C.mute : C.paper,
+                fontFamily: FONT_DISPLAY,
+                fontSize: 13,
+                letterSpacing: 2.5,
+                textTransform: "uppercase",
+                cursor:
+                  cartEntries.length === 0 || submitting
+                    ? "not-allowed"
+                    : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              {submitting ? "Agregando..." : "Agregar a la cuenta"}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function stepperBtn(disabled: boolean): React.CSSProperties {
+  return {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    border: `1px solid ${disabled ? C.sand : C.gold}`,
+    background: disabled ? C.cream : C.paper,
+    color: disabled ? C.mute : C.ink,
+    fontFamily: FONT_DISPLAY,
+    fontSize: 18,
+    lineHeight: 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
 }

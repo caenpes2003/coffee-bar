@@ -77,16 +77,27 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
   const sortedTables = sortTables(realTables);
   const sortedBars = sortTables(bars);
 
-  const [openTarget, setOpenTarget] = useState<Table | null>(null);
-  const [creatingBar, setCreatingBar] = useState(false);
+  const [openingWalkin, setOpeningWalkin] = useState(false);
+  const [openingTable, setOpeningTable] = useState<number | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
-  const handleSelect: Props["onSelect"] = (sessionId, number, table) => {
+  const handleSelect: Props["onSelect"] = async (sessionId, number, table) => {
     if (sessionId != null) {
       onSelect(sessionId, number, table);
       return;
     }
-    // No session yet → prompt for an optional custom name and open.
-    setOpenTarget(table);
+    // No session → open it directly. Tables don't ask for a name.
+    if (openingTable != null) return;
+    setOpeningTable(table.id);
+    setOpenError(null);
+    try {
+      await tableSessionsApi.openByAdmin(table.id);
+      onMutated?.();
+    } catch (err) {
+      setOpenError(getErrorMessage(err));
+    } finally {
+      setOpeningTable(null);
+    }
   };
 
   return (
@@ -169,13 +180,13 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
         </Section>
 
         <Section
-          label="Barras"
-          count={`${bars.filter((t) => t.status === "occupied").length}/${bars.length}`}
+          label="Cuentas sin mesa"
+          count={`${bars.length}`}
           action={
             <button
               type="button"
-              onClick={() => setCreatingBar(true)}
-              aria-label="Crear nueva barra"
+              onClick={() => setOpeningWalkin(true)}
+              aria-label="Abrir nueva cuenta sin mesa"
               style={{
                 fontFamily: FONT_MONO,
                 fontSize: 10,
@@ -190,7 +201,7 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
                 textTransform: "uppercase",
               }}
             >
-              + Nueva
+              + Nueva cuenta
             </button>
           }
         >
@@ -206,7 +217,7 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
                 padding: "8px 4px",
               }}
             >
-              Sin barras abiertas
+              Sin cuentas abiertas
             </p>
           ) : (
             <div
@@ -222,14 +233,6 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
                   table={t}
                   index={i}
                   onSelect={handleSelect}
-                  onDelete={async () => {
-                    try {
-                      await tablesApi.deleteBar(t.id);
-                      onMutated?.();
-                    } catch (err) {
-                      alert(getErrorMessage(err));
-                    }
-                  }}
                 />
               ))}
             </div>
@@ -237,21 +240,29 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
         </Section>
       </div>
 
-      {openTarget && (
-        <OpenSessionModal
-          table={openTarget}
-          onCancel={() => setOpenTarget(null)}
-          onOpened={() => {
-            setOpenTarget(null);
-            onMutated?.();
+      {openError && (
+        <div
+          style={{
+            margin: "0 12px 12px",
+            padding: "8px 10px",
+            background: C.terracottaSoft,
+            color: C.terracotta,
+            borderRadius: 8,
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            letterSpacing: 0.5,
           }}
-        />
+          role="alert"
+        >
+          {openError}
+        </div>
       )}
-      {creatingBar && (
-        <CreateBarModal
-          onCancel={() => setCreatingBar(false)}
-          onCreated={() => {
-            setCreatingBar(false);
+
+      {openingWalkin && (
+        <WalkInAccountModal
+          onCancel={() => setOpeningWalkin(false)}
+          onOpened={() => {
+            setOpeningWalkin(false);
             onMutated?.();
           }}
         />
@@ -317,17 +328,17 @@ function Section({
 /**
  * Bar cell — wider, single column, shows the custom_name prominently.
  * Visually distinct from TableCell so staff don't confuse the two.
+ * Walk-in accounts are auto-deleted when their session closes, so
+ * there's no manual delete affordance here.
  */
 function BarCell({
   table,
   index,
   onSelect,
-  onDelete,
 }: {
   table: Table;
   index: number;
   onSelect: Props["onSelect"];
-  onDelete: () => void | Promise<void>;
 }) {
   const isOccupied = table.status === "occupied";
   const customName = table.current_session?.custom_name ?? null;
@@ -424,119 +435,21 @@ function BarCell({
           </span>
         )}
       </button>
-      {!isOccupied && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (
-              window.confirm(
-                "¿Eliminar esta barra? Solo se puede si no tiene cuenta abierta.",
-              )
-            ) {
-              void onDelete();
-            }
-          }}
-          aria-label="Eliminar barra"
-          title="Eliminar"
-          style={{
-            position: "absolute",
-            top: 6,
-            right: 6,
-            width: 22,
-            height: 22,
-            borderRadius: 999,
-            border: "none",
-            background: "transparent",
-            color: C.mute,
-            fontSize: 12,
-            cursor: "pointer",
-            lineHeight: 1,
-          }}
-        >
-          ✕
-        </button>
-      )}
     </motion.div>
   );
 }
 
-function OpenSessionModal({
-  table,
+/**
+ * One modal for the entire "open a walk-in account" flow. Asks for a
+ * name + a confirmation, then hits the back-end endpoint that creates
+ * the virtual BAR row and opens its session in a single call.
+ */
+function WalkInAccountModal({
   onCancel,
   onOpened,
 }: {
-  table: Table;
   onCancel: () => void;
   onOpened: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const isBar = table.kind === "BAR";
-
-  const submit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (submitting) return;
-    if (isBar && !name.trim()) {
-      setError("Ingresa un nombre para la cuenta");
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      await tableSessionsApi.openByAdmin(table.id, name.trim() || undefined);
-      onOpened();
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <ModalShell onClose={onCancel} title={isBar ? "Abrir cuenta" : `Mesa ${pad(table.number)}`} subtitle={isBar ? "Barra" : "Abrir mesa"}>
-      <form onSubmit={submit} noValidate style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              letterSpacing: 2,
-              color: C.mute,
-              textTransform: "uppercase",
-              fontWeight: 600,
-            }}
-          >
-            Nombre {isBar ? "(requerido)" : "(opcional)"}
-          </span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={isBar ? "Ej. Camilo" : "Sin nombre"}
-            maxLength={80}
-            autoFocus
-            style={modalInputStyle}
-          />
-        </label>
-        {error && <ErrorBanner text={error} />}
-        <ModalButtons
-          submitting={submitting}
-          submitLabel={isBar ? "Abrir cuenta" : "Abrir mesa"}
-          onCancel={onCancel}
-        />
-      </form>
-    </ModalShell>
-  );
-}
-
-function CreateBarModal({
-  onCancel,
-  onCreated,
-}: {
-  onCancel: () => void;
-  onCreated: () => void;
 }) {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -546,14 +459,14 @@ function CreateBarModal({
     e.preventDefault();
     if (submitting) return;
     if (!name.trim()) {
-      setError("Ingresa un nombre para la barra");
+      setError("Ingresa un nombre para la cuenta");
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
-      await tablesApi.createBar(name.trim());
-      onCreated();
+      await tablesApi.openWalkInAccount(name.trim());
+      onOpened();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -562,8 +475,27 @@ function CreateBarModal({
   };
 
   return (
-    <ModalShell onClose={onCancel} title="Nueva barra" subtitle="Cuenta sin mesa">
-      <form onSubmit={submit} noValidate style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <ModalShell
+      onClose={onCancel}
+      title="Nueva cuenta sin mesa"
+      subtitle="Confirmar"
+    >
+      <form
+        onSubmit={submit}
+        noValidate
+        style={{ display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p
+          style={{
+            margin: 0,
+            fontFamily: FONT_UI,
+            fontSize: 13,
+            color: C.cacao,
+            lineHeight: 1.5,
+          }}
+        >
+          ¿Seguro que deseas abrir una nueva cuenta sin mesa?
+        </p>
         <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <span
             style={{
@@ -575,13 +507,13 @@ function CreateBarModal({
               fontWeight: 600,
             }}
           >
-            Nombre de la barra
+            Nombre de la cuenta
           </span>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Ej. Barra 1"
+            placeholder="Ej. Camilo"
             maxLength={80}
             autoFocus
             style={modalInputStyle}
@@ -590,7 +522,7 @@ function CreateBarModal({
         {error && <ErrorBanner text={error} />}
         <ModalButtons
           submitting={submitting}
-          submitLabel="Crear barra"
+          submitLabel="Abrir cuenta"
           onCancel={onCancel}
         />
       </form>

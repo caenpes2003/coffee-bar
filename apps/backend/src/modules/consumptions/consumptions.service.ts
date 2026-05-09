@@ -223,6 +223,20 @@ export class ConsumptionsService {
       });
     }
 
+    // Block over-payment: the cashier shouldn't accidentally record a
+    // partial bigger than what's left to pay. We re-read the bill total
+    // (which already nets out previous partials) and refuse if amount
+    // would push it negative. Equality is allowed — paying the exact
+    // remaining is fine; staff just won't normally use partial-payment
+    // for that, they use "Cobrar y cerrar".
+    const pending = Number(session.total_consumption);
+    if (amount > pending + 0.001) {
+      throw new BadRequestException({
+        message: `El pago supera el pendiente ($${pending}). Usa "Cobrar y cerrar" para liquidar.`,
+        code: "PARTIAL_PAYMENT_EXCEEDS_PENDING",
+      });
+    }
+
     // Stored as negative so the existing sum reducer turns "total
     // consumption" into "remaining to pay" without special-casing.
     const negative = -this.round(amount);
