@@ -8,7 +8,59 @@ import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 
+/**
+ * Zona horaria operativa del bar. Todo el módulo de ventas (daily_breakdown,
+ * hourly_breakdown, weekday_breakdown, formatDayKey) usa `new Date()` y
+ * lee componentes locales (`getHours`, `getDate`, etc.). Si el proceso
+ * Node corre en una TZ distinta, las ventas de la noche caen "al día
+ * siguiente" y los picos por hora se desplazan.
+ *
+ * Estrategia: fallamos el startup si `TZ` no está fijada explícitamente.
+ * Forzar al operador a setearla en su .env / deploy config es mejor que
+ * dejar que un servidor UTC corrompa los reportes en silencio.
+ *
+ * Para cambiar de bar (digamos a México), basta cambiar este valor +
+ * `TZ` en .env. Sin migración de datos: los timestamps en BD son TIMESTAMP
+ * UTC y Node los lee en la TZ del proceso al hacer getHours/getDate.
+ */
+const EXPECTED_TZ = "America/Bogota";
+
+function assertTimezone(): void {
+  const envTz = process.env.TZ;
+  const runtimeTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  if (!envTz) {
+    console.error(
+      `\n[BOOT] ❌ process.env.TZ no está fijada.\n` +
+        `         Esperada: ${EXPECTED_TZ}. Fijala en .env o en la config del host.\n` +
+        `         Sin esto los reportes de ventas se desplazan 5 horas en hosts UTC.\n`,
+    );
+    process.exit(1);
+  }
+
+  if (envTz !== EXPECTED_TZ) {
+    console.error(
+      `\n[BOOT] ❌ process.env.TZ="${envTz}" no coincide con la esperada (${EXPECTED_TZ}).\n` +
+        `         Si cambiaste el bar de país, actualizá EXPECTED_TZ en main.ts.\n`,
+    );
+    process.exit(1);
+  }
+
+  if (runtimeTz !== EXPECTED_TZ) {
+    console.error(
+      `\n[BOOT] ❌ Node resolvió la TZ como "${runtimeTz}" pero TZ=${envTz}.\n` +
+        `         Esto suele significar que el SO ignora la variable.\n` +
+        `         Verificá: docker container env, systemd unit, o host TZ.\n`,
+    );
+    process.exit(1);
+  }
+
+  console.log(`[BOOT] ✓ Timezone: ${runtimeTz}`);
+}
+
 async function bootstrap() {
+  assertTimezone();
+
   const app = await NestFactory.create(AppModule);
   const allowedOrigins = (
     process.env.FRONTEND_URLS ??

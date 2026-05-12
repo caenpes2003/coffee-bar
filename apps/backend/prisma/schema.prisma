@@ -18,6 +18,25 @@ enum TableSessionStatus {
   ordering
   closing
   closed
+  // "void": sesión cerrada sin pagar. Refleja la realidad operativa de
+  // un bar: cliente que se va sin pagar, cierre administrativo por error,
+  // mesa de cortesía no facturada. NO afecta el ledger contable — los
+  // Consumption(type=product) ya entraron al revenue al momento de la
+  // entrega. El void solo deja trazabilidad para auditoría (¿cuántas
+  // mesas anulé este mes? ¿cuál fue la razón más frecuente?).
+  void
+}
+
+// Razones predefinidas de void. Lista finita para que los reportes
+// puedan agruparlas. "other" admite texto libre adicional en
+// TableSession.void_other_detail. NO se agregan razones nuevas sin
+// migration — mantener este enum chico es lo que le da valor a los
+// reportes ("X% de voids fueron por clientes que se fueron").
+enum SessionVoidReason {
+  customer_left      // Cliente se fue sin pagar
+  admin_error        // Sesión abierta por error (mesa equivocada, doble apertura)
+  comp               // Cortesía (invitación de la casa)
+  other              // Otro motivo — requiere texto en void_other_detail
 }
 
 enum QueueStatus {
@@ -158,6 +177,19 @@ model TableSession {
   // We deliberately keep this as a single timestamp instead of a Payment
   // table because the read model never needs partial-payment math.
   paid_at             DateTime?
+  // Void: sesión cerrada SIN cobro. Se setea por POST /table-sessions/:id/void
+  // con razón obligatoria. Cuando esto está poblado, `paid_at` queda null
+  // y `closed_at` se setea simultáneamente. No reversible — si fue error,
+  // hay que registrar un movimiento manual.
+  voided_at           DateTime?
+  void_reason         SessionVoidReason?
+  // Texto libre solo cuando void_reason == "other". Si void_reason es
+  // cualquier otra, este campo se ignora en lectura (lo enforce el service).
+  void_other_detail   String?
+  // Quién hizo el void (admin email o "system" para migraciones legacy).
+  // No es FK a User porque también queremos preservar emails de admins
+  // borrados — el dato histórico no debe perderse.
+  voided_by           String?
   metadata            Json?
   created_at          DateTime           @default(now())
   updated_at          DateTime           @updatedAt

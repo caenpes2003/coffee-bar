@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   salesInsightsApi,
@@ -9,6 +9,7 @@ import {
   type SalesInsightsResponse,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useSocket } from "@/lib/socket/useSocket";
 import {
   C,
   FONT_DISPLAY,
@@ -76,6 +77,51 @@ export default function AdminSalesPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Auto-refresh por socket: cuando llega un evento de venta-relacionada
+  // (orden entregada, refund, ajuste), reagendamos un refetch con
+  // debounce. El debounce evita martillear el backend si entregan 5
+  // pedidos seguidos al iniciar el bar (5 eventos en 2s = 1 refetch).
+  //
+  // Indicador "live": el flag `liveJustRefreshed` se prende 1.2s después
+  // del refetch para mostrar feedback visual sutil de que el dashboard
+  // está vivo (pulse dorado en el header del KPI strip).
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [liveJustRefreshed, setLiveJustRefreshed] = useState(false);
+
+  const scheduleRefresh = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void refreshRef.current().then(() => {
+        setLiveJustRefreshed(true);
+        setTimeout(() => setLiveJustRefreshed(false), 1200);
+      });
+    }, 1500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  useSocket({
+    staff: true,
+    // Una venta confirmada = orden que pasa a delivered. El payload
+    // viene como Order parcial; cuando `status === "delivered"` sabemos
+    // que el ledger acaba de recibir uno o más Consumption(product).
+    onOrderUpdated: (payload) => {
+      const status = (payload as { status?: string } | null)?.status;
+      if (status === "delivered") scheduleRefresh();
+    },
+    // Refunds y ajustes alteran ingresos del día (refund excluye una
+    // venta; ajustes/descuentos no, pero el bill view sí cambia).
+    onBillUpdated: () => scheduleRefresh(),
+    // Cuando una sesión cierra, los tickets cambian (avg_ticket nuevo).
+    onTableSessionClosed: () => scheduleRefresh(),
+  });
 
   return (
     <>
@@ -180,6 +226,7 @@ export default function AdminSalesPage() {
             summary={data.summary}
             previous={data.previous_period}
             daily={data.daily_breakdown}
+            justRefreshed={liveJustRefreshed}
           />
 
           {/* Tendencias: gráficos del comportamiento temporal del bar.
@@ -628,10 +675,14 @@ function SalesKpiStrip({
   summary,
   previous,
   daily,
+  justRefreshed,
 }: {
   summary: SalesInsightsResponse["summary"];
   previous: SalesInsightsResponse["previous_period"];
   daily: SalesInsightsResponse["daily_breakdown"];
+  /** Se prende 1.2s después de un refresh por socket — pinta un dot
+   *  pulsante para que el operador vea que el dashboard está vivo. */
+  justRefreshed?: boolean;
 }) {
   return (
     <div
@@ -649,6 +700,49 @@ function SalesKpiStrip({
         borderBottom: `1px solid ${C.sand}`,
       }}
     >
+      {/* Indicador "live" — aparece arriba a la derecha cuando se acaba
+          de refrescar por socket. Dot dorado pulsante con la palabra
+          "Actualizado". Se va solo después de 1.2s vía justRefreshed. */}
+      <AnimatePresence>
+        {justRefreshed && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: DUR_BASE / 1000, ease: [0.16, 1, 0.3, 1] }}
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 24,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: `color-mix(in srgb, ${C.goldSoft} 60%, ${C.paper})`,
+              border: `1px solid ${C.gold}`,
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 1.2,
+              color: C.cacao,
+              fontWeight: 800,
+              textTransform: "uppercase",
+              pointerEvents: "none",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: C.gold,
+              }}
+            />
+            Actualizado
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div
         style={{
           display: "grid",
@@ -954,7 +1048,6 @@ function computeDelta(
 // dentro del tooltip), eje X con etiquetas mínimas. Hover dispara un
 // tooltip absoluto posicionado sobre la barra.
 
-const CHART_HEIGHT = 160;
 const CHART_BAR_GAP_RATIO = 0.18;
 
 const WEEKDAY_LABELS_ES = ["D", "L", "M", "M", "J", "V", "S"] as const;
@@ -1116,51 +1209,56 @@ type BarValue = {
 
 function BarChart({ values, max }: { values: BarValue[]; max: number }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Arquitectura del chart:
+  //   - Barras: SVG con preserveAspectRatio="none" → estirar libre al ancho
+  //     del contenedor. Los rects se deforman bien (no perdemos info).
+  //   - Labels eje X: HTML normal abajo del SVG, así respetan tipografía
+  //     real y no se estiran. Solucionan el problema de texto borroso.
+  //   - Hit area: HTML overlay encima del SVG, captura hover preciso por
+  //     columna sin depender del SVG (más fácil de mantener).
+  //   - Tooltip: HTML absoluto, posicionado por porcentaje del slot.
   const W = 100;
-  const H = CHART_HEIGHT;
-  const labelStripH = 16;
-  const chartH = H - labelStripH;
+  const chartH = 130; // SVG interno solo (sin labels)
   const slotW = values.length > 0 ? W / values.length : 0;
   const barW = slotW * (1 - CHART_BAR_GAP_RATIO);
   const barOffset = (slotW - barW) / 2;
+  const slotPct = values.length > 0 ? 100 / values.length : 0;
 
   return (
     <div style={{ position: "relative" }}>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        style={{
-          width: "100%",
-          height: H,
-          display: "block",
-          overflow: "visible",
-        }}
-      >
-        {/* Línea base sutil sobre el strip de labels */}
-        <line
-          x1={0}
-          x2={W}
-          y1={chartH}
-          y2={chartH}
-          stroke={C.sand}
-          strokeWidth={0.4}
-        />
-        {values.map((v, i) => {
-          const h = max > 0 ? (v.value / max) * (chartH - 2) : 0;
-          const x = i * slotW + barOffset;
-          const y = chartH - h;
-          const isHover = hoverIdx === i;
-          // Stagger limitado: con 30 barras un delay de 25ms haría 750ms
-          // total (lento). Capamos a 12ms para que la animación complete
-          // bajo medio segundo incluso con muchos puntos.
-          const delay = Math.min(i * 0.012, 0.4);
-          return (
-            <g key={v.key}>
-              {/* Barra real con animación de crecimiento desde la base.
-                  Animamos el `y` y el `height` (no scaleY) para que el
-                  origen quede pegado al baseline sin transform-origin
-                  jugando contra el viewBox. */}
+      <div style={{ position: "relative", height: chartH }}>
+        <svg
+          viewBox={`0 0 ${W} ${chartH}`}
+          preserveAspectRatio="none"
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "block",
+            overflow: "visible",
+          }}
+        >
+          {/* Línea base */}
+          <line
+            x1={0}
+            x2={W}
+            y1={chartH}
+            y2={chartH}
+            stroke={C.sand}
+            strokeWidth={0.4}
+            vectorEffect="non-scaling-stroke"
+          />
+          {values.map((v, i) => {
+            const h = max > 0 ? (v.value / max) * (chartH - 2) : 0;
+            const x = i * slotW + barOffset;
+            const y = chartH - h;
+            const isHover = hoverIdx === i;
+            // Stagger limitado: con 30 barras un delay de 25ms haría 750ms
+            // total. Capamos a 12ms para que cierre en < 0.5s aun con muchas.
+            const delay = Math.min(i * 0.012, 0.4);
+            return (
               <motion.rect
+                key={v.key}
                 initial={{ y: chartH, height: 0, opacity: 0 }}
                 animate={{
                   y,
@@ -1176,55 +1274,83 @@ function BarChart({ values, max }: { values: BarValue[]; max: number }) {
                 width={barW}
                 fill={v.color}
               />
-              {/* Hit area transparente (slot completo) para capturar
-                  hover/touch incluso en barras de altura cero. */}
-              <rect
-                x={i * slotW}
-                y={0}
-                width={slotW}
-                height={chartH}
-                fill="transparent"
-                onMouseEnter={() => setHoverIdx(i)}
-                onMouseLeave={() => setHoverIdx(null)}
-                style={{ cursor: "pointer" }}
-              >
-                <title>{v.tooltip}</title>
-              </rect>
-              {v.label && (
-                <text
-                  x={i * slotW + slotW / 2}
-                  y={chartH + 11}
-                  textAnchor="middle"
-                  fontFamily={FONT_MONO}
-                  fontSize={6.5}
-                  fill={C.mute}
-                  fontWeight={700}
-                  style={{ letterSpacing: "0.5px" }}
-                >
-                  {v.label}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-      {/* Tooltip flotante. Lo renderizamos en HTML (no SVG) para que el
-          texto respete tipografía global y sea fácilmente estilizable. */}
+            );
+          })}
+        </svg>
+        {/* Hit areas en HTML — un overlay por columna, ocupa el slot
+            completo (no solo la barra) para que el hover funcione aun en
+            barras de altura cero o muy chicas. */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+          }}
+        >
+          {values.map((v, i) => (
+            <div
+              key={v.key}
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx(null)}
+              title={v.tooltip}
+              style={{
+                flex: 1,
+                cursor: "pointer",
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Strip de etiquetas X en HTML. Tipografía respetada, no se
+          deforma al estirar el contenedor. Cada label ocupa el ancho de
+          su slot — alineación matemática con las barras por flex 1. */}
+      <div
+        style={{
+          display: "flex",
+          marginTop: 6,
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          letterSpacing: 0.5,
+          color: C.mute,
+          fontWeight: 700,
+          textTransform: "uppercase",
+        }}
+        aria-hidden
+      >
+        {values.map((v) => (
+          <div
+            key={v.key}
+            style={{
+              flex: 1,
+              textAlign: "center",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {v.label}
+          </div>
+        ))}
+      </div>
+
+      {/* Tooltip flotante posicionado por porcentaje del slot. */}
       {hoverIdx != null && values[hoverIdx] && (
         <div
           role="tooltip"
           style={{
             position: "absolute",
             top: 0,
-            left: `${(hoverIdx + 0.5) * (100 / values.length)}%`,
+            left: `${(hoverIdx + 0.5) * slotPct}%`,
             transform: "translate(-50%, calc(-100% - 6px))",
             background: C.ink,
             color: C.paper,
             fontFamily: FONT_MONO,
-            fontSize: 10,
-            letterSpacing: 0.4,
+            fontSize: 11,
+            letterSpacing: 0.3,
             fontWeight: 700,
-            padding: "5px 9px",
+            padding: "6px 10px",
             borderRadius: 8,
             whiteSpace: "nowrap",
             pointerEvents: "none",

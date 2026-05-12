@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { TableSessionsService } from "./table-sessions.service";
 import { OpenSessionDto } from "./dto/open-session.dto";
+import { VoidSessionDto } from "./dto/void-session.dto";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
 import { SessionAccessGuard } from "../auth/guards/session-access.guard";
@@ -205,6 +206,38 @@ export class TableSessionsController {
   @AuthKinds("admin")
   async markPaid(@Param("id", ParseIntPipe) id: number) {
     const session = await this.sessions.markPaid(id);
+    return this.sessions.serialize(session);
+  }
+
+  /**
+   * Admin cierra la sesión SIN registrar cobro. Caso de uso real en bar:
+   * cliente que se va sin pagar, sesión abierta por error, cortesía de la
+   * casa. Requiere razón obligatoria (enum) + texto si reason="other".
+   *
+   * Por qué endpoint separado de /close: forzamos a que el operador haga
+   * una declaración explícita ("esto NO se cobró por X razón") en lugar
+   * de cerrar la sesión "en silencio". El /close plano ahora rechaza
+   * sesiones sin paid_at — la única forma de cerrar sin cobro es por acá.
+   */
+  @Post("table-sessions/:id/void")
+  @UseGuards(JwtGuard)
+  @AuthKinds("admin")
+  async voidSession(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: VoidSessionDto,
+    @CurrentAuth() auth: AuthPayload,
+  ) {
+    if (!auth || auth.kind !== "admin") {
+      throw new ForbiddenException({
+        message: "Admin token required",
+        code: "AUTH_NOT_ADMIN",
+      });
+    }
+    const session = await this.sessions.voidSession(id, {
+      reason: dto.reason,
+      otherDetail: dto.other_detail,
+      voidedBy: auth.name,
+    });
     return this.sessions.serialize(session);
   }
 }

@@ -9,6 +9,7 @@ import {
   OrderRequestStatus,
   OrderStatus,
   Prisma,
+  SessionVoidReason,
   TableSession,
   TableSessionStatus,
 } from "@prisma/client";
@@ -115,6 +116,23 @@ export class TableSessionsService {
     }
     if (session.status === TableSessionStatus.closed) {
       return session;
+    }
+    // Política: el `close` plano solo cierra sesiones YA pagadas o
+    // sesiones SIN consumo (mesa que se abrió y se fue sin pedir nada).
+    // Antes este endpoint cerraba sin verificar nada, lo que producía
+    // sesiones "limbo" (closed + paid=null + consumo>0) que ensuciaban
+    // auditorías. Hoy hay tres rutas explícitas:
+    //   - markPaid: cierra y registra cobro (flujo normal con consumo).
+    //   - voidSession: cierra sin cobro CON razón obligatoria (hubo
+    //     consumo que no se cobró).
+    //   - close: solo para sesiones ya pagadas o sin consumo.
+    const consumption = Number(session.total_consumption);
+    if (session.paid_at == null && consumption > 0) {
+      throw new BadRequestException({
+        message:
+          "Session not paid. Use /mark-paid to cobrar y cerrar, or /void with a reason if no charge will be made.",
+        code: "SESSION_VOID_REQUIRED",
+      });
     }
 
     const closed = await this.prisma.$transaction(async (tx) => {
@@ -272,6 +290,96 @@ export class TableSessionsService {
    * Blocks if there are active orders (preserves the `close()` safety):
    * staff shouldn't close while drinks are still being prepared.
    */
+  /**
+   * Cierra una sesión SIN registrar cobro. Caso de uso real en bar:
+   *   - Cliente se fue sin pagar.
+   *   - Mesa abierta por error.
+   *   - Cortesía de la casa.
+   *
+   * Trazabilidad: queda `voided_at`, `void_reason` (enum predefinido) y
+   * `voided_by` (admin email/id) para auditoría. Las consumptions del
+   * tipo `product` que ya se entregaron NO se reversan — siguen siendo
+   * inventario que el bar ya entregó (costo real), pero NO contó como
+   * revenue del día porque sales-insights filtra por created_at de la
+   * Consumption, no por estado de la sesión. El void NO afecta el
+   * dashboard de ventas — solo da visibilidad de "fugas" en reportes
+   * dedicados.
+   *
+   * No reversible (decisión de producto): si el operador se equivoca y
+   * voidea una sesión que sí debía cobrarse, hay que registrar un
+   * movimiento manual aparte. Esto previene que alguien "deshaga" voids
+   * para ocultar pérdidas.
+   */
+  async voidSession(
+    sessionId: number,
+    opts: {
+      reason: SessionVoidReason;
+      otherDetail?: string;
+      voidedBy: string;
+    },
+  ): Promise<TableSession> {
+    const session = await this.requireSessionExists(sessionId);
+
+    if (session.status === TableSessionStatus.closed) {
+      throw new BadRequestException({
+        message: "Session is already closed",
+        code: "TABLE_SESSION_CLOSED",
+      });
+    }
+    if (session.paid_at != null) {
+      throw new BadRequestException({
+        message: "Session has been paid; use /close instead of /void",
+        code: "TABLE_SESSION_ALREADY_PAID",
+      });
+    }
+    if (session.voided_at != null) {
+      throw new BadRequestException({
+        message: "Session is already voided",
+        code: "TABLE_SESSION_ALREADY_VOID",
+      });
+    }
+    // `other` requiere texto: forzamos al operador a explicar el motivo
+    // para que después tenga sentido en reportes. Para los enums fijos
+    // el otherDetail se ignora silenciosamente (no contamina la BD).
+    const detail =
+      opts.reason === "other" ? (opts.otherDetail?.trim() ?? "") : null;
+    if (opts.reason === "other" && (!detail || detail.length < 3)) {
+      throw new BadRequestException({
+        message: '"other" reason requires a free-text detail (min 3 chars)',
+        code: "SESSION_VOID_DETAIL_REQUIRED",
+      });
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // No verificamos active orders: el void existe precisamente para
+      // limpiar sesiones "rotas". Si hay órdenes activas, las dejamos
+      // pero la sesión se cierra — futuras consultas las verán huérfanas
+      // por table_session_id pero la sesión ya no es operable.
+      const now = new Date();
+      const updated = await tx.tableSession.update({
+        where: { id: sessionId },
+        data: {
+          status: TableSessionStatus.void,
+          closed_at: now,
+          voided_at: now,
+          void_reason: opts.reason,
+          void_other_detail: detail,
+          voided_by: opts.voidedBy,
+          payment_requested_at: null,
+        },
+      });
+      await this.projection.onSessionClosed(session.table_id, tx);
+      return updated;
+    });
+
+    this.realtime.emitTableSessionClosed(result.id, this.serialize(result));
+    const snapshot = await this.projection.snapshotForBroadcast(
+      session.table_id,
+    );
+    if (snapshot) this.realtime.emitTableUpdated(snapshot);
+    return result;
+  }
+
   async markPaid(sessionId: number): Promise<TableSession> {
     const session = await this.requireSessionExists(sessionId);
     if (session.status === TableSessionStatus.closed) {

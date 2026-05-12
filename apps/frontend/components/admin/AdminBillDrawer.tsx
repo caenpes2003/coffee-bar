@@ -39,6 +39,7 @@ const pad = (n: number) => String(n).padStart(2, "0");
 
 const C = {
   cream: "#FDF8EC",
+  parchment: "#F8F1E4",
   paper: "#FFFDF8",
   sand: "#F1E6D2",
   sandDark: "#E6D8BF",
@@ -101,6 +102,10 @@ export function AdminBillDrawer({
   const [confirmOpen, setConfirmOpen] = useState<null | {
     kind: "mark-paid" | "close";
   }>(null);
+  // Modal separado para anular (void): requiere razón obligatoria, no
+  // es un confirm simple. Se dispara cuando el total > 0 y no se cobró
+  // — el flujo "close" simple solo aplica a cuentas con total 0.
+  const [voidOpen, setVoidOpen] = useState(false);
 
   const load = useCallback(() => {
     if (sessionId == null) return;
@@ -161,6 +166,24 @@ export function AdminBillDrawer({
         await tableSessionsApi.close(sessionId);
         onClose();
       }
+    } catch (err) {
+      setPaymentError(getErrorMessage(err));
+    } finally {
+      setPaymentBusy(null);
+    }
+  }
+
+  async function runVoidAction(body: {
+    reason: "customer_left" | "admin_error" | "comp" | "other";
+    other_detail?: string;
+  }) {
+    if (sessionId == null) return;
+    setPaymentBusy("close");
+    setPaymentError(null);
+    try {
+      await tableSessionsApi.voidSession(sessionId, body);
+      setVoidOpen(false);
+      onClose();
     } catch (err) {
       setPaymentError(getErrorMessage(err));
     } finally {
@@ -386,7 +409,17 @@ export function AdminBillDrawer({
               )}
               <button
                 type="button"
-                onClick={() => setConfirmOpen({ kind: "close" })}
+                onClick={() => {
+                  if (bill.summary.total > 0) {
+                    // Anular: requiere razón obligatoria por trazabilidad.
+                    setVoidOpen(true);
+                  } else {
+                    // Cuenta vacía (no se consumió nada): cierre simple sin
+                    // razón. El backend permite /close cuando paid_at != null
+                    // O cuando total = 0 (revisar service si cambia).
+                    setConfirmOpen({ kind: "close" });
+                  }
+                }}
                 disabled={paymentBusy != null}
                 className="crown-btn-ghost"
                 style={secondaryActionStyle(paymentBusy === "close")}
@@ -394,7 +427,7 @@ export function AdminBillDrawer({
                 {paymentBusy === "close"
                   ? "Cerrando..."
                   : bill.summary.total > 0
-                    ? "Cerrar sin cobrar"
+                    ? "Anular sin cobrar"
                     : "Cerrar cuenta"}
               </button>
             </div>
@@ -440,6 +473,16 @@ export function AdminBillDrawer({
           onDone={() => {
             setActionOpen(null);
           }}
+        />
+      )}
+
+      {voidOpen && (
+        <VoidReasonModal
+          tableNumber={tableNumber}
+          totalPending={bill?.summary.total ?? 0}
+          busy={paymentBusy === "close"}
+          onSubmit={(body) => void runVoidAction(body)}
+          onCancel={() => setVoidOpen(false)}
         />
       )}
 
@@ -1904,4 +1947,317 @@ function stepperBtn(disabled: boolean): React.CSSProperties {
     alignItems: "center",
     justifyContent: "center",
   };
+}
+
+// ─── Modal: anular sesión con razón ───────────────────────────────────────
+//
+// Sale al elegir "Anular sin cobrar" en una sesión con total > 0. Razón
+// obligatoria (enum). Si elige "other" el detalle se vuelve obligatorio
+// — el backend también lo enforce, pero validar acá ahorra un round-trip.
+type VoidReason = "customer_left" | "admin_error" | "comp" | "other";
+
+const VOID_REASONS: { key: VoidReason; label: string; hint: string }[] = [
+  {
+    key: "customer_left",
+    label: "Cliente se fue sin pagar",
+    hint: "El más común — se les escapó la cuenta.",
+  },
+  {
+    key: "admin_error",
+    label: "Sesión abierta por error",
+    hint: "Mesa equivocada, doble apertura, etc.",
+  },
+  {
+    key: "comp",
+    label: "Cortesía de la casa",
+    hint: "Invitación, mesa de prensa, etc.",
+  },
+  {
+    key: "other",
+    label: "Otro motivo",
+    hint: "Requiere detalle escrito abajo.",
+  },
+];
+
+function VoidReasonModal({
+  tableNumber,
+  totalPending,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  tableNumber: number | null;
+  totalPending: number;
+  busy: boolean;
+  onSubmit: (body: { reason: VoidReason; other_detail?: string }) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState<VoidReason>("customer_left");
+  const [detail, setDetail] = useState("");
+  const detailRequired = reason === "other";
+  const detailValid = !detailRequired || detail.trim().length >= 3;
+  const canSubmit = !busy && detailValid;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Anular sesión sin cobro"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 90,
+        padding: 20,
+      }}
+      onClick={busy ? undefined : onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          background: C.paper,
+          borderRadius: 16,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.burgundy,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Anular sin cobrar
+          </span>
+          <h3
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              letterSpacing: 0.5,
+              color: C.ink,
+              margin: "4px 0 0",
+            }}
+          >
+            {tableNumber != null ? `Mesa ${tableNumber}` : "Sesión"} ·
+            pendiente {formatCop(totalPending)}
+          </h3>
+          <p
+            style={{
+              margin: "8px 0 0",
+              fontFamily: FONT_UI,
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: C.cacao,
+            }}
+          >
+            La cuenta queda cerrada SIN cobro. Esto NO afecta el revenue del
+            día (los productos ya entregados siguen contando como vendidos),
+            pero deja registro auditable de la mesa anulada.{" "}
+            <strong style={{ color: C.burgundy }}>
+              No se puede deshacer.
+            </strong>
+          </p>
+        </div>
+
+        <fieldset
+          style={{
+            border: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <legend
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              letterSpacing: 2,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 700,
+              marginBottom: 4,
+            }}
+          >
+            Razón
+          </legend>
+          {VOID_REASONS.map((r) => {
+            const active = reason === r.key;
+            return (
+              <label
+                key={r.key}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  padding: "10px 12px",
+                  border: `1px solid ${active ? C.ink : C.sand}`,
+                  background: active ? C.parchment : C.paper,
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  transition:
+                    "background 160ms cubic-bezier(0.16,1,0.3,1), border-color 160ms cubic-bezier(0.16,1,0.3,1)",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="void-reason"
+                  value={r.key}
+                  checked={active}
+                  onChange={() => setReason(r.key)}
+                  style={{ marginTop: 2 }}
+                />
+                <div>
+                  <div
+                    style={{
+                      fontFamily: FONT_UI,
+                      fontSize: 14,
+                      color: C.ink,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {r.label}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: FONT_MONO,
+                      fontSize: 11,
+                      color: C.mute,
+                      letterSpacing: 0.4,
+                      marginTop: 2,
+                    }}
+                  >
+                    {r.hint}
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </fieldset>
+
+        {detailRequired && (
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 9,
+                letterSpacing: 2,
+                color: C.mute,
+                textTransform: "uppercase",
+                fontWeight: 700,
+              }}
+            >
+              Detalle (obligatorio)
+            </span>
+            <textarea
+              autoFocus
+              value={detail}
+              onChange={(e) => setDetail(e.target.value)}
+              placeholder="Ej: cliente discutió la cuenta, decidí no cobrar"
+              minLength={3}
+              maxLength={200}
+              rows={2}
+              style={{
+                padding: "8px 10px",
+                border: `1px solid ${C.sand}`,
+                borderRadius: 8,
+                background: C.paper,
+                color: C.ink,
+                fontFamily: FONT_UI,
+                fontSize: 13,
+                resize: "vertical",
+                outline: "none",
+              }}
+            />
+          </label>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="crown-btn crown-btn-ghost"
+            style={{
+              flex: 1,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: `1px solid ${C.sand}`,
+              background: C.paper,
+              color: C.cacao,
+              fontFamily: FONT_UI,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: busy ? "not-allowed" : "pointer",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              onSubmit({
+                reason,
+                other_detail: detailRequired ? detail.trim() : undefined,
+              })
+            }
+            disabled={!canSubmit}
+            className="crown-btn crown-btn-primary"
+            style={{
+              flex: 1.4,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "none",
+              background: canSubmit ? C.burgundy : C.sand,
+              color: canSubmit ? C.paper : C.mute,
+              fontFamily: FONT_UI,
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            {busy ? "Anulando…" : "Anular sin cobrar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatCop(n: number): string {
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: "COP",
+    maximumFractionDigits: 0,
+  }).format(n);
 }

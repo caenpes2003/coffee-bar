@@ -171,6 +171,26 @@ export const tableSessionsApi = {
     adminApi
       .post<TableSession>(`/table-sessions/${sessionId}/mark-paid`)
       .then((r) => r.data),
+  /**
+   * Admin cierra la sesión SIN cobro, con razón obligatoria. Casos:
+   *   - customer_left: cliente se fue sin pagar.
+   *   - admin_error: sesión abierta por error.
+   *   - comp: cortesía de la casa.
+   *   - other: requiere `other_detail` con texto libre.
+   *
+   * No es reversible: si fue error registrar el void, hay que crear un
+   * movimiento manual aparte. Esto protege la trazabilidad.
+   */
+  voidSession: (
+    sessionId: number,
+    body: {
+      reason: "customer_left" | "admin_error" | "comp" | "other";
+      other_detail?: string;
+    },
+  ): Promise<TableSession> =>
+    adminApi
+      .post<TableSession>(`/table-sessions/${sessionId}/void`, body)
+      .then((r) => r.data),
 };
 
 // ─── Order Requests ───────────────────────────────────────────────────────────
