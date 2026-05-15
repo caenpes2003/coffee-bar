@@ -19,6 +19,7 @@ import {
   orderRequestsApi,
   productsApi,
   tableSessionsApi,
+  type ProductRecipeSlotView,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import type {
@@ -27,6 +28,10 @@ import type {
   Product,
   TableSession,
 } from "@coffee-bar/shared";
+import {
+  CompositionPicker,
+  type CompositionPick,
+} from "../orders/CompositionPicker";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -1404,8 +1409,15 @@ function ProductsAddModal({
   onDone: () => void;
 }) {
   const [products, setProducts] = useState<Product[]>([]);
+  const [recipes, setRecipes] = useState<Record<number, ProductRecipeSlotView[]>>(
+    {},
+  );
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState<Record<number, number>>({});
+  const [cartUnits, setCartUnits] = useState<Record<number, CompositionPick[][]>>(
+    {},
+  );
+  const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Drill-down navigation: categories grid → products inside one
@@ -1417,11 +1429,11 @@ function ProductsAddModal({
 
   useEffect(() => {
     let cancelled = false;
-    productsApi
-      .getAll()
-      .then((p) => {
+    Promise.all([productsApi.getAll(), productsApi.getRecipesBulk()])
+      .then(([p, r]) => {
         if (cancelled) return;
         setProducts(p);
+        setRecipes(r);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -1435,11 +1447,29 @@ function ProductsAddModal({
     };
   }, []);
 
+  const isArmable = (p: Product): boolean => {
+    const r = recipes[p.id];
+    if (!r || r.length === 0) return false;
+    return r.some((slot) => slot.options.length > 1);
+  };
+
+  const isComposite = (p: Product): boolean => {
+    const r = recipes[p.id];
+    return Boolean(r && r.length > 0);
+  };
+
   const bump = (p: Product, delta: number) => {
+    if (delta > 0 && isArmable(p)) {
+      setPickerProduct(p);
+      return;
+    }
     setCart((prev) => {
       const next = { ...prev };
       const current = next[p.id] ?? 0;
-      const updated = Math.max(0, Math.min(current + delta, p.stock));
+      // Compuestos no se topean por stock propio (no tienen);
+      // simples sí. Backend re-valida igual.
+      const cap = isComposite(p) ? Infinity : p.stock;
+      const updated = Math.max(0, Math.min(current + delta, cap));
       if (updated === 0) {
         delete next[p.id];
       } else {
@@ -1447,6 +1477,28 @@ function ProductsAddModal({
       }
       return next;
     });
+    if (delta < 0 && isArmable(p)) {
+      setCartUnits((prev) => {
+        const list = prev[p.id] ?? [];
+        if (list.length === 0) return prev;
+        const sliced = list.slice(0, -1);
+        const next = { ...prev };
+        if (sliced.length === 0) delete next[p.id];
+        else next[p.id] = sliced;
+        return next;
+      });
+    }
+  };
+
+  const onPickerConfirmed = (composition: CompositionPick[]) => {
+    const p = pickerProduct;
+    if (!p) return;
+    setCart((prev) => ({ ...prev, [p.id]: (prev[p.id] ?? 0) + 1 }));
+    setCartUnits((prev) => ({
+      ...prev,
+      [p.id]: [...(prev[p.id] ?? []), composition],
+    }));
+    setPickerProduct(null);
   };
 
   const cartEntries = Object.entries(cart)
@@ -1471,9 +1523,25 @@ function ProductsAddModal({
     setSubmitting(true);
     setError(null);
     try {
+      const items = cartEntries.map((e) => {
+        const p = products.find((x) => x.id === e.id);
+        const units = cartUnits[e.id];
+        if (p && isArmable(p) && units && units.length > 0) {
+          return {
+            product_id: e.id,
+            units: units.map((composition) => ({
+              composition: composition.map((slot) => ({
+                slot_id: slot.slot_id,
+                options: slot.options,
+              })),
+            })),
+          };
+        }
+        return { product_id: e.id, quantity: e.qty };
+      });
       await orderRequestsApi.quickAdd({
         table_session_id: sessionId,
-        items: cartEntries.map((e) => ({ product_id: e.id, quantity: e.qty })),
+        items,
       });
       onDone();
     } catch (err) {
@@ -1927,6 +1995,15 @@ function ProductsAddModal({
           </div>
         </footer>
       </div>
+
+      {pickerProduct && recipes[pickerProduct.id] && (
+        <CompositionPicker
+          productName={pickerProduct.name}
+          slots={recipes[pickerProduct.id]}
+          onCancel={() => setPickerProduct(null)}
+          onPick={onPickerConfirmed}
+        />
+      )}
     </div>
   );
 }

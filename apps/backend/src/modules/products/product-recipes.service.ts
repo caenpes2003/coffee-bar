@@ -157,6 +157,37 @@ export class ProductRecipesService {
     return count > 0;
   }
 
+  /**
+   * Recetas en bulk para el cart del cliente. Devuelve un objeto
+   * `{ productId: SerializedRecipe }` para todos los productos
+   * compuestos activos. Una sola query a Postgres; agrupamos en
+   * memoria.
+   */
+  async getBulkForCustomers(): Promise<Record<number, SerializedRecipe>> {
+    const slots = await this.prisma.productRecipeSlot.findMany({
+      include: SLOT_INCLUDE,
+      orderBy: [{ product_id: "asc" }, { position: "asc" }, { id: "asc" }],
+    });
+    const result: Record<number, SerializedRecipe> = {};
+    for (const s of slots) {
+      const serialized: SerializedRecipeSlot = {
+        id: s.id,
+        label: s.label,
+        quantity: s.quantity,
+        position: s.position,
+        options: s.options.map((o) => ({
+          id: o.id,
+          component_id: o.component_id,
+          default_quantity: o.default_quantity,
+          position: o.position,
+          component: o.component,
+        })),
+      };
+      (result[s.product_id] = result[s.product_id] ?? []).push(serialized);
+    }
+    return result;
+  }
+
   // ─── Internals ───────────────────────────────────────────────────────
 
   private async ensureProductExists(productId: number) {

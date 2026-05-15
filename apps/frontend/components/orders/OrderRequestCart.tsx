@@ -18,9 +18,17 @@
  *   - Active orders        → backend + socket. We do NOT read them here.
  */
 import { useEffect, useMemo, useState } from "react";
-import { orderRequestsApi } from "@/lib/api/services";
+import {
+  orderRequestsApi,
+  productsApi,
+  type ProductRecipeSlotView,
+} from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import type { OrderRequest, Product } from "@coffee-bar/shared";
+import {
+  CompositionPicker,
+  type CompositionPick,
+} from "./CompositionPicker";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -29,7 +37,17 @@ const fmt = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
-type CartState = Record<number, number>; // product_id -> quantity
+type CartState = Record<number, number>; // product_id -> quantity (simple + composite fijo)
+
+/**
+ * Para productos compuestos armables guardamos la composición ELEGIDA
+ * por unidad. cart[productId] = N implica que cartUnits[productId]
+ * debería tener exactamente N entradas, una por cada unidad.
+ *
+ * Para productos simples y compuestos fijos, cartUnits NO se usa —
+ * el backend recibe sólo `quantity`.
+ */
+type CartUnits = Record<number, CompositionPick[][]>;
 
 /**
  * Two modes:
@@ -70,11 +88,20 @@ export function OrderRequestCart({
   editing,
 }: Props) {
   const [cart, setCart] = useState<CartState>({});
+  const [cartUnits, setCartUnits] = useState<CartUnits>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<
     { kind: "categories" } | { kind: "products"; category: string }
   >({ kind: "categories" });
+  // Mapeo productId → receta. Se llena al abrir el carrito.
+  const [recipes, setRecipes] = useState<Record<number, ProductRecipeSlotView[]>>(
+    {},
+  );
+  // Si está set, hay un picker abierto para este producto compuesto
+  // armable. Al elegir, se incrementa cart + se agrega la unidad a
+  // cartUnits.
+  const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
 
   const isEditMode = editing != null;
 
@@ -89,13 +116,39 @@ export function OrderRequestCart({
           seeded[it.product_id] = (seeded[it.product_id] ?? 0) + it.quantity;
         }
         setCart(seeded);
+        // NOTA: edit mode no preserva composición de armables — la
+        // request original solo trae quantity. Si el cliente edita un
+        // armable tendrá que re-elegir la mezcla. Acotación aceptada:
+        // los editing flows son raros y limitar el riesgo de
+        // inconsistencia justifica forzar el re-picker.
+        setCartUnits({});
       } else {
         setCart({});
+        setCartUnits({});
       }
       setError(null);
       setView({ kind: "categories" });
     }
   }, [open, editing]);
+
+  // Cargar recetas en bulk al abrir el cart. Fire-and-forget: si
+  // falla, el cart sigue funcionando para los simples (los armables
+  // simplemente no aparecerán con picker).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    productsApi
+      .getRecipesBulk()
+      .then((r) => {
+        if (!cancelled) setRecipes(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRecipes({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Lock the page's scroll while the modal is open. We set
   // `overflow: hidden` on the body so the page underneath can't move,
@@ -175,17 +228,78 @@ export function OrderRequestCart({
     return out;
   }, [productsByCategory, cart]);
 
+  /**
+   * Devuelve la receta del producto si está cargada, o null.
+   */
+  const recipeOf = (product: Product): ProductRecipeSlotView[] | null => {
+    return recipes[product.id] ?? null;
+  };
+
+  /**
+   * Un producto es "armable" si tiene receta CON al menos un slot de
+   * más de una opción. Los compuestos fijos (1 opción por slot) NO
+   * abren picker — pasan derecho como cualquier otro producto.
+   */
+  const isArmable = (product: Product): boolean => {
+    const recipe = recipeOf(product);
+    if (!recipe || recipe.length === 0) return false;
+    return recipe.some((slot) => slot.options.length > 1);
+  };
+
   const bump = (product: Product, delta: number) => {
+    if (delta > 0 && isArmable(product)) {
+      // Para armables, "+" abre el picker. La cantidad se incrementa
+      // recién cuando el picker confirma una composición.
+      setPickerProduct(product);
+      return;
+    }
     setCart((prev) => {
       const current = prev[product.id] ?? 0;
       const next = Math.max(0, current + delta);
-      // Cap locally at stock to avoid obvious errors. Backend re-validates.
-      const capped = Math.min(next, product.stock);
+      // Cap locally at stock para productos simples. Compuestos
+      // fijos no tienen "stock" propio significativo; el cap del
+      // armable lo da el picker.
+      const recipe = recipeOf(product);
+      const cap = recipe && recipe.length > 0 ? Infinity : product.stock;
+      const capped = Math.min(next, cap);
       if (capped === current) return prev;
       const updated = { ...prev, [product.id]: capped };
       if (capped === 0) delete updated[product.id];
       return updated;
     });
+    // Si bajamos un armable con "-", quitamos también la última
+    // unidad guardada de cartUnits para mantener consistencia.
+    if (delta < 0 && isArmable(product)) {
+      setCartUnits((prev) => {
+        const list = prev[product.id] ?? [];
+        if (list.length === 0) return prev;
+        const sliced = list.slice(0, -1);
+        const next = { ...prev };
+        if (sliced.length === 0) delete next[product.id];
+        else next[product.id] = sliced;
+        return next;
+      });
+    }
+  };
+
+  /**
+   * El picker confirmó composición — agregamos UNA unidad al cart
+   * y guardamos la composición correspondiente. Si el operador quiere
+   * más unidades del mismo armable, vuelve a apretar "+" y re-elige
+   * (porque puede querer una mezcla distinta).
+   */
+  const onPickerConfirmed = (composition: CompositionPick[]) => {
+    const product = pickerProduct;
+    if (!product) return;
+    setCart((prev) => ({
+      ...prev,
+      [product.id]: (prev[product.id] ?? 0) + 1,
+    }));
+    setCartUnits((prev) => ({
+      ...prev,
+      [product.id]: [...(prev[product.id] ?? []), composition],
+    }));
+    setPickerProduct(null);
   };
 
   const submit = async () => {
@@ -193,10 +307,24 @@ export function OrderRequestCart({
     setSubmitting(true);
     setError(null);
     try {
-      const items = cartEntries.map((e) => ({
-        product_id: e.id,
-        quantity: e.qty,
-      }));
+      // Construir items: si el producto es armable y tenemos
+      // cartUnits para él, mandar `units[]`. Sino, mandar `quantity`.
+      const items = cartEntries.map((e) => {
+        const product = productsById.get(e.id);
+        const units = cartUnits[e.id];
+        if (product && isArmable(product) && units && units.length > 0) {
+          return {
+            product_id: e.id,
+            units: units.map((composition) => ({
+              composition: composition.map((slot) => ({
+                slot_id: slot.slot_id,
+                options: slot.options,
+              })),
+            })),
+          };
+        }
+        return { product_id: e.id, quantity: e.qty };
+      });
       // Always capture the server-returned row so the parent can seed it
       // into local state without waiting for the socket. iOS Safari drops
       // the first event of a freshly-joined room more often than chrome
@@ -505,6 +633,15 @@ export function OrderRequestCart({
           </p>
         </footer>
       </div>
+
+      {pickerProduct && recipes[pickerProduct.id] && (
+        <CompositionPicker
+          productName={pickerProduct.name}
+          slots={recipes[pickerProduct.id]}
+          onCancel={() => setPickerProduct(null)}
+          onPick={onPickerConfirmed}
+        />
+      )}
     </div>
   );
 }

@@ -213,9 +213,30 @@ export interface OrderItem {
   product?: Product;
 }
 
+/**
+ * Una unidad de un producto compuesto armable, con su composición
+ * elegida al momento del pedido. Para compuestos fijos NO se usa;
+ * el backend toma los `default_quantity` de la receta.
+ */
+export interface OrderRequestUnitInput {
+  composition?: Array<{
+    slot_id: number;
+    options: Array<{ option_id: number; quantity: number }>;
+  }>;
+}
+
+/**
+ * Un ítem del pedido. Mutuamente excluyente:
+ *   - `quantity` para productos simples y compuestos fijos.
+ *   - `units` para compuestos armables (uno por unidad pedida).
+ *
+ * El backend valida que ambos no convivan y que el modo coincida
+ * con la naturaleza del producto.
+ */
 export interface OrderRequestItemInput {
   product_id: number;
-  quantity: number;
+  quantity?: number;
+  units?: OrderRequestUnitInput[];
 }
 
 export interface OrderRequest {

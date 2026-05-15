@@ -961,8 +961,21 @@ export default function MesaPage({
             cartMode.kind === "edit"
               ? {
                   requestId: cartMode.request.id,
+                  // Normalize: items pueden venir con `quantity` o
+                  // con `units[]` (compuestos armables). Para el cart
+                  // en modo edit usamos la cantidad efectiva. La
+                  // composición de armables NO se preserva — el
+                  // cliente debe re-elegirla si quiere mantenerla.
                   items: Array.isArray(cartMode.request.items)
-                    ? cartMode.request.items
+                    ? cartMode.request.items.map((it) => ({
+                        product_id: it.product_id,
+                        quantity:
+                          typeof it.quantity === "number"
+                            ? it.quantity
+                            : Array.isArray(it.units)
+                              ? it.units.length
+                              : 0,
+                      }))
                     : [],
                 }
               : null

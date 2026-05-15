@@ -330,6 +330,14 @@ export const billApi = {
 export const productsApi = {
   getAll: (): Promise<Product[]> =>
     publicApi.get<Product[]>("/products").then((r) => r.data),
+  /**
+   * Recetas en bulk de todos los productos compuestos. Una sola
+   * llamada al cargar el catálogo; el cart busca por product_id.
+   */
+  getRecipesBulk: (): Promise<Record<number, ProductRecipeSlotView[]>> =>
+    publicApi
+      .get<Record<number, ProductRecipeSlotView[]>>("/products/recipes")
+      .then((r) => r.data),
 };
 
 // ─── Admin product CRUD (Phase H2) ────────────────────────────────────────────
