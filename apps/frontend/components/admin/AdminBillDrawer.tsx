@@ -917,6 +917,11 @@ function ActionModal({
   const [amountStr, setAmountStr] = useState("");
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
+  // Aplica solo a refunds. Por default ON: la mayoría de las
+  // devoluciones son "error de cargo" o "cliente no consumió" y el
+  // producto vuelve al stock. Si el producto se rompió/derramó se
+  // marca OFF y el stock queda como estaba.
+  const [restoreStock, setRestoreStock] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -954,6 +959,7 @@ function ActionModal({
         await billApi.refundConsumption(consumptionId, {
           reason: reason.trim(),
           notes: notes.trim() || undefined,
+          restore_stock: restoreStock,
         });
       } else if (kind === "partial_payment") {
         await billApi.recordPartialPayment(sessionId, amountNum);
@@ -1107,6 +1113,54 @@ function ActionModal({
               />
             </label>
           </>
+        )}
+
+        {kind === "refund" && (
+          <label
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              padding: "10px 12px",
+              border: `1px solid ${C.sand}`,
+              borderRadius: 10,
+              background: C.cream,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={restoreStock}
+              onChange={(e) => setRestoreStock(e.target.checked)}
+              style={{ marginTop: 2, cursor: "pointer" }}
+            />
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontFamily: FONT_UI,
+                  fontSize: 13,
+                  color: C.ink,
+                  fontWeight: 600,
+                }}
+              >
+                Reponer stock
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  letterSpacing: 0.5,
+                  color: C.mute,
+                  marginTop: 2,
+                  lineHeight: 1.5,
+                }}
+              >
+                {restoreStock
+                  ? "El producto vuelve al inventario. Activá esto si fue error de cargo o el cliente no lo consumió."
+                  : "El producto NO se repone. Marcá esto si se rompió, derramó o ya se consumió."}
+              </div>
+            </div>
+          </label>
         )}
 
 
@@ -2013,6 +2067,7 @@ function ProductsAddModal({
           slots={recipes[pickerProduct.id]}
           onCancel={() => setPickerProduct(null)}
           onPick={onPickerConfirmed}
+          showStock
         />
       )}
     </div>

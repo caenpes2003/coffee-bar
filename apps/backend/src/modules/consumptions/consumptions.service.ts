@@ -330,6 +330,10 @@ export class ConsumptionsService {
     }
 
     const refundAmount = new Prisma.Decimal(original.amount).neg();
+    // Default true: reponer stock al revertir. Solo se omite si el
+    // operador marca explícitamente que el producto no se recupera
+    // físicamente (rotura, derrame, ya consumido).
+    const restoreStock = dto.restore_stock !== false;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const marked = await tx.consumption.updateMany({
@@ -374,6 +378,18 @@ export class ConsumptionsService {
         new Prisma.Decimal(original.amount),
         tx,
       );
+
+      // Reponer stock cuando aplica. Buscamos el OrderItem y sus
+      // componentes (compuestos) o el product_id directo (simples).
+      if (restoreStock && original.order_id && original.product_id) {
+        await this.restoreStockForRefund(
+          tx,
+          original.order_id,
+          original.product_id,
+          original.quantity,
+        );
+      }
+
       return created;
     });
 
@@ -426,6 +442,70 @@ export class ConsumptionsService {
 
   private round(n: number): number {
     return Math.round(n * 100) / 100;
+  }
+
+  /**
+   * Repone stock al hacer refund sobre una venta concreta. Busca el
+   * OrderItem que coincide con (order_id, product_id) y:
+   *   - Si tiene OrderItemComponent rows → repone los componentes
+   *     en las cantidades exactas que se descontaron al aceptar.
+   *   - Si NO tiene componentes (producto simple) → repone el propio
+   *     producto en `consumptionQuantity` unidades.
+   *
+   * Idempotencia: NO marcamos los OrderItemComponent como
+   * "ya repuestos". Un refund doble del mismo Consumption ya está
+   * bloqueado por el check `reversed_at != null` arriba, así que
+   * acá no hay riesgo de reponer dos veces.
+   */
+  private async restoreStockForRefund(
+    tx: Prisma.TransactionClient,
+    orderId: number,
+    productId: number,
+    consumptionQuantity: number,
+  ): Promise<void> {
+    const orderItem = await tx.orderItem.findFirst({
+      where: { order_id: orderId, product_id: productId },
+      include: { components: true },
+    });
+    if (!orderItem) {
+      // Sin OrderItem no podemos saber componentes — fallback al
+      // descuento simple por product_id.
+      await tx.product.update({
+        where: { id: productId },
+        data: { stock: { increment: consumptionQuantity } },
+      });
+      return;
+    }
+    if (orderItem.components.length > 0) {
+      // Compuesto: reponer los componentes reales que salieron.
+      // Si el refund cubre solo parte de la cantidad del OrderItem,
+      // reponemos proporcionalmente. Caso típico: refund total del
+      // OrderItem, donde consumptionQuantity == orderItem.quantity
+      // y la suma de componentes ya es exacta.
+      const ratio = consumptionQuantity / orderItem.quantity;
+      const totals = new Map<number, number>();
+      for (const c of orderItem.components) {
+        const restore = Math.round(c.quantity * ratio);
+        totals.set(
+          c.component_product_id,
+          (totals.get(c.component_product_id) ?? 0) + restore,
+        );
+      }
+      for (const [componentId, qty] of totals) {
+        if (qty > 0) {
+          await tx.product.update({
+            where: { id: componentId },
+            data: { stock: { increment: qty } },
+          });
+        }
+      }
+    } else {
+      // Producto simple: reponer al propio product_id.
+      await tx.product.update({
+        where: { id: productId },
+        data: { stock: { increment: consumptionQuantity } },
+      });
+    }
   }
 
   async emitBillSnapshot(sessionId: number, tableId: number) {

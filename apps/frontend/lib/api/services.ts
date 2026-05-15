@@ -305,7 +305,13 @@ export const billApi = {
       .then((r) => r.data),
   refundConsumption: (
     consumptionId: number,
-    payload: { reason: string; notes?: string },
+    payload: {
+      reason: string;
+      notes?: string;
+      // Default backend = true. Pasar false cuando el producto ya
+      // se consumió/desechó físicamente (ej. botella rota).
+      restore_stock?: boolean;
+    },
   ): Promise<Consumption> =>
     adminApi
       .post<Consumption>(`/consumptions/${consumptionId}/refund`, payload)

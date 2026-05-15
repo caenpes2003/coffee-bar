@@ -38,6 +38,17 @@ interface Props {
   slots: ProductRecipeSlotView[];
   onCancel: () => void;
   onPick: (composition: CompositionPick[]) => void;
+  /**
+   * Mostrar el stock real de cada componente. Útil para staff
+   * (admin) que arma el pedido y sabe qué hay en bodega. Para el
+   * cliente final, mejor mantenerlo en false: la info es interna
+   * y verlo no aporta valor a la decisión de compra.
+   *
+   * El cap por stock se aplica SIEMPRE, sin importar este flag:
+   * el usuario no puede elegir más unidades que las que hay. Sólo
+   * cambia si el número se muestra explícitamente o no.
+   */
+  showStock?: boolean;
 }
 
 type SlotState = Map<number, number>; // option_id -> quantity
@@ -47,6 +58,7 @@ export function CompositionPicker({
   slots,
   onCancel,
   onPick,
+  showStock = false,
 }: Props) {
   // Estado: por cada slot, un map option_id → quantity inicializado con defaults.
   const [state, setState] = useState<Map<number, SlotState>>(() => {
@@ -72,9 +84,21 @@ export function CompositionPicker({
     return sums;
   }, [state, slots]);
 
-  const allSlotsValid = slots.every(
+  const slotsMatchQuantity = slots.every(
     (s) => (sumsBySlot.get(s.id) ?? -1) === s.quantity,
   );
+  // Adicional al match de cantidades: ninguna opción puede pedir más
+  // de lo que hay en stock real. Si lo hace, bloqueamos el submit y
+  // se muestra warning. El backend valida igual, pero queremos
+  // cortarlo acá para que el cliente no pase del modal con datos
+  // imposibles de cumplir.
+  const stockOverflow = slots.some((slot) =>
+    slot.options.some((opt) => {
+      const qty = state.get(slot.id)?.get(opt.id) ?? 0;
+      return qty > opt.component.stock;
+    }),
+  );
+  const canSubmit = slotsMatchQuantity && !stockOverflow;
 
   const updateOption = (slotId: number, optionId: number, delta: number) => {
     setState((prev) => {
@@ -89,7 +113,7 @@ export function CompositionPicker({
   };
 
   const handlePick = () => {
-    if (!allSlotsValid) return;
+    if (!canSubmit) return;
     const composition: CompositionPick[] = slots.map((slot) => {
       const inner = state.get(slot.id)!;
       return {
@@ -113,9 +137,10 @@ export function CompositionPicker({
         inset: 0,
         background: "rgba(43,29,20,0.55)",
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: "center",
         justifyContent: "center",
         zIndex: 80,
+        padding: 16,
       }}
     >
       <div
@@ -123,13 +148,14 @@ export function CompositionPicker({
         style={{
           width: "100%",
           maxWidth: 480,
-          maxHeight: "85dvh",
+          maxHeight: "90dvh",
           background: "#FFFDF8",
-          borderRadius: "20px 20px 0 0",
+          // Modal centrado: bordes redondeados en las 4 esquinas.
+          borderRadius: 20,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          boxShadow: "0 -20px 60px -20px rgba(43,29,20,0.45)",
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.55)",
         }}
       >
         <header
@@ -215,7 +241,14 @@ export function CompositionPicker({
                   {slot.options.map((option) => {
                     const qty =
                       state.get(slot.id)?.get(option.id) ?? 0;
-                    const stockOk = option.component.stock >= qty;
+                    const stock = option.component.stock;
+                    const stockOk = stock >= qty;
+                    const outOfStock = stock <= 0;
+                    // El + se deshabilita si:
+                    //   - ya completamos el slot (sum === slot.quantity),
+                    //   - o ya alcanzamos el stock real del componente.
+                    const plusDisabled =
+                      sum >= slot.quantity || qty >= stock;
                     return (
                       <li
                         key={option.id}
@@ -225,6 +258,7 @@ export function CompositionPicker({
                           gap: 10,
                           padding: "8px 0",
                           borderBottom: "1px solid #F8F1E4",
+                          opacity: outOfStock ? 0.55 : 1,
                         }}
                       >
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -238,18 +272,39 @@ export function CompositionPicker({
                           >
                             {option.component.name}
                           </div>
-                          <div
-                            style={{
-                              fontFamily: "var(--font-oswald)",
-                              fontSize: 9,
-                              color: stockOk ? "#A89883" : "#8B2635",
-                              letterSpacing: 0.8,
-                              marginTop: 2,
-                            }}
-                          >
-                            Stock disponible: {option.component.stock}
-                            {!stockOk && " — stock insuficiente"}
-                          </div>
+                          {/*
+                            Stock info: visible solo en modo staff
+                            (showStock). Cliente final solo ve un
+                            "Sin disponibilidad" cuando el stock es 0,
+                            sin números internos.
+                          */}
+                          {showStock && (
+                            <div
+                              style={{
+                                fontFamily: "var(--font-oswald)",
+                                fontSize: 9,
+                                color: stockOk ? "#A89883" : "#8B2635",
+                                letterSpacing: 0.8,
+                                marginTop: 2,
+                              }}
+                            >
+                              Stock disponible: {stock}
+                              {!stockOk && " — stock insuficiente"}
+                            </div>
+                          )}
+                          {!showStock && outOfStock && (
+                            <div
+                              style={{
+                                fontFamily: "var(--font-oswald)",
+                                fontSize: 9,
+                                color: "#8B2635",
+                                letterSpacing: 0.8,
+                                marginTop: 2,
+                              }}
+                            >
+                              Sin disponibilidad
+                            </div>
+                          )}
                         </div>
                         <div
                           style={{
@@ -285,9 +340,9 @@ export function CompositionPicker({
                             onClick={() =>
                               updateOption(slot.id, option.id, 1)
                             }
-                            disabled={sum >= slot.quantity}
+                            disabled={plusDisabled}
                             aria-label={`Sumar ${option.component.name}`}
-                            style={stepperBtn(sum >= slot.quantity)}
+                            style={stepperBtn(plusDisabled)}
                           >
                             +
                           </button>
@@ -333,19 +388,19 @@ export function CompositionPicker({
           <button
             type="button"
             onClick={handlePick}
-            disabled={!allSlotsValid}
+            disabled={!canSubmit}
             style={{
               padding: "10px 22px",
               border: "none",
               borderRadius: 999,
-              background: allSlotsValid
+              background: canSubmit
                 ? "linear-gradient(135deg, #B8894A 0%, #C9944F 100%)"
                 : "#F1E6D2",
-              color: allSlotsValid ? "#FFFDF8" : "#A89883",
+              color: canSubmit ? "#FFFDF8" : "#A89883",
               fontFamily: "var(--font-bebas)",
               fontSize: 14,
               letterSpacing: 2.5,
-              cursor: allSlotsValid ? "pointer" : "not-allowed",
+              cursor: canSubmit ? "pointer" : "not-allowed",
               fontWeight: 600,
               textTransform: "uppercase",
             }}
