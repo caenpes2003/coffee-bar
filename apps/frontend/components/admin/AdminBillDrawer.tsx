@@ -1695,7 +1695,14 @@ function ProductsAddModal({
               {categories.map((cat) => {
                 const items = grouped[cat] ?? [];
                 const total = items.length;
-                const available = items.filter((p) => p.stock > 0).length;
+                const available = items.filter((p) => {
+                  // Compuestos: usar `availability` (server lo computa);
+                  // simples: stock propio.
+                  if (p.availability !== undefined) {
+                    return p.availability === "available";
+                  }
+                  return p.stock > 0;
+                }).length;
                 const cartCount = items.reduce(
                   (acc, p) => acc + (cart[p.id] ?? 0),
                   0,
@@ -1794,8 +1801,12 @@ function ProductsAddModal({
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {(grouped[view.category] ?? []).map((p) => {
                 const qty = cart[p.id] ?? 0;
-                const soldOut = p.stock === 0;
-                const atCap = qty >= p.stock;
+                // Compuestos: usar `availability`. Simples: stock propio.
+                const isCompositeP = p.availability !== undefined;
+                const soldOut = isCompositeP
+                  ? p.availability === "out_of_stock"
+                  : p.stock === 0;
+                const atCap = isCompositeP ? false : qty >= p.stock;
                 return (
                   <li
                     key={p.id}

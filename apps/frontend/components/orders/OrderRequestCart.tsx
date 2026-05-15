@@ -215,9 +215,15 @@ export function OrderRequestCart({
     }[] = [];
     for (const [name, list] of productsByCategory) {
       if (list.length === 0) continue;
-      const available = list.filter(
-        (p) => p.is_active && p.stock > 0,
-      ).length;
+      const available = list.filter((p) => {
+        if (!p.is_active) return false;
+        // Compuestos: usar `availability` (computado por el server
+        // desde los componentes). Simples: caer al stock propio.
+        if (p.availability !== undefined) {
+          return p.availability === "available";
+        }
+        return p.stock > 0;
+      }).length;
       const cartCount = list.reduce(
         (acc, p) => acc + (cart[p.id] ?? 0),
         0,
@@ -858,8 +864,16 @@ function ProductsView({
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {products.map((p) => {
             const qty = cart[p.id] ?? 0;
-            const soldOut = !p.is_active || p.stock === 0;
-            const atCap = qty >= p.stock;
+            // Compuestos: usar `availability` (el server lo computa
+            // mirando el stock de los componentes). Simples: usar
+            // `stock` propio.
+            const isComposite = p.availability !== undefined;
+            const soldOut = isComposite
+              ? !p.is_active || p.availability === "out_of_stock"
+              : !p.is_active || p.stock === 0;
+            // Compuestos no tienen cap por stock propio; el backend
+            // valida al aceptar. Simples se topean en el stock real.
+            const atCap = isComposite ? false : qty >= p.stock;
             return (
               <li
                 key={p.id}
