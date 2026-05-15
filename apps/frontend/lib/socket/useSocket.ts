@@ -38,6 +38,20 @@ function resolveSocketUrl() {
  * player already connected anonymously).
  */
 function resolveSocketAuth(): { token?: string } {
+  // En la app de mesa (`/mesa/[id]`) el cliente es un comensal, no un
+  // operador. Si por casualidad el dispositivo tiene un admin_token
+  // viejo en localStorage (porque ese mismo navegador alguna vez se
+  // logueó al admin), preferirlo sobre el session_token le manda al
+  // backend un token expirado/invalido y el socket nunca conecta.
+  // Por eso en `/mesa/*` forzamos session_token.
+  const isMesaSurface =
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/mesa/");
+  if (isMesaSurface) {
+    const session = getSessionToken();
+    if (session) return { token: session };
+    return {};
+  }
   const admin = getAdminToken();
   if (admin) return { token: admin };
   const session = getSessionToken();
