@@ -542,6 +542,14 @@ export default function MesaPage({
           }
         }
         setSession(s);
+        // Rehidratación silenciosa: cuando reusamos un session_token
+        // viejo (recargar de página, scan después de que el admin
+        // abrió la mesa, etc.) el socket compartido sigue anónimo
+        // del handshake anterior. Forzamos un reconnect para que la
+        // auth fresca llegue al backend y el `tableSession:join` no
+        // se rechace silencioso. Sin esto los eventos del admin
+        // nunca llegan hasta refrescar la página.
+        if (stored) reconnectSocketWithFreshAuth();
       })
       .catch((err) => {
         const status = (err as { response?: { status?: number } })?.response
