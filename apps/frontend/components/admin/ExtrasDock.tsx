@@ -72,6 +72,17 @@ export function ExtrasDock() {
     );
   };
 
+  // Notifica a otros componentes vivos (dashboard /admin con su KPI
+  // "Extras hoy") que hubo un cambio en los ingresos extra. Es un
+  // CustomEvent simple — sin pasar por sockets — porque vivimos en la
+  // misma pestaña del navegador. El listener allá hace refetch del
+  // summary y actualiza el badge.
+  const notifyExtrasChanged = () => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("crown:extras-changed"));
+    }
+  };
+
   const charge = async (subtype: "male" | "female") => {
     if (busy) return;
     setBusy(subtype);
@@ -81,6 +92,7 @@ export function ExtrasDock() {
         `Cobrado ${subtype === "male" ? "Baño H" : "Baño M"} · ${fmt(res.total_amount)}`,
       );
       void loadSummaries();
+      notifyExtrasChanged();
     } catch (err) {
       pushToast(getErrorMessage(err), "alert");
     } finally {
@@ -92,6 +104,7 @@ export function ExtrasDock() {
     pushToast(`Ficha ${ticket.ticket_number} registrada`);
     setShowLuggageModal(false);
     void loadSummaries();
+    notifyExtrasChanged();
   };
 
   const todayRevenue =
