@@ -83,6 +83,16 @@ export type SalesInsights = {
 };
 
 // ─── Cuentas cerradas con detalle (tab "Detalle" del admin) ─────────────
+/**
+ * Una unidad de un compuesto armable (ej. "Cubetazo mix") tal como salió:
+ * lista de componentes con cantidad. Para compuestos de receta fija o
+ * productos simples, esto queda vacío.
+ */
+export type ClosedSessionLineUnit = {
+  unit_index: number;
+  components: { name: string; quantity: number }[];
+};
+
 export type ClosedSessionLine = {
   consumption_id: number;
   type: ConsumptionType;
@@ -93,6 +103,13 @@ export type ClosedSessionLine = {
   amount: number;
   /** Hora exacta del consumo (ISO). Útil para ordenar dentro de la cuenta. */
   created_at: string;
+  /**
+   * Composición por unidad para productos compuestos. Vacío si el producto
+   * es simple o si no se pudo resolver (Consumption sin order_id, refund
+   * sintético, etc.). El UI lo usa para mostrar "ver composición" cuando
+   * el operador agrupa líneas iguales que tienen mezclas distintas.
+   */
+  units: ClosedSessionLineUnit[];
 };
 
 export type ClosedSession = {
@@ -659,6 +676,8 @@ export class SalesInsightsService {
           orderBy: { created_at: "asc" },
           select: {
             id: true,
+            order_id: true,
+            product_id: true,
             type: true,
             description: true,
             quantity: true,
@@ -669,6 +688,51 @@ export class SalesInsightsService {
         },
       },
     });
+
+    // Para mostrar "ver composición" en el ticket, necesitamos los
+    // OrderItemComponent agrupados por (order_id, product_id). Hacemos una
+    // sola query batch con los IDs de orden que aparecen en las sesiones,
+    // y mapeamos por unit_index dentro del OrderItem.
+    const orderIds = new Set<number>();
+    for (const s of sessions) {
+      for (const c of s.consumptions) {
+        if (c.order_id != null) orderIds.add(c.order_id);
+      }
+    }
+    const orderItems = orderIds.size
+      ? await this.prisma.orderItem.findMany({
+          where: { order_id: { in: Array.from(orderIds) } },
+          select: {
+            order_id: true,
+            product_id: true,
+            quantity: true,
+            components: {
+              select: {
+                unit_index: true,
+                quantity: true,
+                component_product: { select: { name: true } },
+              },
+              orderBy: { unit_index: "asc" },
+            },
+          },
+        })
+      : [];
+    // Key = `${order_id}:${product_id}`. Una venta produce un OrderItem por
+    // (order_id, product_id), así que la clave es única.
+    const compByOrderProduct = new Map<string, ClosedSessionLineUnit[]>();
+    for (const oi of orderItems) {
+      if (oi.components.length === 0) continue;
+      const byUnit = new Map<number, { name: string; quantity: number }[]>();
+      for (const c of oi.components) {
+        const arr = byUnit.get(c.unit_index) ?? [];
+        arr.push({ name: c.component_product.name, quantity: c.quantity });
+        byUnit.set(c.unit_index, arr);
+      }
+      const units: ClosedSessionLineUnit[] = Array.from(byUnit.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([unit_index, components]) => ({ unit_index, components }));
+      compByOrderProduct.set(`${oi.order_id}:${oi.product_id}`, units);
+    }
 
     let paidCount = 0;
     let voidCount = 0;
@@ -694,6 +758,11 @@ export class SalesInsightsService {
             partials += amount;
             break;
         }
+        const compKey =
+          c.order_id != null && c.product_id != null
+            ? `${c.order_id}:${c.product_id}`
+            : null;
+        const units = compKey ? (compByOrderProduct.get(compKey) ?? []) : [];
         return {
           consumption_id: c.id,
           type: c.type,
@@ -702,6 +771,7 @@ export class SalesInsightsService {
           unit_amount: Number(c.unit_amount),
           amount,
           created_at: c.created_at.toISOString(),
+          units,
         };
       });
       const total = Number(s.total_consumption);

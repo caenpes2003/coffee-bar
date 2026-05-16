@@ -546,6 +546,11 @@ export type ProductSalesHistoryResponse = {
 };
 
 // ─── Tipos del tab "Detalle" (cuentas cerradas con detalle) ─────────────
+export type ClosedSessionLineUnitApi = {
+  unit_index: number;
+  components: { name: string; quantity: number }[];
+};
+
 export type ClosedSessionLineApi = {
   consumption_id: number;
   type:
@@ -559,6 +564,8 @@ export type ClosedSessionLineApi = {
   unit_amount: number;
   amount: number;
   created_at: string;
+  /** Composición por unidad para productos compuestos. Vacío para simples. */
+  units: ClosedSessionLineUnitApi[];
 };
 
 export type ClosedSessionApi = {

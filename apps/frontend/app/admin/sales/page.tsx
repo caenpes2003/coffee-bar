@@ -7,6 +7,7 @@ import {
   salesInsightsApi,
   type ClosedSessionApi,
   type ClosedSessionLineApi,
+  type ClosedSessionLineUnitApi,
   type ClosedSessionsResponse,
   type ProductMetricsResponse,
   type ProductMetricsRowApi,
@@ -420,15 +421,14 @@ function TabBar({
             title={t.hint}
             onClick={() => onChange(t.key)}
             style={{
-              padding: "10px 14px",
+              padding: "10px 16px",
               border: "none",
               background: "transparent",
-              fontFamily: FONT_DISPLAY,
-              fontSize: 13,
-              letterSpacing: 2.5,
+              fontFamily: FONT_UI,
+              fontSize: 14,
+              letterSpacing: 0.2,
               color: active ? C.ink : C.mute,
-              textTransform: "uppercase",
-              fontWeight: 700,
+              fontWeight: active ? 600 : 500,
               cursor: "pointer",
               borderBottom: `2px solid ${active ? C.gold : "transparent"}`,
               marginBottom: -1,
@@ -2238,131 +2238,438 @@ function ClosedSessionRow({
 }
 
 function ClosedSessionDetail({ session }: { session: ClosedSessionApi }) {
+  return <ThermalReceipt session={session} />;
+}
+
+// ─── Thermal receipt ────────────────────────────────────────────────────
+// Look de ticket de impresora térmica: monoespaciado, ancho fijo, bordes
+// dentados arriba y abajo (zig-zag CSS). Mantiene la paleta del bar
+// (cream/cacao/gold) en vez del clásico blanco-y-negro para no romper
+// con el resto de la página.
+
+const RECEIPT_WIDTH_CH = 38; // ancho típico de impresora 80mm en chars
+
+/**
+ * Agrupa líneas de producto por `description`. Se respeta el orden de
+ * aparición del primer match. Refunds, descuentos, ajustes y pagos
+ * parciales NUNCA se agrupan: son ledger events distintos y merecen su
+ * propia línea con el monto exacto.
+ *
+ * `units` se concatena para que, cuando hay composiciones diferentes en
+ * un mismo producto, el operador pueda desplegar "ver composición" y ver
+ * cada unidad por separado.
+ */
+type GroupedLine = {
+  description: string;
+  quantity: number;
+  amount: number;
+  type: ClosedSessionLineApi["type"];
+  /** Composiciones acumuladas de todas las unidades vendidas bajo este grupo. */
+  units: ClosedSessionLineUnitApi[];
+  /** True si en el grupo hay al menos una unidad con composición. */
+  hasComposition: boolean;
+};
+
+function groupLines(lines: ClosedSessionLineApi[]): GroupedLine[] {
+  const productGroups = new Map<string, GroupedLine>();
+  const orderedKeys: string[] = [];
+  const nonProduct: GroupedLine[] = [];
+
+  for (const l of lines) {
+    if (l.type !== "product") {
+      // Ajustes/refunds/descuentos/parciales van tal cual, en su lugar.
+      nonProduct.push({
+        description: l.description,
+        quantity: l.quantity,
+        amount: l.amount,
+        type: l.type,
+        units: [],
+        hasComposition: false,
+      });
+      continue;
+    }
+    const existing = productGroups.get(l.description);
+    if (existing) {
+      existing.quantity += l.quantity;
+      existing.amount += l.amount;
+      // Renumeramos unit_index para que el desplegable enumere "Unidad 1,
+      // Unidad 2..." globalmente y no repita índices entre líneas.
+      for (const u of l.units) {
+        existing.units.push({
+          unit_index: existing.units.length,
+          components: u.components,
+        });
+      }
+      if (l.units.length > 0) existing.hasComposition = true;
+    } else {
+      const renumbered = l.units.map((u, i) => ({
+        unit_index: i,
+        components: u.components,
+      }));
+      productGroups.set(l.description, {
+        description: l.description,
+        quantity: l.quantity,
+        amount: l.amount,
+        type: "product",
+        units: renumbered,
+        hasComposition: l.units.length > 0,
+      });
+      orderedKeys.push(l.description);
+    }
+  }
+
+  const productLines = orderedKeys.map((k) => productGroups.get(k)!);
+  return [...productLines, ...nonProduct];
+}
+
+function ThermalReceipt({ session }: { session: ClosedSessionApi }) {
+  const grouped = groupLines(session.lines);
+  const tableLabel =
+    session.table_kind === "BAR"
+      ? `BARRA ${session.table_number ?? session.table_id}`
+      : `MESA ${session.table_number ?? session.table_id}`;
+  const openedAt = new Date(session.opened_at);
+  const closedAt = session.closed_at ? new Date(session.closed_at) : null;
+  // Subtotal y total son iguales si no hubo ajustes ni anticipos —
+  // mostrar ambos solo confunde al operador. Solo "Total" en ese caso.
+  const showSubtotalBreakdown =
+    session.adjustments_total !== 0 || session.partial_payments_total !== 0;
+
   return (
     <div
       style={{
-        background: C.cream,
-        border: `1px solid ${C.sand}`,
-        borderRadius: 10,
-        margin: "0 0 12px",
-        padding: "10px 12px",
+        margin: "0 auto 12px",
+        maxWidth: 360,
+        padding: "0 6px",
       }}
     >
-      <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-        {session.lines.map((l) => (
-          <SessionLine key={l.consumption_id} line={l} />
-        ))}
-      </ul>
       <div
         style={{
-          marginTop: 8,
-          paddingTop: 8,
-          borderTop: `1px dashed ${C.sand}`,
-          display: "grid",
-          gridTemplateColumns: "1fr auto",
-          rowGap: 4,
-          columnGap: 14,
-          fontFamily: FONT_MONO,
-          fontSize: 11,
-          color: C.cacao,
-          letterSpacing: 1,
-          textTransform: "uppercase",
+          background: "#FFFDF8",
+          color: "#2B1D14",
+          padding: "18px 16px 22px",
+          // Sombra sutil + bordes dentados arriba y abajo (zig-zag CSS).
+          // `mask` corta el div en triángulos; la inversa lo aplica a una
+          // versión del fondo. Soportado en navegadores modernos.
+          boxShadow:
+            "0 1px 0 rgba(43,29,20,0.05), 0 8px 24px -10px rgba(43,29,20,0.18)",
+          // Bordes dentados: usamos `mask` para cortar zigzag arriba/abajo.
+          maskImage:
+            "linear-gradient(to bottom, transparent 0, transparent 6px, #000 6px, #000 calc(100% - 6px), transparent calc(100% - 6px)), radial-gradient(circle at 6px 6px, transparent 6px, #000 6px)",
+          // Tipografía monoespaciada (system mono — sin necesidad de
+          // cargar fuente extra). Las medidas exactas garantizan la
+          // alineación columna-derecha de los precios.
+          fontFamily:
+            "ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Mono', Consolas, monospace",
+          fontSize: 12,
+          lineHeight: 1.5,
+          letterSpacing: 0,
+          whiteSpace: "pre-wrap",
+          position: "relative",
         }}
       >
-        <span>Subtotal</span>
-        <span style={{ textAlign: "right", fontFamily: FONT_UI }}>
-          {fmt(session.subtotal)}
-        </span>
-        {session.adjustments_total !== 0 && (
+        {/* Zig-zag arriba */}
+        <ReceiptTearEdge position="top" />
+
+        {/* Header */}
+        <div style={{ textAlign: "center", marginBottom: 10 }}>
+          <div
+            style={{
+              fontFamily: "var(--font-blackletter), serif",
+              fontSize: 22,
+              letterSpacing: 1,
+              fontWeight: 700,
+              color: "#2B1D14",
+              marginBottom: 2,
+            }}
+          >
+            Crown Bar 4.90
+          </div>
+          <div style={{ fontSize: 10, color: "#6B4E2E" }}>
+            Pub futbolero · Cafetería
+          </div>
+        </div>
+
+        <ReceiptDivider />
+
+        {/* Metadata */}
+        <ReceiptRow left={tableLabel} right={`#${session.session_id}`} bold />
+        {session.custom_name && (
+          <ReceiptRow left="Nombre" right={session.custom_name} />
+        )}
+        <ReceiptRow left="Apertura" right={formatDateTime(openedAt)} />
+        {closedAt && (
+          <ReceiptRow left="Cierre" right={formatDateTime(closedAt)} />
+        )}
+        <ReceiptRow
+          left="Estado"
+          right={session.outcome === "void" ? "ANULADA" : "PAGADA"}
+          tone={session.outcome === "void" ? "alert" : "ok"}
+        />
+        {session.outcome === "void" && (
+          <ReceiptRow left="Razón" right={session.void_reason ?? "—"} />
+        )}
+
+        <ReceiptDivider />
+
+        {/* Líneas agrupadas */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {grouped.map((g, idx) => (
+            <ReceiptLine key={`${g.description}-${idx}`} group={g} />
+          ))}
+        </div>
+
+        <ReceiptDivider />
+
+        {/* Totales */}
+        {showSubtotalBreakdown && (
           <>
-            <span>Ajustes / descuentos / refunds</span>
-            <span style={{ textAlign: "right", fontFamily: FONT_UI }}>
-              {fmt(session.adjustments_total)}
-            </span>
+            <ReceiptRow left="Subtotal" right={fmt(session.subtotal)} />
+            {session.adjustments_total !== 0 && (
+              <ReceiptRow
+                left="Ajustes / refunds"
+                right={fmt(session.adjustments_total)}
+                tone="alert"
+              />
+            )}
+            {session.partial_payments_total !== 0 && (
+              <ReceiptRow
+                left="Pagos parciales"
+                right={fmt(session.partial_payments_total)}
+              />
+            )}
+            <ReceiptDivider thin />
           </>
         )}
-        {session.partial_payments_total !== 0 && (
+        <ReceiptRow
+          left="TOTAL"
+          right={fmt(session.total)}
+          bold
+          big
+          strikethrough={session.outcome === "void"}
+        />
+
+        {session.outcome === "void" && session.void_other_detail && (
           <>
-            <span>Pagos parciales</span>
-            <span style={{ textAlign: "right", fontFamily: FONT_UI }}>
-              {fmt(session.partial_payments_total)}
-            </span>
+            <ReceiptDivider thin />
+            <div
+              style={{
+                fontSize: 10,
+                color: "#8B2635",
+                textAlign: "center",
+                marginTop: 6,
+              }}
+            >
+              {session.void_other_detail}
+            </div>
           </>
         )}
-        <span style={{ fontWeight: 700, color: C.ink }}>Total</span>
-        <span
-          style={{
-            textAlign: "right",
-            fontFamily: FONT_DISPLAY,
-            fontSize: 14,
-            color: C.gold,
-            letterSpacing: 1,
-          }}
-        >
-          {fmt(session.total)}
-        </span>
-      </div>
-      {session.outcome === "void" && session.void_other_detail && (
+
+        {/* Footer */}
         <div
           style={{
-            marginTop: 8,
-            fontFamily: FONT_MONO,
+            textAlign: "center",
+            marginTop: 12,
             fontSize: 10,
-            color: C.terracotta,
-            letterSpacing: 1,
+            color: "#6B4E2E",
           }}
         >
-          Nota anulación: {session.void_other_detail}
+          ¡Gracias por la visita!
         </div>
-      )}
+
+        {/* Zig-zag abajo */}
+        <ReceiptTearEdge position="bottom" />
+      </div>
     </div>
   );
 }
 
-function SessionLine({ line }: { line: ClosedSessionLineApi }) {
-  // El color del monto depende del tipo: productos = ink (cobro normal),
-  // refunds/descuentos = terracotta (resta), partial_payment = olive
-  // (anticipo). Le da al operador una lectura visual del ledger.
+function ReceiptLine({ group }: { group: GroupedLine }) {
+  const [open, setOpen] = useState(false);
   const tone =
-    line.type === "refund" || line.type === "discount"
-      ? C.terracotta
-      : line.type === "partial_payment"
-        ? C.olive
-        : line.type === "adjustment"
-          ? C.cacao
-          : C.ink;
+    group.type === "refund" || group.type === "discount"
+      ? "alert"
+      : group.type === "partial_payment"
+        ? "muted"
+        : "default";
+  const canExpand = group.hasComposition && group.units.length > 0;
+
   return (
-    <li
+    <div>
+      <button
+        type="button"
+        onClick={canExpand ? () => setOpen((v) => !v) : undefined}
+        disabled={!canExpand}
+        aria-expanded={canExpand ? open : undefined}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 6,
+          padding: 0,
+          background: "transparent",
+          border: "none",
+          font: "inherit",
+          color: "inherit",
+          cursor: canExpand ? "pointer" : "default",
+          textAlign: "left",
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontWeight: 700 }}>
+            {group.quantity > 1 ? `${group.quantity}×` : "1×"}
+          </span>{" "}
+          {group.description}
+          {canExpand && (
+            <span
+              aria-hidden
+              style={{
+                marginLeft: 6,
+                fontSize: 10,
+                color: "#6B4E2E",
+              }}
+            >
+              {open ? "▾ ocultar" : "▸ ver composición"}
+            </span>
+          )}
+        </span>
+        <span
+          style={{
+            whiteSpace: "nowrap",
+            fontWeight: tone === "default" ? 600 : 500,
+            color:
+              tone === "alert"
+                ? "#8B2635"
+                : tone === "muted"
+                  ? "#6B4E2E"
+                  : "#2B1D14",
+          }}
+        >
+          {fmt(group.amount)}
+        </span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && canExpand && (
+          <motion.div
+            key="comp"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: DUR_BASE / 1000 }}
+            style={{ overflow: "hidden" }}
+          >
+            <ul
+              style={{
+                margin: "4px 0 6px",
+                padding: "4px 0 4px 16px",
+                listStyle: "none",
+                borderLeft: "2px dotted #B8894A",
+                fontSize: 11,
+                color: "#6B4E2E",
+              }}
+            >
+              {group.units.map((u) => (
+                <li key={u.unit_index} style={{ marginBottom: 2 }}>
+                  Unidad {u.unit_index + 1}:{" "}
+                  {u.components
+                    .map((c) => `${c.quantity} ${c.name}`)
+                    .join(" + ")}
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ReceiptRow({
+  left,
+  right,
+  bold,
+  big,
+  tone,
+  strikethrough,
+}: {
+  left: string;
+  right: string;
+  bold?: boolean;
+  big?: boolean;
+  tone?: "ok" | "alert";
+  strikethrough?: boolean;
+}) {
+  return (
+    <div
       style={{
         display: "flex",
         alignItems: "baseline",
         justifyContent: "space-between",
-        padding: "4px 0",
-        gap: 10,
-        fontFamily: FONT_UI,
-        fontSize: 13,
-        color: C.ink,
+        gap: 8,
+        fontSize: big ? 15 : 12,
+        fontWeight: bold ? 700 : 400,
+        color:
+          tone === "alert" ? "#8B2635" : tone === "ok" ? "#5C7A3A" : "#2B1D14",
+        textDecoration: strikethrough ? "line-through" : "none",
       }}
     >
-      <span style={{ minWidth: 0, flex: 1 }}>
-        {line.quantity !== 1 && (
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              color: C.cacao,
-              fontWeight: 700,
-              marginRight: 6,
-            }}
-          >
-            {line.quantity}×
-          </span>
-        )}
-        {line.description}
-      </span>
-      <span style={{ color: tone, whiteSpace: "nowrap" }}>{fmt(line.amount)}</span>
-    </li>
+      <span>{left}</span>
+      <span style={{ whiteSpace: "nowrap" }}>{right}</span>
+    </div>
   );
+}
+
+function ReceiptDivider({ thin = false }: { thin?: boolean }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        margin: thin ? "4px 0" : "8px 0",
+        borderTop: thin ? "1px dotted #B8894A" : "1px dashed #6B4E2E",
+        opacity: thin ? 0.5 : 0.7,
+      }}
+    />
+  );
+}
+
+function ReceiptTearEdge({ position }: { position: "top" | "bottom" }) {
+  // Borde dentado clásico de ticket. Usamos un linear-gradient repetido
+  // para dibujar triángulos, posicionado absolutamente justo afuera del
+  // padding del recibo.
+  const common: React.CSSProperties = {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 8,
+    backgroundImage:
+      "linear-gradient(-45deg, #FFFDF8 4px, transparent 0), linear-gradient(45deg, #FFFDF8 4px, transparent 0)",
+    backgroundPosition: "left bottom",
+    backgroundSize: "8px 8px",
+    backgroundRepeat: "repeat-x",
+    pointerEvents: "none",
+  };
+  if (position === "top") {
+    return (
+      <div
+        aria-hidden
+        style={{
+          ...common,
+          top: -7,
+          transform: "rotate(180deg)",
+        }}
+      />
+    );
+  }
+  return <div aria-hidden style={{ ...common, bottom: -7 }} />;
+}
+
+function formatDateTime(d: Date): string {
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${day}/${month} ${h}:${m}`;
 }
 
 function MiniStat({
