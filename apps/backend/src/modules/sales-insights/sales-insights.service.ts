@@ -179,7 +179,22 @@ export type ProductMetricsRow = {
   category: string;
   is_active: boolean;
   stock: number;
+  /**
+   * Unidades totales movidas en el rango: directas + las que salieron
+   * como componente de un compuesto (cubetazo, sixpack). Para Águila,
+   * esto incluye las latas vendidas sueltas + las latas dentro de
+   * cubetazos. Para un cubetazo, son los cubetazos vendidos.
+   */
   units_sold: number;
+  /** Solo ventas directas (Consumption.product_id = este product). */
+  units_direct: number;
+  /** Unidades consumidas como componente de un compuesto. */
+  units_via_composite: number;
+  /**
+   * Ingresos en el rango. SOLO de ventas directas. Para componentes
+   * dentro de un cubetazo, el revenue se contabiliza en el cubetazo
+   * (no duplicado en sus componentes).
+   */
   revenue: number;
   avg_ticket: number;
   /** Porcentaje sobre el total de ingresos del rango (0..100, redondeado a 2 dec). */
@@ -895,6 +910,12 @@ export class SalesInsightsService {
     const search = opts.search?.trim().toLowerCase() ?? "";
     const includeInactive = opts.include_inactive ?? false;
 
+    // ─── Ventas directas (Consumption.product_id) ─────────────────────
+    // El revenue por producto SOLO sale de aquí: lo que la caja
+    // efectivamente cobró por ese product_id directamente. Cubetazos
+    // aparecen con su revenue propio ($20.000 c/u); sus componentes
+    // (Águila, Poker) NO suman revenue por las que salieron en cubetazo
+    // — eso ya está contado en el revenue del cubetazo.
     const consumptions = await this.prisma.consumption.findMany({
       where: {
         type: ConsumptionType.product,
@@ -912,24 +933,62 @@ export class SalesInsightsService {
 
     const productAgg = new Map<
       number,
-      { units: number; revenue: number; sessions: Set<number> }
+      {
+        // Unidades vendidas directamente (Consumption.product_id = este).
+        // Para un cubetazo, esto es la cantidad de cubetazos vendidos.
+        // Para un componente como Águila, es solo las latas sueltas.
+        units_direct: number;
+        // Revenue solo de venta directa (el dato contable importante).
+        revenue: number;
+        sessions: Set<number>;
+      }
     >();
     let totalRevenue = 0;
-    let totalUnits = 0;
+    let totalUnitsDirect = 0;
     for (const c of consumptions) {
       if (c.product_id == null) continue;
       const slot = productAgg.get(c.product_id) ?? {
-        units: 0,
+        units_direct: 0,
         revenue: 0,
         sessions: new Set<number>(),
       };
       const amount = Number(c.amount);
-      slot.units += c.quantity;
+      slot.units_direct += c.quantity;
       slot.revenue += amount;
       slot.sessions.add(c.table_session_id);
       productAgg.set(c.product_id, slot);
       totalRevenue += amount;
-      totalUnits += c.quantity;
+      totalUnitsDirect += c.quantity;
+    }
+
+    // ─── Componentes consumidos en compuestos (OrderItemComponent) ─────
+    // Al vender un Cubetazo Aguila+Poker, las latas reales se descuentan
+    // de stock vía OrderItemComponent (component_product_id). Esas
+    // unidades NO aparecen en Consumption.product_id = Aguila — están
+    // bajo el cubetazo. Para reportes de inventario operativo, el
+    // operador necesita ver "cuántas Águilas salieron en total" sumando
+    // ambas fuentes.
+    //
+    // Filtramos por la misma ventana de tiempo usando OrderItem.created_at:
+    // el component se crea en la misma transacción que el order item,
+    // así que sirve como timestamp del consumo físico.
+    const componentRows = await this.prisma.orderItemComponent.findMany({
+      where: {
+        order_item: { created_at: { gte: from, lt: to } },
+      },
+      select: {
+        component_product_id: true,
+        quantity: true,
+      },
+    });
+    const componentUnitsById = new Map<number, number>();
+    let totalUnitsViaComposite = 0;
+    for (const row of componentRows) {
+      componentUnitsById.set(
+        row.component_product_id,
+        (componentUnitsById.get(row.component_product_id) ?? 0) + row.quantity,
+      );
+      totalUnitsViaComposite += row.quantity;
     }
 
     const products = await this.prisma.product.findMany({
@@ -945,7 +1004,9 @@ export class SalesInsightsService {
 
     let rows: ProductMetricsRow[] = products.map((p) => {
       const agg = productAgg.get(p.id);
-      const units = agg?.units ?? 0;
+      const unitsDirect = agg?.units_direct ?? 0;
+      const unitsViaComposite = componentUnitsById.get(p.id) ?? 0;
+      const totalUnits = unitsDirect + unitsViaComposite;
       const revenue = round(agg?.revenue ?? 0);
       const sessionsCount = agg?.sessions.size ?? 0;
       return {
@@ -954,7 +1015,12 @@ export class SalesInsightsService {
         category: p.category,
         is_active: p.is_active,
         stock: p.stock,
-        units_sold: units,
+        // units_sold combina ambas fuentes para vista operativa
+        // (cuántas unidades físicas salieron). El operador ve el
+        // detalle en `units_via_composite` si quiere desglosarlo.
+        units_sold: totalUnits,
+        units_direct: unitsDirect,
+        units_via_composite: unitsViaComposite,
         revenue,
         avg_ticket: sessionsCount > 0 ? round(revenue / sessionsCount) : 0,
         revenue_pct:
@@ -992,7 +1058,10 @@ export class SalesInsightsService {
     return {
       range: { from: from.toISOString(), to: to.toISOString(), days },
       total_revenue: round(totalRevenue),
-      total_units: totalUnits,
+      // Unidades totales movidas en el rango: directas + via compuestos.
+      // Para el operador es "cuántas botellas/latas/items físicos
+      // salieron del bar" — la métrica de inventario, no de revenue.
+      total_units: totalUnitsDirect + totalUnitsViaComposite,
       total,
       page,
       page_size: pageSize,

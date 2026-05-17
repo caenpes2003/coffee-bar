@@ -15,6 +15,7 @@ import {
   FONT_UI,
   btnGhost,
   BUTTON_STYLES,
+  fmt,
   timeAgo,
 } from "@/lib/theme";
 
@@ -436,6 +437,13 @@ function EventRow({ event }: { event: AuditEvent }) {
   const tableId = typeof m.table_id === "number" ? m.table_id : undefined;
   const productName =
     typeof m.product_name === "string" ? m.product_name : undefined;
+  // Para product_updated guardamos los before/after de cada campo en
+  // metadata.changes — el backend siempre los persiste. Hasta hoy el
+  // render los ignoraba; los exponemos así el admin sabe qué cambió.
+  const changes =
+    event.kind === "product_updated" && isChangeRecord(m.changes)
+      ? m.changes
+      : null;
   return (
     <li
       style={{
@@ -477,6 +485,55 @@ function EventRow({ event }: { event: AuditEvent }) {
         >
           {event.summary}
         </div>
+        {changes && (
+          <ul
+            style={{
+              margin: "6px 0 0",
+              padding: "6px 10px",
+              listStyle: "none",
+              background: C.cream,
+              border: `1px solid ${C.sand}`,
+              borderRadius: 8,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              color: C.ink,
+              letterSpacing: 0.3,
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+            }}
+          >
+            {Object.entries(changes).map(([field, change]) => (
+              <li
+                key={field}
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 6,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span
+                  style={{
+                    textTransform: "uppercase",
+                    color: C.mute,
+                    fontWeight: 700,
+                    letterSpacing: 1.2,
+                  }}
+                >
+                  {FIELD_LABELS[field] ?? field}:
+                </span>
+                <span style={{ color: C.terracotta }}>
+                  {formatChangeValue(field, change.from)}
+                </span>
+                <span style={{ color: C.mute }}>→</span>
+                <span style={{ color: C.olive, fontWeight: 700 }}>
+                  {formatChangeValue(field, change.to)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         <div
           style={{
             marginTop: 4,
@@ -506,6 +563,43 @@ function EventRow({ event }: { event: AuditEvent }) {
       </div>
     </li>
   );
+}
+
+// Type guard mínimo: la metadata viene tipada como Record<string, unknown>,
+// pero sabemos que en product_updated trae { changes: { [key]: { from, to } } }.
+type ChangeEntry = { from: unknown; to: unknown };
+type ChangeRecord = Record<string, ChangeEntry>;
+
+function isChangeRecord(value: unknown): value is ChangeRecord {
+  if (value == null || typeof value !== "object") return false;
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    if (v == null || typeof v !== "object") return false;
+    if (!("from" in v) || !("to" in v)) return false;
+  }
+  return true;
+}
+
+// Labels amigables para cada campo del Producto. Si el backend agrega
+// nuevos campos al audit, caemos al nombre crudo (no rompe).
+const FIELD_LABELS: Record<string, string> = {
+  name: "Nombre",
+  description: "Descripción",
+  price: "Precio",
+  category: "Categoría",
+  low_stock_threshold: "Umbral stock bajo",
+  recipe: "Receta",
+};
+
+// Los precios viajan como number en metadata.changes — los formateamos
+// con el helper `fmt` del bar para que se lean "$ 3.300" igual que el
+// resto del admin. El resto de tipos los pasamos como string crudo.
+function formatChangeValue(field: string, value: unknown): string {
+  if (value == null || value === "") return "—";
+  if (field === "price" && typeof value === "number") return fmt(value);
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }
 
 const emptyStateStyle: React.CSSProperties = {

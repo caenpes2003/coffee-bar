@@ -259,27 +259,60 @@ export class OrdersService {
   ) {
     const products = await tx.product.findMany({
       where: { id: { in: order.order_items.map((i) => i.product_id) } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, price: true },
     });
-    const nameById = new Map(products.map((p) => [p.id, p.name]));
+    const productById = new Map(products.map((p) => [p.id, p]));
 
     let totalDelta = new Prisma.Decimal(0);
+    // Acumulamos mismatches detectados para reportarlos UNA vez al final
+    // del ciclo (un solo AuditLog + un solo emit por order). Reportar
+    // por item inundaría el panel admin si una orden tiene varios items
+    // con precio cambiado.
+    const priceMismatches: Array<{
+      product_id: number;
+      product_name: string;
+      sold_unit_price: number;
+      current_unit_price: number;
+      quantity: number;
+    }> = [];
 
     for (const item of order.order_items) {
       const amount = new Prisma.Decimal(item.unit_price).mul(item.quantity);
       totalDelta = totalDelta.add(amount);
+      const product = productById.get(item.product_id);
       await tx.consumption.create({
         data: {
           table_session_id: order.table_session_id,
           order_id: order.id,
           product_id: item.product_id,
-          description: nameById.get(item.product_id) ?? `Product ${item.product_id}`,
+          description: product?.name ?? `Product ${item.product_id}`,
           quantity: item.quantity,
           unit_amount: item.unit_price,
           amount,
           type: ConsumptionType.product,
         },
       });
+
+      // Comparación de seguridad: el OrderItem se creó con `unit_price`
+      // = Product.price del momento de aceptar. Si al ENTREGAR (ahora)
+      // el Product.price es distinto, eso significa que el precio fue
+      // editado entre accept y deliver — operativamente válido pero
+      // contablemente anómalo (puede esconder un cambio mal intencionado
+      // de tarifa para una venta puntual). Lo registramos para que el
+      // admin vea la anomalía sin bloquear la entrega.
+      if (product) {
+        const sold = Number(item.unit_price);
+        const current = Number(product.price);
+        if (sold !== current) {
+          priceMismatches.push({
+            product_id: item.product_id,
+            product_name: product.name,
+            sold_unit_price: sold,
+            current_unit_price: current,
+            quantity: item.quantity,
+          });
+        }
+      }
     }
 
     await tx.tableSession.update({
@@ -295,6 +328,65 @@ export class OrdersService {
       totalDelta,
       tx,
     );
+
+    if (priceMismatches.length > 0) {
+      // No tiramos el AuditLog ni el emit dentro de la transacción para
+      // no comprometer la entrega si esos paths fallan — es información
+      // observacional, no transaccional.
+      this.notifyPriceMismatch(order, priceMismatches);
+    }
+  }
+
+  /**
+   * Emite un AuditLog + un evento socket para que el operador vea al
+   * instante cuando una orden se entrega con precios que difieren del
+   * precio vigente del producto. Best-effort: nunca lanza errores hacia
+   * el caller — la entrega ya pasó.
+   */
+  private notifyPriceMismatch(
+    order: { id: number; table_session_id: number },
+    mismatches: Array<{
+      product_id: number;
+      product_name: string;
+      sold_unit_price: number;
+      current_unit_price: number;
+      quantity: number;
+    }>,
+  ): void {
+    void (async () => {
+      try {
+        // AuditLog: queda en histórico aunque nadie esté mirando.
+        // Reusamos `kind: bill_adjustment` con metadata específica para
+        // no requerir migration del enum AuditEventKind. El frontend
+        // sabrá distinguirlo por la presencia de `mismatches`.
+        await this.prisma.auditLog.create({
+          data: {
+            kind: "bill_adjustment",
+            summary: `Venta con precio diferente al actual (${mismatches.length} producto${mismatches.length > 1 ? "s" : ""})`,
+            metadata: {
+              event_subtype: "price_mismatch_at_delivery",
+              order_id: order.id,
+              session_id: order.table_session_id,
+              mismatches,
+            },
+          },
+        });
+      } catch (err) {
+        // Silencioso a propósito: la operación primaria (entrega) ya
+        // se completó. Esto es observacional. Log a stderr para Sentry.
+        console.error("[orders] price-mismatch audit failed", err);
+      }
+      try {
+        // Toast en tiempo real para el dashboard admin.
+        this.realtime.emitToStaffCustom("price-mismatch", {
+          order_id: order.id,
+          session_id: order.table_session_id,
+          mismatches,
+        });
+      } catch (err) {
+        console.error("[orders] price-mismatch emit failed", err);
+      }
+    })();
   }
 
   serialize(order: OrderFull) {

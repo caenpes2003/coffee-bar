@@ -162,6 +162,23 @@ interface UseSocketOptions {
    * productos) deben hacer merge por id sin recargar todo.
    */
   onProductUpdated?: SocketListener<"product:updated">;
+  /**
+   * Alerta observacional: una venta se entregó con `unit_price`
+   * distinto al `Product.price` actual. Lo emite el backend desde
+   * `OrdersService.emitConsumptions` cuando detecta el mismatch.
+   * Solo el dashboard /admin lo consume hoy.
+   */
+  onPriceMismatch?: (payload: {
+    order_id: number;
+    session_id: number;
+    mismatches: Array<{
+      product_id: number;
+      product_name: string;
+      sold_unit_price: number;
+      current_unit_price: number;
+      quantity: number;
+    }>;
+  }) => void;
   onReconnect?: () => void;
 }
 
@@ -182,6 +199,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionUpdated,
     onTableSessionClosed,
     onProductUpdated,
+    onPriceMismatch,
     onReconnect,
   } = options;
   const socketRef = useRef<Socket | null>(null);
@@ -282,6 +300,13 @@ export function useSocket(options: UseSocketOptions = {}) {
         "product:updated",
         onProductUpdated,
       );
+    // Cast a través de unknown porque `price-mismatch` no vive en
+    // SocketEvents (es ad-hoc, sin tipo en shared). El payload se valida
+    // en el callback del consumidor.
+    if (onPriceMismatch) {
+      const handler = onPriceMismatch as (payload: unknown) => void;
+      s.off("price-mismatch", handler).on("price-mismatch", handler);
+    }
 
     return () => {
       s.off("connect", joinRooms);
@@ -304,6 +329,12 @@ export function useSocket(options: UseSocketOptions = {}) {
       if (onTableSessionClosed)
         s.off("table-session:closed", onTableSessionClosed);
       if (onProductUpdated) s.off("product:updated", onProductUpdated);
+      if (onPriceMismatch) {
+        s.off(
+          "price-mismatch",
+          onPriceMismatch as (payload: unknown) => void,
+        );
+      }
     };
   }, [
     sessionId,
@@ -321,6 +352,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionUpdated,
     onTableSessionClosed,
     onProductUpdated,
+    onPriceMismatch,
     onReconnect,
   ]);
 

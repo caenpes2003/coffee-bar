@@ -608,7 +608,13 @@ export type ProductMetricsRowApi = {
   category: string;
   is_active: boolean;
   stock: number;
+  /** Unidades totales movidas: directas + via compuestos. */
   units_sold: number;
+  /** Solo ventas directas (no incluye uso como componente). */
+  units_direct: number;
+  /** Unidades consumidas como componente de un compuesto. */
+  units_via_composite: number;
+  /** Revenue de ventas directas. Componentes en compuestos no aportan acá. */
   revenue: number;
   avg_ticket: number;
   revenue_pct: number;

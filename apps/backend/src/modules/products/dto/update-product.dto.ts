@@ -1,7 +1,6 @@
 import { Transform } from "class-transformer";
 import {
   IsInt,
-  IsNumber,
   IsOptional,
   IsString,
   MaxLength,
@@ -30,8 +29,12 @@ export class UpdateProductDto {
   @MaxLength(500)
   description?: string;
 
+  // Misma regla que en CreateProductDto: solo enteros. Si el operador
+  // intenta guardar $3.333,50 o un precio con decimales, el endpoint
+  // rechaza con 400 antes de tocar la BD. Esto cierra el camino por el
+  // que entró el unit_amount=3333 que estaba ensuciando los totales.
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsInt()
   @Min(0)
   price?: number;
 

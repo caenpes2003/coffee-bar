@@ -3251,6 +3251,28 @@ function ProductRow({ row }: { row: ProductMetricsRowApi }) {
         }}
       >
         {row.units_sold}
+        {/*
+          Cuando el producto salió en compuestos (cubetazos, sixpacks),
+          mostramos el desglose visual: "12 (8 + 4)" = 8 sueltas + 4 en
+          cubetazos. Solo aparece si hubo salida vía componente; si todo
+          fue venta directa, queda el número limpio. Esto le permite al
+          operador saber instantáneamente qué % de su producto se vende
+          como suelto vs empaquetado.
+        */}
+        {row.units_via_composite > 0 && (
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              color: C.mute,
+              letterSpacing: 0.5,
+              marginTop: 2,
+            }}
+            title={`${row.units_direct} directas + ${row.units_via_composite} en compuestos`}
+          >
+            {row.units_direct} + {row.units_via_composite}c
+          </div>
+        )}
       </td>
       <td
         style={{

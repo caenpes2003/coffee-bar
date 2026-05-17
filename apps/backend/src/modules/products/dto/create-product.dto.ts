@@ -2,7 +2,6 @@ import { Transform } from "class-transformer";
 import {
   IsBoolean,
   IsInt,
-  IsNumber,
   IsOptional,
   IsString,
   MaxLength,
@@ -34,7 +33,12 @@ export class CreateProductDto {
   @MaxLength(500)
   description?: string;
 
-  @IsNumber({ maxDecimalPlaces: 2 })
+  // El bar siempre cobra en pesos enteros (no se usan centavos). Forzar
+  // `@IsInt` rechaza cargas erróneas tipo $3.333,50 o $3.333,33 que
+  // generarían totales con fracciones imposibles de cuadrar en caja.
+  // Si en el futuro Crown Bar quisiera cobrar centavos, esto cambia y
+  // se reactiva el control vía `maxDecimalPlaces`.
+  @IsInt()
   @Min(0)
   price!: number;
 

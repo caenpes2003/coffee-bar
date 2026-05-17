@@ -271,6 +271,17 @@ export class RealtimeGateway
     this.emitGlobal("product:updated", payload);
   }
 
+  /**
+   * Emitter genérico al canal staff para eventos ad-hoc que no merecen
+   * un método dedicado todavía (típicamente alertas observacionales).
+   * Mantiene el patrón "no controller toca emit sin pasar por aquí".
+   * Si el evento se vuelve frecuente o tiene clientes que dependen del
+   * payload, se promueve a un método propio con su tipo en SocketEvents.
+   */
+  emitToStaffCustom(event: string, payload: unknown) {
+    this.emitToStaff(event, payload);
+  }
+
   emitPlaybackUpdated(payload: unknown) {
     this.emitGlobal("playback:updated", payload);
   }

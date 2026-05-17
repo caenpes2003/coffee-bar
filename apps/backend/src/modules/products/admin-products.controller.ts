@@ -112,14 +112,20 @@ export class AdminProductsController {
           changes[k] = { from: fromVal, to: toVal };
         }
       }
-      void this.audit.record({
-        kind: "product_updated",
-        actor_id: auth.sub,
-        actor_label: auth.name,
-        product_id: after.id,
-        product_name: after.name,
-        changes,
-      });
+      // Si el operador abrió el editor y guardó sin cambiar nada, no
+      // tiene sentido crear una entrada de auditoría: ensucia el log
+      // y obliga a filtrar "Producto editado" con changes={} a mano.
+      // Solo registramos cuando hay algo efectivamente distinto.
+      if (Object.keys(changes).length > 0) {
+        void this.audit.record({
+          kind: "product_updated",
+          actor_id: auth.sub,
+          actor_label: auth.name,
+          product_id: after.id,
+          product_name: after.name,
+          changes,
+        });
+      }
     }
     void this.products.broadcastChanged([after.id]);
     return after;

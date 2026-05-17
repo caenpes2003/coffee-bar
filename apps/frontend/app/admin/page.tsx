@@ -1306,6 +1306,41 @@ export default function AdminPage() {
     [pushToast, setAllTables],
   );
 
+  // Alerta cuando una orden se entrega con precios distintos al actual
+  // del producto. El backend la dispara desde OrdersService al crear el
+  // Consumption: el mismatch indica que entre accept y deliver alguien
+  // cambió el precio, o que la orden viene con un precio anómalo. NO
+  // bloquea la entrega — es observacional.
+  const handlePriceMismatch = useCallback(
+    (payload: {
+      order_id: number;
+      session_id: number;
+      mismatches: Array<{
+        product_id: number;
+        product_name: string;
+        sold_unit_price: number;
+        current_unit_price: number;
+        quantity: number;
+      }>;
+    }) => {
+      const names = payload.mismatches
+        .slice(0, 3)
+        .map(
+          (m) =>
+            `${m.product_name} (vendido ${fmt(m.sold_unit_price)}, actual ${fmt(m.current_unit_price)})`,
+        )
+        .join(" · ");
+      const more =
+        payload.mismatches.length > 3
+          ? ` y ${payload.mismatches.length - 3} más`
+          : "";
+      pushToast(
+        `Precio diferente en pedido #${payload.order_id}: ${names}${more}`,
+      );
+    },
+    [pushToast],
+  );
+
   useSocket({
     staff: true,
     onQueueUpdated: handleQueueUpdated,
@@ -1316,6 +1351,7 @@ export default function AdminPage() {
     onOrderRequestUpdated: handleOrderRequestUpdated,
     onTableSessionUpdated: handleTableSessionUpdated,
     onPlaybackUpdated: handlePlaybackUpdated,
+    onPriceMismatch: handlePriceMismatch,
   });
 
   useEffect(() => {
