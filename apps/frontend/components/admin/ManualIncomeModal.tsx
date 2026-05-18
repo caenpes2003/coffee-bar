@@ -134,7 +134,7 @@ export function ManualIncomeModal({
             <input
               value={concept}
               onChange={(e) => setConcept(e.target.value)}
-              placeholder='Ej. "Bodega de carpas - Cliente X"'
+              placeholder="Describe el ingreso"
               maxLength={120}
               autoFocus
               style={inputStyle()}

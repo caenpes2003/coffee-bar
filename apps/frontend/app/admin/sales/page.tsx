@@ -119,9 +119,10 @@ export default function AdminSalesPage() {
         luggageApi.summary(extraParams).catch(() => null),
       ]);
       setData(res);
+      // `total_revenue` del summary ya consolida baños + manuales del
+      // lado del backend. Sumamos luggage que vive en otra tabla.
       setExtrasRevenue(
-        (eSummary?.restroom.total.revenue ?? 0) +
-          (lSummary?.luggage.revenue ?? 0),
+        (eSummary?.total_revenue ?? 0) + (lSummary?.luggage.revenue ?? 0),
       );
     } catch (err) {
       setError(getErrorMessage(err));
@@ -910,8 +911,25 @@ function SalesKpiStrip({
           previous={extrasRevenue}
           formatPrev={fmt}
         />
+        {/*
+          Total general = ingresos por productos + ingresos extras
+          (baño, maletas, manuales). Es el dato "qué entró a caja en
+          total en el rango". No tiene comparación contra período
+          anterior porque el backend hoy no devuelve la serie previa
+          de extras — `previous` se setea igual a `current` para que
+          el delta sea 0% sin pintar una flecha confusa.
+        */}
         <KpiCard
           index={2}
+          label="Total general"
+          value={fmt(summary.total_revenue + extrasRevenue)}
+          tone="warm"
+          current={summary.total_revenue + extrasRevenue}
+          previous={summary.total_revenue + extrasRevenue}
+          formatPrev={fmt}
+        />
+        <KpiCard
+          index={3}
           label="Tickets"
           value={String(summary.tickets_count)}
           tone="success"
@@ -920,7 +938,7 @@ function SalesKpiStrip({
           spark={daily.map((d) => d.tickets)}
         />
         <KpiCard
-          index={3}
+          index={4}
           label="Ticket promedio"
           value={summary.tickets_count > 0 ? fmt(summary.avg_ticket) : "—"}
           tone="neutral"
@@ -929,7 +947,7 @@ function SalesKpiStrip({
           formatPrev={fmt}
         />
         <KpiCard
-          index={4}
+          index={5}
           label="Unidades"
           value={String(summary.total_units)}
           tone="neutral"
