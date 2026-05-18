@@ -1065,12 +1065,14 @@ export const musicApi = {
 // ─── Extra income (servicios accesorios — baño) ─────────────────────────────
 export type ExtraIncomeApi = {
   id: number;
-  type: "restroom";
+  type: "restroom" | "manual";
   subtype: string | null;
   amount: number;
   quantity: number;
   total_amount: number;
   status: "active" | "reversed";
+  /** Concepto descriptivo. Solo se llena para `type=manual`. */
+  concept: string | null;
   notes: string | null;
   created_by: string | null;
   created_at: string;
@@ -1086,6 +1088,8 @@ export type ExtraIncomeSummary = {
     female: { count: number; revenue: number };
     total: { count: number; revenue: number };
   };
+  manual: { count: number; revenue: number };
+  total_revenue: number;
 };
 
 export const extraIncomeApi = {
@@ -1098,8 +1102,18 @@ export const extraIncomeApi = {
       .post<ExtraIncomeApi>("/admin/extra-income/restroom", { subtype, notes })
       .then((r) => r.data),
 
+  /** Registrar un ingreso extra manual (concepto + monto libres). */
+  createManual: (payload: {
+    concept: string;
+    amount: number;
+    notes?: string;
+  }): Promise<ExtraIncomeApi> =>
+    adminApi
+      .post<ExtraIncomeApi>("/admin/extra-income/manual", payload)
+      .then((r) => r.data),
+
   list: (params?: {
-    type?: "restroom";
+    type?: "restroom" | "manual";
     status?: "active" | "reversed";
     from?: string;
     to?: string;

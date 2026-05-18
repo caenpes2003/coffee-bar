@@ -636,6 +636,11 @@ model AuditLog {
 enum ExtraIncomeType {
   // Servicio de baño con tarifa diferenciada por subtype.
   restroom
+  // Ingreso eventual con concepto libre y monto definido por el staff
+  // al momento del cobro. Ej: "Bodega de carpas", "Renta de equipo".
+  // NO se forzan precios — el operador es el responsable. Útil para
+  // casos puntuales que no merecen entrada en el catálogo.
+  manual
 }
 
 // Subtypes posibles del baño. Texto libre como string para no atarse a
@@ -660,6 +665,10 @@ model ExtraIncome {
   quantity      Int               @default(1)
   total_amount  Decimal           @db.Decimal(10, 2)
   status        ExtraIncomeStatus @default(active)
+  // Concepto descriptivo del ingreso. Obligatorio para `manual`
+  // (descripción operativa: "Bodega carpas Cliente X"); ignorado para
+  // tipos predefinidos como `restroom` que ya se describen por subtype.
+  concept       String?
   notes         String?
   // Texto libre del staff que registró el cobro. NO es FK a User para
   // sobrevivir borrados del staff (igual que voided_by en TableSession).

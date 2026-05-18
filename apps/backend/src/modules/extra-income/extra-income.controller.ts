@@ -14,6 +14,7 @@ import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { AuthKinds } from "../auth/guards/decorators";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import type { AuthPayload } from "../auth/types";
+import { CreateManualIncomeDto } from "./dto/create-manual-income.dto";
 import { CreateRestroomIncomeDto } from "./dto/create-restroom-income.dto";
 import { ReverseExtraIncomeDto } from "./dto/reverse-extra-income.dto";
 import { ExtraIncomeService, type Actor } from "./extra-income.service";
@@ -43,6 +44,19 @@ export class ExtraIncomeController {
     @CurrentAuth() auth: AuthPayload,
   ) {
     return this.service.createRestroom(dto, toActor(auth));
+  }
+
+  /**
+   * Ingreso manual: concepto + monto definidos por el operador. Para
+   * cobros eventuales que no tienen item en el catálogo (bodegaje,
+   * rentas, sponsoreos).
+   */
+  @Post("manual")
+  createManual(
+    @Body() dto: CreateManualIncomeDto,
+    @CurrentAuth() auth: AuthPayload,
+  ) {
+    return this.service.createManual(dto, toActor(auth));
   }
 
   @Get()
@@ -88,6 +102,7 @@ function toActor(auth: AuthPayload | undefined): Actor {
 function parseType(value: string | undefined): ExtraIncomeType | undefined {
   if (!value) return undefined;
   if (value === "restroom") return ExtraIncomeType.restroom;
+  if (value === "manual") return ExtraIncomeType.manual;
   throw new BadRequestException({
     message: `Invalid type: ${value}`,
     code: "EXTRA_INCOME_INVALID_TYPE",

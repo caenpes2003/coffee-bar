@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   extraIncomeApi,
   luggageApi,
+  type ExtraIncomeApi,
   type ExtraIncomeSummary,
   type LuggageSummary,
   type LuggageTicketApi,
@@ -30,15 +31,56 @@ import {
 import { getErrorMessage } from "@/lib/errors";
 import { C, FONT_DISPLAY, FONT_MONO, FONT_UI, fmt, DUR_BASE } from "@/lib/theme";
 import { LuggageNewModal } from "./LuggageNewModal";
+import { ManualIncomeModal } from "./ManualIncomeModal";
 
 type Toast = { id: number; text: string; tone: "ok" | "alert" };
+
+/**
+ * Detecta si hay un modal/drawer activo en el DOM. Buscamos cualquier
+ * elemento con `role="dialog"` (o `aria-modal="true"`) presente —
+ * incluye AdminBillDrawer, ProductDetailPanel, LuggageNewModal, etc.
+ *
+ * Usamos MutationObserver para no tener que tocar cada modal individual
+ * con un context/store global: el dock se entera solo. Si en el futuro
+ * algún overlay no se marca como dialog, este hook no lo detectará
+ * — pero el patrón aria es lo correcto, así que sumarlo donde falte es
+ * la cura, no inventar otro mecanismo.
+ */
+function useOverlayOpen(): boolean {
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const detect = () => {
+      const found = document.querySelector(
+        '[role="dialog"], [aria-modal="true"]',
+      );
+      setOverlayOpen(found !== null);
+    };
+    detect();
+    const observer = new MutationObserver(detect);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["role", "aria-modal"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return overlayOpen;
+}
 
 export function ExtrasDock() {
   const [open, setOpen] = useState(false);
   const [extras, setExtras] = useState<ExtraIncomeSummary | null>(null);
   const [luggage, setLuggage] = useState<LuggageSummary | null>(null);
   const [busy, setBusy] = useState<null | "male" | "female">(null);
+  // Cuando el operador abre un drawer/modal (factura, editor producto,
+  // etc.), el dock se esconde para no taparlo. Sigue cargando datos en
+  // background; solo desaparece visualmente. Toasts se mantienen porque
+  // son ephemeral y queremos confirmaciones de cobros recientes visibles.
+  const overlayOpen = useOverlayOpen();
   const [showLuggageModal, setShowLuggageModal] = useState(false);
+  const [showManualModal, setShowManualModal] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const loadSummaries = useCallback(async () => {
@@ -107,8 +149,20 @@ export function ExtrasDock() {
     notifyExtrasChanged();
   };
 
+  const onManualCreated = (entry: ExtraIncomeApi) => {
+    pushToast(
+      `Ingreso registrado: ${entry.concept ?? "Otro"} · ${fmt(entry.total_amount)}`,
+    );
+    setShowManualModal(false);
+    void loadSummaries();
+    notifyExtrasChanged();
+  };
+
+  // Total del día = baños + manuales + maletas. El backend ya nos da
+  // `extras.total_revenue` con la suma de los dos primeros, sumamos
+  // maletas porque viven en otra tabla.
   const todayRevenue =
-    (extras?.restroom.total.revenue ?? 0) + (luggage?.luggage.revenue ?? 0);
+    (extras?.total_revenue ?? 0) + (luggage?.luggage.revenue ?? 0);
 
   return (
     <>
@@ -152,8 +206,11 @@ export function ExtrasDock() {
           ))}
         </AnimatePresence>
 
+        {/* Si hay un modal/drawer abierto en la pantalla (factura, editor
+            de producto, etc.) Y NO fue abierto por nosotros, ocultamos el
+            dock para no taparlos. Cuando el modal cierra, el dock vuelve. */}
         <AnimatePresence initial={false}>
-          {open ? (
+          {overlayOpen && !showLuggageModal && !showManualModal ? null : open ? (
             <motion.div
               key="expanded"
               initial={{ opacity: 0, y: 8, scale: 0.96 }}
@@ -279,6 +336,42 @@ export function ExtrasDock() {
                 </span>
               </button>
 
+              {/* Otro ingreso (manual): para cobros puntuales sin item
+                  en catálogo. Concepto + monto definidos por el operador. */}
+              <button
+                type="button"
+                onClick={() => setShowManualModal(true)}
+                style={{
+                  padding: "10px 12px",
+                  border: `1px solid ${C.cacao}`,
+                  background: C.cream,
+                  borderRadius: 12,
+                  fontFamily: FONT_UI,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: C.ink,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  textAlign: "left",
+                }}
+              >
+                <span>
+                  <span style={{ fontSize: 16, marginRight: 8 }}>＋</span>
+                  Otro ingreso
+                </span>
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 11,
+                    color: C.mute,
+                  }}
+                >
+                  {extras?.manual.count ?? 0} hoy
+                </span>
+              </button>
+
               {/* Mini breakdown del día */}
               {extras && (
                 <div
@@ -315,6 +408,16 @@ export function ExtrasDock() {
                       </span>
                       <span style={{ textAlign: "right" }}>
                         {fmt(luggage.luggage.revenue)}
+                      </span>
+                    </>
+                  )}
+                  {extras.manual.count > 0 && (
+                    <>
+                      <span>
+                        Otros · {extras.manual.count}
+                      </span>
+                      <span style={{ textAlign: "right" }}>
+                        {fmt(extras.manual.revenue)}
                       </span>
                     </>
                   )}
@@ -391,6 +494,13 @@ export function ExtrasDock() {
         <LuggageNewModal
           onCancel={() => setShowLuggageModal(false)}
           onCreated={onLuggageCreated}
+        />
+      )}
+
+      {showManualModal && (
+        <ManualIncomeModal
+          onCancel={() => setShowManualModal(false)}
+          onCreated={onManualCreated}
         />
       )}
     </>

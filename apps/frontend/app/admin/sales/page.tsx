@@ -21,6 +21,7 @@ import {
   type SalesInsightsResponse,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useEscapeKey } from "@/lib/hooks/useEscapeKey";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
   C,
@@ -3336,7 +3337,11 @@ function pagerBtn(disabled: boolean): React.CSSProperties {
 function ExtrasTab({ range }: { range: DateRange }) {
   const [extras, setExtras] = useState<ExtraIncomeSummary | null>(null);
   const [luggage, setLuggage] = useState<LuggageSummary | null>(null);
+  // Lista de cobros de baño (restroom).
   const [extrasList, setExtrasList] = useState<ExtraIncomeApi[]>([]);
+  // Lista de ingresos manuales (type=manual). Vive aparte porque tiene
+  // su propia tabla (con columna "Concepto").
+  const [manualList, setManualList] = useState<ExtraIncomeApi[]>([]);
   const [active, setActive] = useState<LuggageTicketApi[]>([]);
   const [recentLuggage, setRecentLuggage] = useState<LuggageTicketApi[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3354,16 +3359,19 @@ function ExtrasTab({ range }: { range: DateRange }) {
     setError(null);
     try {
       const params = rangeToIsoBounds(range);
-      const [eSum, lSum, eList, activeRows, recentRows] = await Promise.all([
-        extraIncomeApi.summary(params),
-        luggageApi.summary(params),
-        extraIncomeApi.list({ type: "restroom", ...params, limit: 200 }),
-        luggageApi.list({ status: "active", limit: 100 }),
-        luggageApi.list({ limit: 50 }),
-      ]);
+      const [eSum, lSum, eList, mList, activeRows, recentRows] =
+        await Promise.all([
+          extraIncomeApi.summary(params),
+          luggageApi.summary(params),
+          extraIncomeApi.list({ type: "restroom", ...params, limit: 200 }),
+          extraIncomeApi.list({ type: "manual", ...params, limit: 200 }),
+          luggageApi.list({ status: "active", limit: 100 }),
+          luggageApi.list({ limit: 50 }),
+        ]);
       setExtras(eSum);
       setLuggage(lSum);
       setExtrasList(eList);
+      setManualList(mList);
       setActive(activeRows);
       setRecentLuggage(recentRows);
     } catch (e) {
@@ -3375,6 +3383,15 @@ function ExtrasTab({ range }: { range: DateRange }) {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Refresca el tab cuando el ExtrasDock (en /admin) dispara un cambio.
+  // El operador puede tener este tab abierto y registrar un ingreso
+  // manual desde otra pestaña — la lista se actualiza solita.
+  useEffect(() => {
+    const onChanged = () => void load();
+    window.addEventListener("crown:extras-changed", onChanged);
+    return () => window.removeEventListener("crown:extras-changed", onChanged);
   }, [load]);
 
   const onDeliver = async (t: LuggageTicketApi) => {
@@ -3407,7 +3424,7 @@ function ExtrasTab({ range }: { range: DateRange }) {
   if (error) return <ErrorBlock text={error} />;
 
   const totalExtras =
-    (extras?.restroom.total.revenue ?? 0) + (luggage?.luggage.revenue ?? 0);
+    (extras?.total_revenue ?? 0) + (luggage?.luggage.revenue ?? 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -3421,7 +3438,7 @@ function ExtrasTab({ range }: { range: DateRange }) {
         <MiniStat
           label="Total extras"
           value={fmt(totalExtras)}
-          hint="Baño + Maletas"
+          hint="Baño + Maletas + Otros"
         />
         <MiniStat
           label="Baños"
@@ -3505,6 +3522,44 @@ function ExtrasTab({ range }: { range: DateRange }) {
               </table>
             </div>
           )}
+        </Panel>
+      )}
+
+      {/* Ingresos manuales (rentas, bodegaje, sponsoreos). Vacío si
+          no hubo ninguno en el rango — no consume espacio visual al
+          pedo. */}
+      {manualList.length > 0 && (
+        <Panel title="Otros ingresos">
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontFamily: FONT_UI,
+                fontSize: 13,
+              }}
+            >
+              <thead>
+                <tr>
+                  <th style={{ ...thBase(), textAlign: "left" }}>Fecha</th>
+                  <th style={{ ...thBase(), textAlign: "left" }}>Concepto</th>
+                  <th style={{ ...thBase(), textAlign: "left" }}>Notas</th>
+                  <th style={{ ...thBase(), textAlign: "right" }}>Monto</th>
+                  <th style={{ ...thBase(), textAlign: "center" }}>Estado</th>
+                  <th style={{ ...thBase(), textAlign: "right" }}>—</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualList.map((row) => (
+                  <ManualIncomeRow
+                    key={row.id}
+                    row={row}
+                    onReverse={() => setReverseTarget(row)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Panel>
       )}
 
@@ -3692,6 +3747,131 @@ function ExtraIncomeRow({
       </td>
       <td style={{ padding: "8px 10px" }}>
         {row.subtype === "male" ? "Baño H" : "Baño M"}
+      </td>
+      <td
+        style={{
+          padding: "8px 10px",
+          fontFamily: FONT_UI,
+          fontSize: 12,
+          color: C.mute,
+        }}
+      >
+        {row.notes ?? "—"}
+      </td>
+      <td
+        style={{
+          padding: "8px 10px",
+          textAlign: "right",
+          fontFamily: FONT_UI,
+          color: isReversed ? C.mute : C.gold,
+          fontWeight: 600,
+          textDecoration: isReversed ? "line-through" : "none",
+        }}
+      >
+        {fmt(row.total_amount)}
+      </td>
+      <td style={{ padding: "8px 10px", textAlign: "center" }}>
+        {isReversed ? (
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              color: C.terracotta,
+              background: C.terracottaSoft,
+              padding: "2px 8px",
+              borderRadius: 999,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+            title={row.reverse_reason ?? undefined}
+          >
+            Revertido
+          </span>
+        ) : (
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              color: C.olive,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            Activo
+          </span>
+        )}
+      </td>
+      <td style={{ padding: "8px 10px", textAlign: "right" }}>
+        {!isReversed && (
+          <button
+            type="button"
+            onClick={onReverse}
+            style={{
+              padding: "6px 12px",
+              border: `1px solid ${C.terracotta}`,
+              background: "transparent",
+              color: C.terracotta,
+              borderRadius: 999,
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Reversar
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Row de un ingreso manual. Similar al de baño pero la primera columna
+ * muestra fecha completa (no solo hora) porque los manuales pueden ser
+ * de cualquier día del rango, y la segunda columna muestra el concepto
+ * del operador en vez de "Baño H/M".
+ */
+function ManualIncomeRow({
+  row,
+  onReverse,
+}: {
+  row: ExtraIncomeApi;
+  onReverse: () => void;
+}) {
+  const isReversed = row.status === "reversed";
+  const created = new Date(row.created_at);
+  return (
+    <tr
+      style={{
+        borderBottom: `1px solid ${C.sand}`,
+        opacity: isReversed ? 0.55 : 1,
+      }}
+    >
+      <td
+        style={{
+          padding: "8px 10px",
+          fontFamily: FONT_MONO,
+          fontSize: 11,
+          color: C.cacao,
+        }}
+      >
+        {formatDateShort(created)} {formatHm(created)}
+      </td>
+      <td
+        style={{
+          padding: "8px 10px",
+          fontFamily: FONT_UI,
+          fontSize: 13,
+          color: C.ink,
+          fontWeight: 600,
+        }}
+      >
+        {row.concept ?? "—"}
       </td>
       <td
         style={{
@@ -4044,10 +4224,17 @@ function ReverseExtraIncomeModal({
     }
   };
 
+  // Hint contextual: para baño mostramos el subtype, para manual el
+  // concepto (que es el dato relevante de auditoría al reversar).
+  const hint =
+    target.type === "manual"
+      ? `${target.concept ?? "Otro ingreso"} · ${fmt(target.total_amount)}`
+      : `${target.subtype === "male" ? "Baño hombre" : "Baño mujer"} · ${fmt(target.total_amount)}`;
+
   return (
     <ReasonModal
       title="Reversar cobro"
-      hint={`${target.subtype === "male" ? "Baño hombre" : "Baño mujer"} · ${fmt(target.total_amount)}`}
+      hint={hint}
       value={reason}
       onChange={setReason}
       onCancel={onCancel}
@@ -4122,11 +4309,16 @@ function ReasonModal({
   error: string | null;
 }) {
   const canSubmit = value.trim().length >= 3 && !submitting;
+  // Esc cierra el modal. Mientras está submitting NO permitimos cerrar
+  // para evitar cancelar una operación en curso.
+  useEscapeKey(onCancel, !submitting);
   return (
     <div
       role="dialog"
       aria-modal
-      onClick={onCancel}
+      onClick={() => {
+        if (!submitting) onCancel();
+      }}
       style={{
         position: "fixed",
         inset: 0,

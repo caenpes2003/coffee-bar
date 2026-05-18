@@ -11,6 +11,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CreateManualIncomeDto } from "./dto/create-manual-income.dto";
 import { CreateRestroomIncomeDto } from "./dto/create-restroom-income.dto";
 import { ReverseExtraIncomeDto } from "./dto/reverse-extra-income.dto";
 
@@ -59,6 +60,33 @@ export class ExtraIncomeService {
         quantity: 1,
         total_amount: new Prisma.Decimal(amount),
         status: ExtraIncomeStatus.active,
+        notes: dto.notes?.trim() || null,
+        created_by: actor?.name ?? null,
+      },
+    });
+    return this.serialize(created);
+  }
+
+  /**
+   * Registrar un ingreso extra manual (concepto + monto definidos por
+   * el operador). A diferencia de restroom, el precio NO es forzado por
+   * el backend — el operador es responsable. Usado para cobros
+   * puntuales que no merecen item en el catálogo de productos:
+   * bodegaje, rentas eventuales, sponsoreos.
+   */
+  async createManual(
+    dto: CreateManualIncomeDto,
+    actor: Actor,
+  ): Promise<SerializedExtraIncome> {
+    const created = await this.prisma.extraIncome.create({
+      data: {
+        type: ExtraIncomeType.manual,
+        subtype: null,
+        amount: new Prisma.Decimal(dto.amount),
+        quantity: 1,
+        total_amount: new Prisma.Decimal(dto.amount),
+        status: ExtraIncomeStatus.active,
+        concept: dto.concept.trim(),
         notes: dto.notes?.trim() || null,
         created_by: actor?.name ?? null,
       },
@@ -140,8 +168,13 @@ export class ExtraIncomeService {
 
   /**
    * Resumen del día (o rango si se pasan from/to). Solo cuenta filas
-   * `active`. Útil para el card "Baños hoy" del admin sin pedirle al
-   * cliente que agregue en memoria.
+   * `active`. Útil para los cards de extras del admin sin tener que
+   * agregar en memoria desde el cliente.
+   *
+   * Incluye desglose por tipo:
+   *   - restroom: ya separado por subtype (male/female)
+   *   - manual: total y count agregados (cada ingreso tiene concepto
+   *     distinto, así que no tiene sentido subgrupar acá)
    */
   async getSummary(opts: {
     from?: Date;
@@ -153,28 +186,36 @@ export class ExtraIncomeService {
       female: { count: number; revenue: number };
       total: { count: number; revenue: number };
     };
+    manual: { count: number; revenue: number };
+    total_revenue: number;
   }> {
     const { from, to } = this.resolveDefaultRange(opts.from, opts.to);
     const rows = await this.prisma.extraIncome.findMany({
       where: {
-        type: ExtraIncomeType.restroom,
         status: ExtraIncomeStatus.active,
         created_at: { gte: from, lt: to },
       },
-      select: { subtype: true, quantity: true, total_amount: true },
+      select: { type: true, subtype: true, quantity: true, total_amount: true },
     });
     let maleCount = 0;
     let maleRevenue = 0;
     let femaleCount = 0;
     let femaleRevenue = 0;
+    let manualCount = 0;
+    let manualRevenue = 0;
     for (const r of rows) {
       const amount = Number(r.total_amount);
-      if (r.subtype === "male") {
-        maleCount += r.quantity;
-        maleRevenue += amount;
-      } else if (r.subtype === "female") {
-        femaleCount += r.quantity;
-        femaleRevenue += amount;
+      if (r.type === ExtraIncomeType.restroom) {
+        if (r.subtype === "male") {
+          maleCount += r.quantity;
+          maleRevenue += amount;
+        } else if (r.subtype === "female") {
+          femaleCount += r.quantity;
+          femaleRevenue += amount;
+        }
+      } else if (r.type === ExtraIncomeType.manual) {
+        manualCount += 1;
+        manualRevenue += amount;
       }
     }
     return {
@@ -187,6 +228,8 @@ export class ExtraIncomeService {
           revenue: round(maleRevenue + femaleRevenue),
         },
       },
+      manual: { count: manualCount, revenue: round(manualRevenue) },
+      total_revenue: round(maleRevenue + femaleRevenue + manualRevenue),
     };
   }
 

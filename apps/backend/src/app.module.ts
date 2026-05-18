@@ -84,6 +84,10 @@ export class AppModule implements NestModule {
           path: "admin/extra-income/restroom",
           method: RequestMethod.POST,
         },
+        {
+          path: "admin/extra-income/manual",
+          method: RequestMethod.POST,
+        },
         { path: "admin/luggage", method: RequestMethod.POST },
       );
   }

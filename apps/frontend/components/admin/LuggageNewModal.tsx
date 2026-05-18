@@ -16,6 +16,7 @@ import {
   type LuggageTicketApi,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useEscapeKey } from "@/lib/hooks/useEscapeKey";
 import { C, FONT_DISPLAY, FONT_MONO, FONT_UI, fmt } from "@/lib/theme";
 
 const TICKET_MIN = 1;
@@ -38,6 +39,11 @@ export function LuggageNewModal({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Cerrar con Escape (además del click-fuera ya implementado en el
+  // backdrop). NO permitimos cerrar mientras está enviando para evitar
+  // que el operador descarte una operación en curso por accidente.
+  useEscapeKey(onCancel, !submitting);
 
   const loadActive = useCallback(async () => {
     try {
@@ -98,7 +104,11 @@ export function LuggageNewModal({
       role="dialog"
       aria-modal
       aria-label="Nueva maleta"
-      onClick={onCancel}
+      onClick={() => {
+        // Click en el backdrop cierra. Si está en submit, ignorar para
+        // no cancelar una operación en curso.
+        if (!submitting) onCancel();
+      }}
       style={{
         position: "fixed",
         inset: 0,
