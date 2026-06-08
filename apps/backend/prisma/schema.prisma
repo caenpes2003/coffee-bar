@@ -764,3 +764,185 @@ model LuggageTicket {
   @@index([ticket_number, status])
   @@index([customer_phone])
 }
+
+
+// ─── Sync infrastructure (Local-primary POS → Cloud backoffice) ──────────
+//
+// Ver ARQUITECTURA.md §4 para el patrón completo (Transactional Outbox).
+//
+// La tabla `OutboxEvent` registra cada cambio operativo que debe pushearse
+// al cloud. Se escribe en la MISMA transacción que la entidad afectada
+// (atomicidad: nunca hay un cambio sin su evento o viceversa). Un worker
+// separado consume `status=pending` ordenado por `occurred_at` y la
+// drena al cloud.
+//
+// En esta primera fase la tabla se crea VACÍA y sin productor. Los
+// services se conectarán a ella en fases posteriores. Por ahora es solo
+// infraestructura preparada para no requerir migration cuando llegue
+// el worker.
+
+enum OutboxStatus {
+  pending      // creado, esperando ser pusheado
+  pushed       // confirmado en cloud
+  quarantined  // schema incompatible o error permanente, requiere intervención
+}
+
+model OutboxEvent {
+  id              BigInt       @id @default(autoincrement())
+  // Nodo que generó el evento. En cloud queda "cloud", en cada local
+  // queda "local-crown-001", "local-crown-002", etc.
+  node_id         String
+  // Llave de idempotencia: UUID único por evento emitido. El cloud
+  // deduplica con UNIQUE (node_id, idempotency_key). Esto cierra el
+  // hueco clásico de reintentos: si el local pushea, cloud aplica, pero
+  // el ACK se pierde (timeout), local reintenta — el segundo INSERT
+  // colisiona con el unique y se trata como "ya procesado". Sin esto,
+  // la deduplicación dependería del upsert por aggregate_id, lo cual
+  // funciona pero pierde matiz cuando un mismo aggregate genera varios
+  // eventos (ej. order.created + order.delivered del mismo Order).
+  idempotency_key String       @default(uuid())
+  // Tipo de evento, ej. "session.opened", "consumption.created",
+  // "order.delivered". El consumer cloud decide qué hacer según este.
+  event_type      String
+  // Tabla de la entidad afectada, ej. "TableSession", "Consumption".
+  aggregate_type  String
+  // external_id de la entidad afectada (UUID). El upsert al cloud se
+  // hace por (node_id, aggregate_type, aggregate_id) para materializar
+  // la entidad. Pero la deduplicación de EVENTOS (no de entidades) se
+  // hace por idempotency_key.
+  aggregate_id    String
+  // Snapshot completo de la fila al momento del evento. JSON puro para
+  // no atar el outbox al schema vigente; el consumer ve qué hacer con
+  // cada versión.
+  payload         Json
+  // Versionado: el cloud puede aceptar/rechazar/migrar payloads viejos
+  // según su tolerancia. NO descartar silenciosamente — quarantine + alert.
+  schema_version  String
+  app_version     String
+  occurred_at     DateTime     @default(now())
+  status          OutboxStatus @default(pending)
+  pushed_at       DateTime?
+  push_attempts   Int          @default(0)
+  last_error      String?
+
+  // Deduplicación cross-nodo: el cloud rechaza un INSERT con misma
+  // (node_id, idempotency_key) — equivale a "ya procesé este evento".
+  @@unique([node_id, idempotency_key])
+  // El worker filtra por (status, occurred_at) para drenar en orden.
+  @@index([status, occurred_at])
+  // Para postmortem: "dame todos los eventos de esta sesión".
+  @@index([aggregate_type, aggregate_id])
+}
+
+// ─── Operational mode ─────────────────────────────────────────────────────
+//
+// Ver ARQUITECTURA.md §5. Track de transiciones entre modos del sistema
+// (CLOUD_NORMAL ↔ LOCAL_PRIMARY ↔ RECOVERY etc.). Crítico para postmortem:
+// "¿qué pasó anoche entre las 8 y las 10?" tiene respuesta literal acá.
+
+enum OperationalModeKind {
+  CLOUD_NORMAL    // cloud responde + local sincronizado (estado base)
+  LOCAL_PRIMARY   // cloud no responde, local operando standalone
+  LOCAL_DEGRADED  // cloud OK pero outbox atrasado más de N minutos
+  RECOVERY        // cloud volvió, drenando outbox pendiente
+  EMERGENCY       // modo manual forzado por staff
+  MAINTENANCE     // local apagado intencionalmente (deploy, migration, etc.)
+}
+
+model OperationalMode {
+  id          BigInt              @id @default(autoincrement())
+  node_id     String
+  mode        OperationalModeKind
+  reason      String?
+  // Quién detectó/forzó el cambio. "auto_health_check" para automático,
+  // email del admin para manual.
+  detected_by String
+  started_at  DateTime            @default(now())
+  ended_at    DateTime?
+  // Métricas snapshot al cierre del modo, útiles para postmortem y
+  // dashboard de salud del sync. Se llenan cuando el modo termina.
+  events_queued    Int?
+  events_synced    Int?
+  duration_seconds Int?
+
+  @@index([node_id, started_at])
+  @@index([mode, ended_at])
+}
+
+// ─── Local health snapshot ────────────────────────────────────────────────
+//
+// Ver ARQUITECTURA.md §12.5. Foto operativa cada ~5 min del local para
+// observabilidad histórica. Permite reconstruir "qué había abierto a las
+// 19:15" cuando se reporta pérdida de datos.
+//
+// Se popula desde un cron interno del worker; cada snapshot es independiente.
+
+model LocalHealthSnapshot {
+  id                        BigInt              @id @default(autoincrement())
+  node_id                   String
+  taken_at                  DateTime            @default(now())
+  // Estado operativo capturado.
+  open_sessions             Int
+  pending_orders            Int
+  active_queue_items        Int
+  pending_outbox_events     Int
+  inventory_movements_today Int
+  consumptions_today        Int
+  total_revenue_today       Decimal             @db.Decimal(12, 2)
+  active_luggage_tickets    Int
+  current_mode              OperationalModeKind
+  // Salud del sync hacia cloud.
+  cloud_reachable           Boolean
+  last_successful_push_at   DateTime?
+  oldest_pending_event_at   DateTime?
+
+  @@index([node_id, taken_at])
+}
+
+
+// ─── Registro de nodos del sistema ────────────────────────────────────────
+//
+// Ver ARQUITECTURA.md §3.5. Catálogo formal de cada nodo (cloud + cada
+// local). Usado por:
+//   - validación de tokens (iss ∈ NodeRegistry where is_active=true)
+//   - dashboard "qué locales tengo activos" + último heartbeat
+//   - assignment de pools (rangos de fichas LuggageTicket por nodo)
+//   - reporte de schema_version desfasada por nodo
+//
+// El node_id que aparece en OutboxEvent, OperationalMode,
+// LocalHealthSnapshot, etc., debe ser una FK lógica a esta tabla
+// (no hard FK porque queremos seguir guardando histórico aunque el
+// nodo se haya retirado — `is_active=false` en vez de DELETE).
+
+enum NodeType {
+  cloud    // Railway / hosting principal
+  local    // Mini-PC en un bar
+}
+
+model NodeRegistry {
+  // PK es el node_id mismo: "cloud", "local-crown-001", etc.
+  node_id        String   @id
+  name           String   // legible: "Cloud Railway", "Crown 4.90 - Sede Centro"
+  type           NodeType
+  installed_at   DateTime @default(now())
+  // Heartbeat: el nodo se reporta vivo. Si pasa demasiado tiempo sin
+  // actualizar, el cloud levanta alerta. NULL = nunca se reportó (recién
+  // registrado, todavía no arrancó).
+  last_seen_at   DateTime?
+  // Versiones reportadas en el último heartbeat. Permite detectar nodos
+  // desactualizados sin entrar al mini-PC físicamente.
+  app_version    String?
+  schema_version String?
+  // Soft-delete: nodo retirado del servicio sin perder histórico.
+  is_active      Boolean  @default(true)
+  // Pool preasignado de LuggageTicket para este nodo. Vacío para cloud
+  // (que usa 1-99999 por convención). Para locales: "100000-109999",
+  // "110000-119999", etc. Se valida en el service de luggage.
+  luggage_ticket_pool_start Int?
+  luggage_ticket_pool_end   Int?
+  notes          String?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@index([type, is_active])
+}
