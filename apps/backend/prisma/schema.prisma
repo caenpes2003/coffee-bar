@@ -188,6 +188,11 @@ model Table {
 
 model TableSession {
   id                  Int                @id @default(autoincrement())
+  // Identidad estable cross-nodo (UUID). Cada nodo (cloud + cada local)
+  // genera el suyo al crear la fila; el sync usa esta llave para
+  // deduplicar. Ver ARQUITECTURA.md sección 3. Para filas históricas,
+  // la migration les asigna UUID retroactivo.
+  external_id         String             @unique @default(uuid())
   table_id            Int
   status              TableSessionStatus @default(open)
   total_consumption   Decimal            @default(0) @db.Decimal(10, 2)
@@ -240,6 +245,8 @@ model TableSession {
 
 model Song {
   id                 Int         @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id        String      @unique @default(uuid())
   youtube_id         String      @unique
   title              String
   duration           Int
@@ -251,6 +258,8 @@ model Song {
 
 model QueueItem {
   id                 Int            @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id        String         @unique @default(uuid())
   song_id            Int
   table_id           Int?
   priority_score     Decimal        @default(0) @db.Decimal(10, 2)
@@ -459,6 +468,8 @@ model ProductRecipeOption {
  */
 model OrderItemComponent {
   id                   Int       @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id          String    @unique @default(uuid())
   order_item_id        Int
   component_product_id Int
   quantity             Int
@@ -480,6 +491,8 @@ model OrderItemComponent {
  */
 model InventoryMovement {
   id          Int                   @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id String                @unique @default(uuid())
   product_id  Int
   type        InventoryMovementType
   // Signed delta applied to Product.stock at the moment of recording. The
@@ -498,6 +511,8 @@ model InventoryMovement {
 
 model OrderRequest {
   id                Int                @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id       String             @unique @default(uuid())
   table_session_id  Int
   status            OrderRequestStatus @default(pending)
   items             Json
@@ -516,6 +531,8 @@ model OrderRequest {
 
 model Order {
   id                Int          @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id       String       @unique @default(uuid())
   table_session_id  Int
   order_request_id  Int          @unique
   status            OrderStatus  @default(accepted)
@@ -534,14 +551,16 @@ model Order {
 }
 
 model OrderItem {
-  id         Int                 @id @default(autoincrement())
-  order_id   Int
-  product_id Int
-  quantity   Int
-  unit_price Decimal              @db.Decimal(10, 2)
-  created_at DateTime             @default(now())
-  order      Order                @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  product    Product              @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  id          Int                  @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id String               @unique @default(uuid())
+  order_id    Int
+  product_id  Int
+  quantity    Int
+  unit_price  Decimal              @db.Decimal(10, 2)
+  created_at  DateTime             @default(now())
+  order       Order                @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product     Product              @relation(fields: [product_id], references: [id], onDelete: Restrict)
   // Componentes físicos descontados (sólo presente cuando product es
   // un compuesto). Vacío para productos simples.
   components OrderItemComponent[]
@@ -552,6 +571,8 @@ model OrderItem {
 
 model Consumption {
   id                Int             @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id       String          @unique @default(uuid())
   table_session_id  Int
   order_id          Int?
   product_id        Int?
@@ -605,6 +626,8 @@ model PlaybackState {
  */
 model AuditLog {
   id          Int            @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id String         @unique @default(uuid())
   kind        AuditEventKind
   actor_id    Int?
   actor_label String?
@@ -654,6 +677,8 @@ enum ExtraIncomeStatus {
 
 model ExtraIncome {
   id            Int               @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id   String            @unique @default(uuid())
   type          ExtraIncomeType
   // Variante dentro del tipo. Para restroom: "male" | "female". Validado
   // en el service según el tipo. Nullable para tipos futuros sin variante.
@@ -712,6 +737,8 @@ enum LuggagePaymentStatus {
 
 model LuggageTicket {
   id                   Int                  @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id          String               @unique @default(uuid())
   // Número de la ficha física (1-30 hoy; ampliable cambiando la UI).
   // Validación de unicidad mientras está active vive en el service: la
   // BD garantiza la unicidad con un índice parcial creado en la migration.
