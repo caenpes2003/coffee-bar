@@ -20,6 +20,7 @@ import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { AccessCodeModule } from "./modules/access-code/access-code.module";
 import { ExtraIncomeModule } from "./modules/extra-income/extra-income.module";
 import { LuggageModule } from "./modules/luggage/luggage.module";
+import { OutboxModule } from "./modules/outbox/outbox.module";
 import { rateLimitMiddleware } from "./common/rate-limit.middleware";
 import { loggingMiddleware } from "./common/logging.middleware";
 import { PlaybackModule } from "./modules/playback/playback.module";
@@ -46,6 +47,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     TablesModule,
     ExtraIncomeModule,
     LuggageModule,
+    OutboxModule,
   ],
   providers: [
     // SentryGlobalFilter forwards every uncaught exception to Sentry
