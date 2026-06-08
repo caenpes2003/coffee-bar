@@ -12,6 +12,8 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { ConsumptionsService } from "../consumptions/consumptions.service";
+import { serializeConsumptionForOutbox } from "../consumptions/outbox-payload";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { ProductsService } from "../products/products.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TableProjectionService } from "../table-projection/table-projection.service";
@@ -61,6 +63,7 @@ export class OrdersService {
     private readonly realtime: RealtimeGateway,
     private readonly consumptions: ConsumptionsService,
     private readonly products: ProductsService,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   async findAll(filter?: {
@@ -280,7 +283,11 @@ export class OrdersService {
       const amount = new Prisma.Decimal(item.unit_price).mul(item.quantity);
       totalDelta = totalDelta.add(amount);
       const product = productById.get(item.product_id);
-      await tx.consumption.create({
+      // Capturamos el resultado del create (antes era void) para poder
+      // serializarlo al outbox sin un round-trip extra a la BD. Esto
+      // es el flujo de mayor volumen del bar — un select implícito
+      // adicional es despreciable.
+      const created = await tx.consumption.create({
         data: {
           table_session_id: order.table_session_id,
           order_id: order.id,
@@ -291,6 +298,16 @@ export class OrdersService {
           amount,
           type: ConsumptionType.product,
         },
+      });
+      // Enqueue dentro de la MISMA transacción. Si el enqueue falla
+      // (event_type/payload inválido), la transacción revierte: la
+      // entrega no se completa y se vuelve a intentar. Invariante del
+      // outbox: nunca un Consumption sin su evento, ni viceversa.
+      await this.outbox.enqueue(tx, {
+        event_type: "consumption.created",
+        aggregate_type: "Consumption",
+        aggregate_id: created.external_id,
+        payload: serializeConsumptionForOutbox(created),
       });
 
       // Comparación de seguridad: el OrderItem se creó con `unit_price`

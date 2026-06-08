@@ -11,6 +11,7 @@ import {
   TableSessionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { ProductsService } from "../products/products.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TableProjectionService } from "../table-projection/table-projection.service";
@@ -18,6 +19,7 @@ import {
   AdjustmentKind,
   CreateAdjustmentDto,
 } from "./dto/create-adjustment.dto";
+import { serializeConsumptionForOutbox } from "./outbox-payload";
 import { RefundConsumptionDto } from "./dto/refund-consumption.dto";
 
 /**
@@ -69,6 +71,7 @@ export class ConsumptionsService {
     private readonly projection: TableProjectionService,
     private readonly realtime: RealtimeGateway,
     private readonly products: ProductsService,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   async getBill(sessionId: number): Promise<BillView> {
@@ -161,6 +164,15 @@ export class ConsumptionsService {
           created_by: actor?.name ?? null,
         },
         include: CONSUMPTION_INCLUDE,
+      });
+      // Encolar evento dentro de la MISMA transacción. Si el enqueue
+      // falla (event_type/payload inválido), la transacción revierte y
+      // el Consumption no queda creado — invariante del outbox.
+      await this.outbox.enqueue(tx, {
+        event_type: "consumption.created",
+        aggregate_type: "Consumption",
+        aggregate_id: created.external_id,
+        payload: serializeConsumptionForOutbox(created),
       });
       await tx.tableSession.update({
         where: { id: sessionId },
@@ -259,6 +271,13 @@ export class ConsumptionsService {
           created_by: actor?.name ?? null,
         },
         include: CONSUMPTION_INCLUDE,
+      });
+      // Enqueue dentro de la misma tx. Ver invariante del outbox.
+      await this.outbox.enqueue(tx, {
+        event_type: "consumption.created",
+        aggregate_type: "Consumption",
+        aggregate_id: created.external_id,
+        payload: serializeConsumptionForOutbox(created),
       });
       await tx.tableSession.update({
         where: { id: sessionId },
@@ -366,6 +385,16 @@ export class ConsumptionsService {
           created_by: actor?.name ?? null,
         },
         include: CONSUMPTION_INCLUDE,
+      });
+      // Enqueue dentro de la misma tx. El refund es una fila NUEVA de
+      // Consumption (no un update del original), así que emite
+      // consumption.created — el cloud verá reverses_id != null y sabrá
+      // que es un refund.
+      await this.outbox.enqueue(tx, {
+        event_type: "consumption.created",
+        aggregate_type: "Consumption",
+        aggregate_id: created.external_id,
+        payload: serializeConsumptionForOutbox(created),
       });
 
       await tx.tableSession.update({
