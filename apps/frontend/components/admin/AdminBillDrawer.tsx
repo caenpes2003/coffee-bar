@@ -25,6 +25,7 @@ import { getErrorMessage } from "@/lib/errors";
 import type {
   BillView,
   Consumption,
+  PaymentMethod,
   Product,
   TableSession,
 } from "@coffee-bar/shared";
@@ -32,6 +33,7 @@ import {
   CompositionPicker,
   type CompositionPick,
 } from "../orders/CompositionPicker";
+import { PaymentMethodSelector } from "./PaymentMethodSelector";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -162,15 +164,39 @@ export function AdminBillDrawer({
     setPaymentError(null);
     try {
       if (kind === "mark-paid") {
-        // markPaid now closes the session in the same transaction. The
-        // socket event will mark the bill `closed`; close the drawer so
-        // staff jump back to the table grid.
+        // Legacy code path: el confirm simple ya no se usa para mark-paid
+        // (Fase A+ B3 movió el flujo al MarkPaidModal con selector de
+        // método). Quedó por si algún caller futuro necesita "cobrar
+        // legacy efectivo" — el backend acepta payments omitidos como
+        // retrocompat, pero la UI no debería usarlo en producción.
         await tableSessionsApi.markPaid(sessionId);
         onClose();
       } else {
         await tableSessionsApi.close(sessionId);
         onClose();
       }
+    } catch (err) {
+      setPaymentError(getErrorMessage(err));
+    } finally {
+      setPaymentBusy(null);
+    }
+  }
+
+  /**
+   * Fase A+ B3: cobrar con método explícito. Hoy soporta UN solo
+   * método (el modal envía `payments=[{ method, amount: pending }]`).
+   * Cobros divididos vienen en B3.5 — mismo endpoint, varios items.
+   */
+  async function runMarkPaidWithMethod(method: PaymentMethod) {
+    if (sessionId == null || bill == null) return;
+    setPaymentBusy("mark-paid");
+    setPaymentError(null);
+    try {
+      const pending = bill.summary.total;
+      await tableSessionsApi.markPaid(sessionId, [
+        { method, amount: pending },
+      ]);
+      onClose();
     } catch (err) {
       setPaymentError(getErrorMessage(err));
     } finally {
@@ -491,35 +517,38 @@ export function AdminBillDrawer({
         />
       )}
 
-      {confirmOpen && (
+      {confirmOpen && confirmOpen.kind === "mark-paid" && bill && (
+        <MarkPaidModal
+          accountLabel={accountLabel ?? `Mesa ${tableNumber ?? ""}`}
+          pending={bill.summary.total}
+          busy={paymentBusy === "mark-paid"}
+          error={paymentError}
+          onConfirm={(method) => {
+            setConfirmOpen(null);
+            void runMarkPaidWithMethod(method);
+          }}
+          onCancel={() => setConfirmOpen(null)}
+        />
+      )}
+
+      {confirmOpen && confirmOpen.kind === "close" && (
         <ConfirmModal
-          tone={confirmOpen.kind === "mark-paid" ? "olive" : "burgundy"}
-          eyebrow={
-            confirmOpen.kind === "mark-paid"
-              ? "— Cobrar cuenta"
-              : "— Cerrar cuenta"
-          }
+          tone="burgundy"
+          eyebrow="— Cerrar cuenta"
           title={
-            confirmOpen.kind === "mark-paid"
-              ? "¿Cobrar y cerrar la cuenta?"
-              : (bill?.summary.total ?? 0) > 0
-                ? "¿Cerrar sin cobrar?"
-                : "¿Cerrar la cuenta?"
+            (bill?.summary.total ?? 0) > 0
+              ? "¿Cerrar sin cobrar?"
+              : "¿Cerrar la cuenta?"
           }
           body={
-            confirmOpen.kind === "mark-paid"
-              ? "La cuenta se cerrará y la mesa quedará disponible."
-              : (bill?.summary.total ?? 0) > 0
-                ? "El total quedará sin pagar y la cuenta se cerrará."
-                : "La cuenta se cerrará."
+            (bill?.summary.total ?? 0) > 0
+              ? "El total quedará sin pagar y la cuenta se cerrará."
+              : "La cuenta se cerrará."
           }
-          confirmLabel={
-            confirmOpen.kind === "mark-paid" ? "Sí, cobrar" : "Sí, cerrar"
-          }
+          confirmLabel="Sí, cerrar"
           onConfirm={() => {
-            const kind = confirmOpen.kind;
             setConfirmOpen(null);
-            runPaymentAction(kind);
+            runPaymentAction("close");
           }}
           onCancel={() => setConfirmOpen(null)}
         />
@@ -922,6 +951,13 @@ function ActionModal({
   // producto vuelve al stock. Si el producto se rompió/derramó se
   // marca OFF y el stock queda como estaba.
   const [restoreStock, setRestoreStock] = useState(true);
+  // Aplica solo a partial_payment (Fase A+ B3). Sin default: forzamos
+  // al cajero a elegir explícitamente antes de habilitar el botón —
+  // un default invisible llevaría a registrar todo como efectivo y
+  // arruinar la conciliación silenciosamente.
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(
+    null,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -945,7 +981,11 @@ function ActionModal({
   // Partial payments don't ask for a reason — the receipt label is auto.
   const reasonValid =
     kind === "partial_payment" ? true : reason.trim().length >= 3;
-  const canSubmit = amountValid && reasonValid && !submitting;
+  // Partial payments también exigen método (Fase A+ B3). Sin método
+  // no podemos crear el Payment row que la conciliación necesita.
+  const methodValid =
+    kind === "partial_payment" ? paymentMethod !== null : true;
+  const canSubmit = amountValid && reasonValid && methodValid && !submitting;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -962,7 +1002,14 @@ function ActionModal({
           restore_stock: restoreStock,
         });
       } else if (kind === "partial_payment") {
-        await billApi.recordPartialPayment(sessionId, amountNum);
+        if (paymentMethod == null) {
+          throw new Error("Selecciona un método de pago");
+        }
+        await billApi.recordPartialPayment(
+          sessionId,
+          amountNum,
+          paymentMethod,
+        );
       } else {
         // Narrows to "adjustment" | "discount" — the only two kinds
         // left after refund/partial_payment branches above.
@@ -1086,6 +1133,14 @@ function ActionModal({
               style={inputStyle}
             />
           </label>
+        )}
+
+        {kind === "partial_payment" && (
+          <PaymentMethodSelector
+            value={paymentMethod}
+            onChange={setPaymentMethod}
+            disabled={submitting}
+          />
         )}
 
         {kind !== "partial_payment" && (
@@ -2403,4 +2458,203 @@ function formatCop(n: number): string {
     currency: "COP",
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+// ─── Modal: cobrar con método de pago (Fase A+ B3) ────────────────────────
+/**
+ * Reemplaza el ConfirmModal simple del flujo "Cobrar y cerrar".
+ * Fuerza al cajero a declarar el método antes de confirmar — sin
+ * default invisible, sin "asumir efectivo".
+ *
+ * Hoy soporta UN solo método por cobro (el monto es el pendiente
+ * completo). Cobros divididos vienen en B3.5: este mismo modal
+ * crece para aceptar N filas y validar sum == pendiente.
+ */
+function MarkPaidModal({
+  accountLabel,
+  pending,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  accountLabel: string;
+  pending: number;
+  busy: boolean;
+  error: string | null;
+  onConfirm: (method: PaymentMethod) => void;
+  onCancel: () => void;
+}) {
+  const [method, setMethod] = useState<PaymentMethod | null>(null);
+  const canSubmit = method !== null && !busy;
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Cobrar y cerrar cuenta"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 80,
+        padding: 20,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 460,
+          background: C.paper,
+          borderRadius: 16,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.olive,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Cobrar y cerrar
+          </span>
+          <h3
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              letterSpacing: 0.5,
+              color: C.ink,
+              margin: "4px 0 0",
+            }}
+          >
+            {accountLabel}
+          </h3>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            padding: "12px 14px",
+            background: C.cream,
+            border: `1px solid ${C.sand}`,
+            borderRadius: 10,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 2,
+              color: C.mute,
+              textTransform: "uppercase",
+            }}
+          >
+            Total a cobrar
+          </span>
+          <strong
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 24,
+              color: C.ink,
+              letterSpacing: 0.5,
+            }}
+          >
+            {formatCop(pending)}
+          </strong>
+        </div>
+
+        <PaymentMethodSelector
+          value={method}
+          onChange={setMethod}
+          disabled={busy}
+        />
+
+        {error && (
+          <p
+            role="alert"
+            style={{
+              margin: 0,
+              padding: 10,
+              background: C.burgundySoft,
+              color: C.burgundy,
+              borderRadius: 8,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+            }}
+          >
+            {error}
+          </p>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            justifyContent: "flex-end",
+            marginTop: 6,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            style={{
+              padding: "10px 18px",
+              border: `1px solid ${C.sand}`,
+              background: "transparent",
+              color: C.cacao,
+              borderRadius: 999,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 2,
+              cursor: busy ? "not-allowed" : "pointer",
+              textTransform: "uppercase",
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (method !== null) onConfirm(method);
+            }}
+            disabled={!canSubmit}
+            style={{
+              padding: "10px 22px",
+              border: "none",
+              borderRadius: 999,
+              background: canSubmit ? C.olive : C.mute,
+              color: C.paper,
+              fontFamily: FONT_DISPLAY,
+              fontSize: 13,
+              letterSpacing: 2.5,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            {busy ? "Cobrando..." : "Sí, cobrar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

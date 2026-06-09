@@ -1,14 +1,20 @@
 import { adminApi, customerApi, publicApi, tableApi } from "./clients";
 import type {
   BillView,
+  CashRegisterSession,
+  CashRegisterSessionDetail,
   Consumption,
   InventoryMovement,
   InventoryMovementType,
+  MarkPaidPaymentInput,
   Order,
   OrderRequest,
   OrderRequestItemInput,
   OrderRequestStatus,
   OrderStatus,
+  Payment,
+  PaymentMethod,
+  PaymentReverseReason,
   PlaybackState,
   Product,
   QueueItem,
@@ -166,10 +172,28 @@ export const tableSessionsApi = {
         `/table-sessions/${sessionId}/cancel-payment-request`,
       )
       .then((r) => r.data),
-  /** Admin records the payment AND closes the session in one step. */
-  markPaid: (sessionId: number): Promise<TableSession> =>
+  /**
+   * Admin records the payment AND closes the session in one step.
+   *
+   * `payments` (Fase A+ B3) es opcional para retrocompat con la UI vieja:
+   *   - Omitido → backend asume un único cobro en EFECTIVO por todo
+   *     el pendiente. Mantiene el flujo legacy.
+   *   - Con N entradas → cobros divididos por método. La suma debe
+   *     coincidir con el pendiente (±$0.5 de tolerancia).
+   *
+   * Una vez que TODOS los call sites del frontend pasen `payments`,
+   * el modo "omitido" deja de usarse en producción pero el backend
+   * lo sigue aceptando indefinidamente (protege a clientes pinned).
+   */
+  markPaid: (
+    sessionId: number,
+    payments?: MarkPaidPaymentInput[],
+  ): Promise<TableSession> =>
     adminApi
-      .post<TableSession>(`/table-sessions/${sessionId}/mark-paid`)
+      .post<TableSession>(
+        `/table-sessions/${sessionId}/mark-paid`,
+        payments && payments.length > 0 ? { payments } : undefined,
+      )
       .then((r) => r.data),
   /**
    * Admin cierra la sesión SIN cobro, con razón obligatoria. Casos:
@@ -317,16 +341,24 @@ export const billApi = {
       .post<Consumption>(`/consumptions/${consumptionId}/refund`, payload)
       .then((r) => r.data),
   /**
-   * Admin records cash collected mid-session. Lands as a Consumption
-   * with type=partial_payment and a negative amount, so the bill total
-   * automatically becomes "remaining to pay".
+   * Admin records mid-session payment. Lands como Consumption con
+   * type=partial_payment + amount negativo, y AHORA TAMBIÉN un
+   * Payment(kind=partial) con el método de pago, para que la
+   * conciliación de caja sume al expected correcto.
+   *
+   * Desde Fase A+ B2 `payment_method` es obligatorio — el backend
+   * rechaza la request si falta.
    */
   recordPartialPayment: (
     sessionId: number,
     amount: number,
+    payment_method: PaymentMethod,
   ): Promise<Consumption> =>
     adminApi
-      .post<Consumption>(`/bill/${sessionId}/partial-payment`, { amount })
+      .post<Consumption>(`/bill/${sessionId}/partial-payment`, {
+        amount,
+        payment_method,
+      })
       .then((r) => r.data),
 };
 
@@ -1240,5 +1272,97 @@ export const luggageApi = {
   ): Promise<LuggageTicketApi> =>
     adminApi
       .patch<LuggageTicketApi>(`/admin/luggage/${id}/payment`, { payment_status })
+      .then((r) => r.data),
+};
+
+// ─── Cash Register (Fase A+) ──────────────────────────────────────────────────
+// Día contable: apertura, cierre, histórico. La sesión de caja vive en
+// paralelo a las TableSessions y es la unidad real del "día" para
+// conciliación. Sin sesión open, los endpoints operativos responden
+// 412 CASH_REGISTER_CLOSED (ver RequireOpenCashRegisterGuard).
+export const cashRegisterApi = {
+  /**
+   * Devuelve `{ session }` si hay día abierto, o `{ session: null }`
+   * si no. NO throwa cuando no hay sesión — esto es lo que usa el
+   * banner global para decidir si mostrar "Abrir día".
+   */
+  current: (): Promise<{ session: CashRegisterSession | null }> =>
+    adminApi
+      .get<{ session: CashRegisterSession | null }>(
+        "/admin/cash-register/current",
+      )
+      .then((r) => r.data),
+
+  /**
+   * Abrir día. `bypass=true` permite operar sin base declarada formal
+   * (red de seguridad cuando el flujo normal de apertura falla); en
+   * ese caso `bypass_reason` es obligatorio (min 3 chars).
+   */
+  open: (body: {
+    opening_balance: number;
+    bypass?: boolean;
+    bypass_reason?: string;
+    notes?: string;
+  }): Promise<CashRegisterSession> =>
+    adminApi
+      .post<CashRegisterSession>("/admin/cash-register/open", body)
+      .then((r) => r.data),
+
+  /**
+   * Cerrar día. El backend calcula `closing_balance_expected` desde
+   * opening_balance + cobros efectivo del día, y `difference` = declared
+   * - expected.
+   */
+  close: (body: {
+    closing_balance_declared: number;
+    notes?: string;
+  }): Promise<CashRegisterSession> =>
+    adminApi
+      .post<CashRegisterSession>("/admin/cash-register/close", body)
+      .then((r) => r.data),
+
+  /** Histórico de sesiones (cerradas + la actual). */
+  list: (params?: {
+    status?: "open" | "closed";
+    limit?: number;
+  }): Promise<CashRegisterSession[]> => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit) q.set("limit", String(params.limit));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return adminApi
+      .get<CashRegisterSession[]>(`/admin/cash-register${suffix}`)
+      .then((r) => r.data);
+  },
+
+  /**
+   * Detalle de cierre con totales por método, cantidad de pagos,
+   * extras y luggage. Usado por el ticket de cierre y el tab Caja.
+   */
+  detail: (id: number): Promise<CashRegisterSessionDetail> =>
+    adminApi
+      .get<CashRegisterSessionDetail>(`/admin/cash-register/${id}/detail`)
+      .then((r) => r.data),
+};
+
+// ─── Payments (Fase A+) ───────────────────────────────────────────────────────
+// Hoy expone solo el reverso. Los cobros (partial/final) viven en sus
+// controllers de dominio (bill, table-sessions) para no romper la API.
+export const paymentsApi = {
+  /**
+   * Reversar un Payment append-only. Crea fila nueva con kind=reversal
+   * y amount con signo opuesto. NO borra el original (audit-friendly).
+   *
+   * reason='other' requiere reason_detail (min 3 chars).
+   */
+  reverse: (
+    paymentId: number,
+    body: {
+      reason: PaymentReverseReason;
+      reason_detail?: string;
+    },
+  ): Promise<Payment> =>
+    adminApi
+      .post<Payment>(`/admin/payments/${paymentId}/reverse`, body)
       .then((r) => r.data),
 };

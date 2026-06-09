@@ -321,3 +321,77 @@ export interface BillView {
   summary: BillSummary;
   items: Consumption[];
 }
+
+// ─── Fase A+ — Payment / CashRegister ──────────────────────────────────────
+
+export type PaymentMethod = "efectivo" | "tarjeta_bold" | "qr_bold";
+
+export type PaymentKind = "partial" | "final" | "reversal";
+
+export type PaymentReverseReason =
+  | "bold_rejected"
+  | "wrong_session"
+  | "double_charge"
+  | "customer_refund"
+  | "test_operation"
+  | "staff_error"
+  | "other";
+
+export interface Payment {
+  id: number;
+  external_id: string;
+  table_session_id: number;
+  cash_register_session_id: number;
+  method: PaymentMethod;
+  kind: PaymentKind;
+  amount: number;
+  consumption_id: number | null;
+  reverses_id: number | null;
+  reverse_reason: PaymentReverseReason | null;
+  reverse_reason_detail: string | null;
+  reference: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+/** Una fila del array `payments` que recibe POST /table-sessions/:id/mark-paid. */
+export interface MarkPaidPaymentInput {
+  method: PaymentMethod;
+  amount: number;
+  reference?: string;
+  notes?: string;
+}
+
+export type CashRegisterStatus = "open" | "closed";
+
+export interface CashRegisterSession {
+  id: number;
+  external_id: string;
+  status: CashRegisterStatus;
+  opening_balance: string;
+  opened_at: string;
+  opened_by: string | null;
+  opened_via_bypass: boolean;
+  opened_bypass_reason: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
+  closing_balance_declared: string | null;
+  closing_balance_expected: string | null;
+  difference: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Snapshot que devuelve GET /admin/cash-register/:id/detail. */
+export interface CashRegisterSessionDetail {
+  session: CashRegisterSession;
+  totals_by_method: Record<
+    PaymentMethod,
+    { count: number; amount: number }
+  >;
+  payments_count: number;
+  extra_income_total: number;
+  luggage_total: number;
+}

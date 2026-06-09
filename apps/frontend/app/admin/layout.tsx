@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
 import { AdminAuthProvider, useAdminAuth } from "@/lib/auth/auth-context";
+import { CashRegisterBanner } from "@/components/admin/CashRegisterBanner";
 
 /**
  * Wraps every /admin/* route with the auth provider + a client-side guard.
@@ -72,5 +73,10 @@ function AdminGuard({ children }: { children: ReactNode }) {
     return null;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      <CashRegisterBanner />
+      {children}
+    </>
+  );
 }
