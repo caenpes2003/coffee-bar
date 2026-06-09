@@ -171,6 +171,47 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireNumber(payload, "quantity", errors);
     return errors;
   },
+
+  // ─── Payment (Fase A+) ───────────────────────────────────────────────
+  // Cada cobro del bar con método. kind=partial (anticipo durante sesión)
+  // o kind=final (cobro al cierre, puede haber N por TableSession en
+  // caso de cobros divididos).
+  "payment.created": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireNumber(payload, "table_session_id", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    requireString(payload, "method", errors);
+    requireString(payload, "kind", errors);
+    requireNumber(payload, "amount", errors);
+    return errors;
+  },
+
+  // ─── CashRegisterSession (Fase A+) ───────────────────────────────────
+  // cash_register.opened: apertura del día contable con base declarada
+  // (o bypass si se abrió en modo emergencia).
+  "cash_register.opened": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireNumber(payload, "opening_balance", errors);
+    requireString(payload, "status", errors);
+    return errors;
+  },
+
+  // cash_register.closed: cierre del día con declared/expected/difference.
+  // El consumer cloud calcula descuadre histórico desde estos eventos.
+  "cash_register.closed": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireString(payload, "status", errors);
+    requireNumber(payload, "closing_balance_declared", errors);
+    requireNumber(payload, "closing_balance_expected", errors);
+    requireNumber(payload, "difference", errors);
+    return errors;
+  },
 };
 
 /**

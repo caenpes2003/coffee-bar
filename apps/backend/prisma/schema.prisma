@@ -238,6 +238,7 @@ model TableSession {
   order_requests      OrderRequest[]
   orders              Order[]
   consumptions        Consumption[]
+  payments            Payment[]
 
   @@index([table_id, status])
   @@index([status])
@@ -574,6 +575,10 @@ model Consumption {
   // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
   external_id       String          @unique @default(uuid())
   table_session_id  Int
+  // FK a la sesión de caja activa al momento de crear el Consumption.
+  // Nullable solo para filas históricas pre-Fase A+; al crear nuevas,
+  // el service exige día abierto (`requireOpen()`) y popla el campo.
+  cash_register_session_id Int?
   order_id          Int?
   product_id        Int?
   description       String
@@ -588,11 +593,15 @@ model Consumption {
   created_by        String?
   created_at        DateTime        @default(now())
   table_session     TableSession    @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
+  cash_register     CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
   order             Order?          @relation(fields: [order_id], references: [id], onDelete: SetNull)
   reverses          Consumption?    @relation("ConsumptionReversal", fields: [reverses_id], references: [id], onDelete: SetNull)
   reversal          Consumption?    @relation("ConsumptionReversal")
+  // Inversa: el Payment(kind=partial) que enlaza con este Consumption.
+  payment           Payment?        @relation("PaymentConsumption")
 
   @@index([table_session_id, created_at])
+  @@index([cash_register_session_id, created_at])
   @@index([order_id])
 }
 
@@ -704,9 +713,14 @@ model ExtraIncome {
   reversed_by    String?
   reversed_at    DateTime?
   reverse_reason String?
+  // Sesión de caja activa al crear el ingreso. Nullable solo para
+  // filas históricas pre-Fase A+; el service exige día abierto.
+  cash_register_session_id Int?
+  cash_register            CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
 
   @@index([type, status, created_at])
   @@index([created_at])
+  @@index([cash_register_session_id, created_at])
 }
 
 // ─── Guarda maletas (servicio con lifecycle + ficha física) ────────────────
@@ -759,10 +773,15 @@ model LuggageTicket {
   incident_reason      String?
   incident_at          DateTime?
   incident_by          String?
+  // Sesión de caja activa al crear el ticket. Nullable solo para
+  // filas históricas pre-Fase A+; el service exige día abierto.
+  cash_register_session_id Int?
+  cash_register        CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
 
   @@index([status, created_at])
   @@index([ticket_number, status])
   @@index([customer_phone])
+  @@index([cash_register_session_id, created_at])
 }
 
 
@@ -945,4 +964,118 @@ model NodeRegistry {
   updated_at     DateTime @updatedAt
 
   @@index([type, is_active])
+}
+
+
+// ─── Cierre de caja (Fase A+) ─────────────────────────────────────────────
+//
+// CashRegisterSession modela el "día contable" del bar: apertura con
+// base de caja, cierre con conteo declarado y cálculo de descuadre.
+// Una sesión de caja agrupa todos los Payment, Consumption, ExtraIncome
+// y LuggageTicket que se generaron durante su vigencia.
+//
+// Reglas:
+//   - Solo puede existir UNA sesión con status=open simultáneamente
+//     (partial unique index `unique_open_cash_register`).
+//   - Sin sesión abierta, la mayoría de endpoints operativos rechazan
+//     con 412 CASH_REGISTER_CLOSED. Ver `requireOpen()` en service.
+//   - `opening_balance` se declara al abrir; obligatorio salvo en el
+//     bypass de emergencia (que setea `opened_via_bypass=true` + razón).
+//   - Al cerrar: `closing_balance_expected` se calcula sumando todos los
+//     Payment(method=efectivo) + opening_balance. `closing_balance_declared`
+//     lo digita el staff contando físico. `difference` = declared - expected
+//     (negativo si falta plata).
+//   - NO se borra. Soft-immutable: cerrada queda como histórico.
+
+enum CashRegisterStatus {
+  open
+  closed
+}
+
+model CashRegisterSession {
+  id                          Int                @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id                 String             @unique @default(uuid())
+  status                      CashRegisterStatus @default(open)
+  opening_balance             Decimal            @db.Decimal(12, 2)
+  // Apertura: quién y cuándo. opened_by guarda el name del actor admin
+  // (no FK a User para sobrevivir borrados; mismo patrón que voided_by).
+  opened_at                   DateTime           @default(now())
+  opened_by                   String?
+  opened_via_bypass           Boolean            @default(false)
+  opened_bypass_reason        String?
+  // Cierre: nullable hasta que se cierra.
+  closed_at                   DateTime?
+  closed_by                   String?
+  closing_balance_declared    Decimal?           @db.Decimal(12, 2)
+  closing_balance_expected    Decimal?           @db.Decimal(12, 2)
+  // difference = declared - expected. Positivo: sobró; negativo: faltó.
+  difference                  Decimal?           @db.Decimal(12, 2)
+  // Notas operativas (motivo del descuadre si se sabe, etc).
+  notes                       String?
+  created_at                  DateTime           @default(now())
+  updated_at                  DateTime           @updatedAt
+
+  // Relaciones inversas (entidades cuya creación se atribuye a esta sesión)
+  payments        Payment[]
+  consumptions    Consumption[]
+  extra_incomes   ExtraIncome[]
+  luggage_tickets LuggageTicket[]
+
+  @@index([status, opened_at])
+  @@index([closed_at])
+}
+
+// ─── Payment (Fase A+) ────────────────────────────────────────────────────
+//
+// Registra cada cobro del bar con su método. Vive en paralelo al ledger
+// (Consumption sigue siendo source of truth de "qué se cobró por qué"):
+// Payment responde "con qué método entró cada peso".
+//
+// Tipos (PaymentKind):
+//   - partial: anticipo durante la sesión de mesa. FK a Consumption(type=
+//     partial_payment) opcional para enlazar con la entrada del ledger.
+//   - final: cobro al cierre de la cuenta (markPaid). Puede haber N filas
+//     para una misma TableSession (cobros divididos: $30k tarjeta +
+//     $20k efectivo). consumption_id queda null en estos.
+//
+// El campo `cash_register_session_id` ata cada Payment al día contable
+// en que se generó, garantizando que el cierre de caja agrupe lo
+// correcto incluso si cruza medianoche.
+
+enum PaymentMethod {
+  efectivo
+  tarjeta_bold
+  qr_bold
+}
+
+enum PaymentKind {
+  partial
+  final
+}
+
+model Payment {
+  id                        Int                  @id @default(autoincrement())
+  external_id               String               @unique @default(uuid())
+  table_session_id          Int
+  cash_register_session_id  Int
+  method                    PaymentMethod
+  kind                      PaymentKind
+  amount                    Decimal              @db.Decimal(10, 2)
+  // FK opcional al Consumption(type=partial_payment) cuando es kind=partial.
+  // Null para kind=final (no hay row de Consumption sintética al cierre).
+  consumption_id            Int?                 @unique
+  // Campos para extensión futura (referencia de datafono, propina, etc).
+  reference                 String?
+  notes                     String?
+  created_by                String?
+  created_at                DateTime             @default(now())
+
+  table_session       TableSession        @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
+  cash_register       CashRegisterSession @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
+  consumption         Consumption?        @relation("PaymentConsumption", fields: [consumption_id], references: [id], onDelete: SetNull)
+
+  @@index([table_session_id, created_at])
+  @@index([cash_register_session_id, method])
+  @@index([method, created_at])
 }
