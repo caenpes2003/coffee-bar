@@ -1,13 +1,24 @@
-import { Injectable } from "@nestjs/common";
 import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  PreconditionFailedException,
+} from "@nestjs/common";
+import {
+  CashRegisterStatus,
   Payment,
   PaymentKind,
   PaymentMethod,
+  PaymentReverseReason,
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { OutboxEventService } from "../outbox/outbox-event.service";
-import { serializePaymentForOutbox } from "./outbox-payload";
+import {
+  serializePaymentForOutbox,
+  serializePaymentReversalForOutbox,
+} from "./outbox-payload";
 
 type Tx = Prisma.TransactionClient;
 
@@ -127,6 +138,128 @@ export class PaymentsService {
       created.push(row);
     }
     return created;
+  }
+
+  /**
+   * Reversar un Payment previo. Append-only: crea una fila nueva
+   * con `kind=reversal` y `amount` con signo opuesto al original,
+   * dejando el Payment original intacto para audit.
+   *
+   * Reglas:
+   *   - El Payment original NO puede ser un reversal (no se reversan
+   *     reversos).
+   *   - Solo se permite UN reverso por Payment (unique index sobre
+   *     reverses_id a nivel BD; también validamos acá con mensaje).
+   *   - reason='other' requiere reason_detail no vacío.
+   *   - El reverso se atribuye a la sesión de caja ABIERTA actual
+   *     (no a la del Payment original): así el descuento aparece en
+   *     el día contable donde efectivamente sale la plata de la caja.
+   *     Si el día está cerrado, falla con 412 — el operador debe
+   *     abrir el día primero (igual que cualquier mutación de caja).
+   *   - El método del reverso copia el del original (no se permite
+   *     "reversar tarjeta como efectivo"). Si se necesita re-cobrar
+   *     con otro método, es un nuevo cobro aparte.
+   *
+   * Devuelve la fila de reverso creada.
+   */
+  async reverse(
+    paymentId: number,
+    input: {
+      reason: PaymentReverseReason;
+      reason_detail?: string;
+      actor: Actor;
+    },
+  ): Promise<Payment> {
+    if (
+      input.reason === PaymentReverseReason.other &&
+      (!input.reason_detail || input.reason_detail.trim().length < 3)
+    ) {
+      throw new BadRequestException({
+        message: "reason='other' requires reason_detail (min 3 chars)",
+        code: "PAYMENT_REVERSE_DETAIL_REQUIRED",
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const original = await tx.payment.findUnique({
+        where: { id: paymentId },
+      });
+      if (!original) {
+        throw new NotFoundException({
+          message: `Payment ${paymentId} not found`,
+          code: "PAYMENT_NOT_FOUND",
+        });
+      }
+      if (original.kind === PaymentKind.reversal) {
+        throw new BadRequestException({
+          message: "Cannot reverse a reversal",
+          code: "PAYMENT_REVERSE_OF_REVERSAL",
+        });
+      }
+
+      // Defensa en profundidad: el UNIQUE index sobre reverses_id ya
+      // bloquearía un segundo reverso, pero queremos un mensaje claro.
+      const existing = await tx.payment.findUnique({
+        where: { reverses_id: paymentId },
+      });
+      if (existing) {
+        throw new ConflictException({
+          message: `Payment ${paymentId} already reversed by ${existing.id}`,
+          code: "PAYMENT_ALREADY_REVERSED",
+          existing_reversal_id: existing.id,
+        });
+      }
+
+      // El reverso se atribuye al día contable ABIERTO ahora (no al
+      // del Payment original). Si la caja está cerrada, falla — el
+      // operador debe abrir día primero, igual que para cobrar.
+      const cashSession = await tx.cashRegisterSession.findFirst({
+        where: { status: CashRegisterStatus.open },
+      });
+      if (!cashSession) {
+        throw new PreconditionFailedException({
+          message:
+            "Cash register is closed. Open the day before reversing payments.",
+          code: "CASH_REGISTER_CLOSED",
+        });
+      }
+
+      // amount opuesto. Decimal preserva precisión: usamos .neg().
+      const negativeAmount = new Prisma.Decimal(original.amount).neg();
+
+      const reversal = await tx.payment.create({
+        data: {
+          table_session_id: original.table_session_id,
+          cash_register_session_id: cashSession.id,
+          method: original.method,
+          kind: PaymentKind.reversal,
+          amount: negativeAmount,
+          // Reverso NUNCA enlaza Consumption: el refund de Consumption
+          // es un flujo independiente. Si el operador quiere también
+          // devolver el producto al stock, hace refund por separado
+          // desde /admin/sales. Mantener ambos flujos desacoplados
+          // permite reversar un cobro sin tocar inventario (ej. Bold
+          // rechazó la tarjeta — la mesa SÍ se tomó lo que consumió).
+          consumption_id: null,
+          reverses_id: original.id,
+          reverse_reason: input.reason,
+          reverse_reason_detail: input.reason_detail?.trim() || null,
+          created_by: input.actor?.name ?? null,
+        },
+      });
+
+      await this.outbox.enqueue(tx, {
+        event_type: "payment.reversed",
+        aggregate_type: "Payment",
+        aggregate_id: reversal.external_id,
+        payload: serializePaymentReversalForOutbox(
+          reversal,
+          original.external_id,
+        ),
+      });
+
+      return reversal;
+    });
   }
 
   /**

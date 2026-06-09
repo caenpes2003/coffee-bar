@@ -188,6 +188,24 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     return errors;
   },
 
+  // payment.reversed: anulación append-only. La fila tiene
+  // kind='reversal', amount con signo opuesto al original, y
+  // reverses_external_id apuntando al Payment anulado. El consumer
+  // cloud netea automáticamente sumando amount; este event_type
+  // permite además reportar "cuántos reverses y por qué razón".
+  "payment.reversed": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireExternalId(payload, "reverses_external_id", errors);
+    requireNumber(payload, "table_session_id", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    requireString(payload, "method", errors);
+    requireNumber(payload, "amount", errors);
+    requireString(payload, "reverse_reason", errors);
+    return errors;
+  },
+
   // ─── CashRegisterSession (Fase A+) ───────────────────────────────────
   // cash_register.opened: apertura del día contable con base declarada
   // (o bypass si se abrió en modo emergencia).

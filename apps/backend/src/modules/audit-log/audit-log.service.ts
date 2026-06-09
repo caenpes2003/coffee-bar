@@ -164,6 +164,18 @@ type RecordInput =
       amount: number;
       description: string;
       reason: string | null;
+    }
+  | {
+      kind: "payment_reversed";
+      actor_id: number;
+      actor_label: string;
+      payment_id: number;
+      reversal_id: number;
+      table_session_id: number;
+      method: string;
+      amount: number;
+      reason: string;
+      reason_detail: string | null;
     };
 
 @Injectable()
@@ -394,6 +406,23 @@ export class AuditLogService {
             amount: input.amount,
             description: input.description,
             reason: input.reason,
+          },
+        };
+      }
+      case "payment_reversed": {
+        // input.amount viene negativo (signo del reverso); para la
+        // narrativa mostramos el absoluto.
+        const abs = Math.abs(input.amount);
+        return {
+          summary: `Cobro reversado (${input.method}) por ${formatCop(abs)} — razón: ${input.reason}${input.reason_detail ? ` (${input.reason_detail})` : ""}`,
+          metadata: {
+            payment_id: input.payment_id,
+            reversal_id: input.reversal_id,
+            table_session_id: input.table_session_id,
+            method: input.method,
+            amount: input.amount,
+            reason: input.reason,
+            reason_detail: input.reason_detail,
           },
         };
       }

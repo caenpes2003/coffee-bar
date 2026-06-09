@@ -1,4 +1,6 @@
 import { Global, Module } from "@nestjs/common";
+import { AuditLogModule } from "../audit-log/audit-log.module";
+import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
 
 /**
@@ -8,12 +10,15 @@ import { PaymentsService } from "./payments.service";
  * (recordPartialPayment) y TableSessionsService (markPaid). Marcar
  * Global evita imports cruzados.
  *
- * No expone controller propio: las APIs de cobro siguen viviendo en
- * /bill/:sessionId/partial-payment y /table-sessions/:id/mark-paid
+ * Expone un controller único en /admin/payments para el reverso de
+ * cobros (POST :id/reverse). Los cobros (partial, final) siguen
+ * viviendo en sus controllers de dominio (/bill, /table-sessions)
  * para no romper la API pública.
  */
 @Global()
 @Module({
+  imports: [AuditLogModule],
+  controllers: [PaymentsController],
   providers: [PaymentsService],
   exports: [PaymentsService],
 })

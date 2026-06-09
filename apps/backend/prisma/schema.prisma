@@ -137,6 +137,8 @@ enum AuditEventKind {
   inventory_movement
   // Ajustes de cuenta (cargo/descuento/refund)
   bill_adjustment
+  // Reverso de Payment (Bold rechazó, doble cobro, refund a cliente, etc.)
+  payment_reversed
 }
 
 model User {
@@ -1052,6 +1054,20 @@ enum PaymentMethod {
 enum PaymentKind {
   partial
   final
+  reversal
+}
+
+// Razón obligatoria al reversar un Payment. Limitada a un enum cerrado
+// para que el cierre de día pueda agrupar/auditar por categoría sin
+// depender de strings libres. `other` admite detalle vía reason_detail.
+enum PaymentReverseReason {
+  bold_rejected
+  wrong_session
+  double_charge
+  customer_refund
+  test_operation
+  staff_error
+  other
 }
 
 model Payment {
@@ -1065,6 +1081,13 @@ model Payment {
   // FK opcional al Consumption(type=partial_payment) cuando es kind=partial.
   // Null para kind=final (no hay row de Consumption sintética al cierre).
   consumption_id            Int?                 @unique
+  // Self-FK para reversals. Una fila kind=reversal SIEMPRE tiene
+  // reverses_id != null y amount con signo opuesto al original
+  // (positivo→negativo). El original nunca se borra (append-only),
+  // permitiendo audit completo del ciclo.
+  reverses_id               Int?                 @unique
+  reverse_reason            PaymentReverseReason?
+  reverse_reason_detail     String?
   // Campos para extensión futura (referencia de datafono, propina, etc).
   reference                 String?
   notes                     String?
@@ -1074,6 +1097,8 @@ model Payment {
   table_session       TableSession        @relation(fields: [table_session_id], references: [id], onDelete: Cascade)
   cash_register       CashRegisterSession @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
   consumption         Consumption?        @relation("PaymentConsumption", fields: [consumption_id], references: [id], onDelete: SetNull)
+  reverses            Payment?            @relation("PaymentReversal", fields: [reverses_id], references: [id], onDelete: Restrict)
+  reversed_by         Payment?            @relation("PaymentReversal")
 
   @@index([table_session_id, created_at])
   @@index([cash_register_session_id, method])
