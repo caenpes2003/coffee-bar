@@ -14,8 +14,10 @@ import {
   TableSessionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TableProjectionService } from "../table-projection/table-projection.service";
+import { serializeSessionForOutbox } from "./outbox-payload";
 
 type Tx = Prisma.TransactionClient;
 
@@ -39,6 +41,7 @@ export class TableSessionsService {
     private readonly prisma: PrismaService,
     private readonly projection: TableProjectionService,
     private readonly realtime: RealtimeGateway,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   async open(
@@ -103,6 +106,17 @@ export class TableSessionsService {
         opened_by: options.openedBy,
       },
     });
+    // Enqueue dentro de la MISMA transacción. Si el enqueue falla
+    // (registry/payload inválido), la sesión NO se crea ni se proyecta —
+    // invariante del outbox. Solo se emite cuando la sesión es nueva:
+    // si el caller `open()` cayó en la rama de "joining existing", este
+    // método no se invoca y no se emite duplicado.
+    await this.outbox.enqueue(tx, {
+      event_type: "session.opened",
+      aggregate_type: "TableSession",
+      aggregate_id: session.external_id,
+      payload: serializeSessionForOutbox(session),
+    });
     await this.projection.onSessionOpened(tableId, session.id, tx);
     return session;
   }
@@ -159,6 +173,18 @@ export class TableSessionsService {
           status: TableSessionStatus.closed,
           closed_at: new Date(),
         },
+      });
+      // Enqueue dentro de la MISMA transacción. Este `close()` plano
+      // solo aplica a sesiones ya pagadas o sin consumo (validado
+      // arriba); para "cobrar y cerrar" va por markPaid, y para
+      // "cerrar sin cobrar" va por voidSession. Cada caminito emite
+      // su propio event_type específico — `session.closed` se queda
+      // solo para los cierres "limpios" sin transición de pago.
+      await this.outbox.enqueue(tx, {
+        event_type: "session.closed",
+        aggregate_type: "TableSession",
+        aggregate_id: updated.external_id,
+        payload: serializeSessionForOutbox(updated),
       });
       await this.projection.onSessionClosed(session.table_id, tx);
       return updated;
@@ -368,6 +394,16 @@ export class TableSessionsService {
           payment_requested_at: null,
         },
       });
+      // Enqueue dentro de la MISMA transacción. El registry exige
+      // void_reason no vacío, que está garantizado por la validación
+      // de `opts.reason` arriba (enum SessionVoidReason). Un solo
+      // evento — el cierre + anulación es una sola transición.
+      await this.outbox.enqueue(tx, {
+        event_type: "session.voided",
+        aggregate_type: "TableSession",
+        aggregate_id: updated.external_id,
+        payload: serializeSessionForOutbox(updated),
+      });
       await this.projection.onSessionClosed(session.table_id, tx);
       return updated;
     });
@@ -413,6 +449,17 @@ export class TableSessionsService {
           status: TableSessionStatus.closed,
           payment_requested_at: null,
         },
+      });
+      // Enqueue dentro de la MISMA transacción. Emite UN solo evento
+      // session.marked_paid aunque también se haya seteado closed_at:
+      // semánticamente "cobrar y cerrar" es una sola transición de
+      // negocio. El consumer cloud puede inferir el cierre porque el
+      // payload trae status='closed' y paid_at != null.
+      await this.outbox.enqueue(tx, {
+        event_type: "session.marked_paid",
+        aggregate_type: "TableSession",
+        aggregate_id: updated.external_id,
+        payload: serializeSessionForOutbox(updated),
       });
       await this.projection.onSessionClosed(session.table_id, tx);
       return updated;
