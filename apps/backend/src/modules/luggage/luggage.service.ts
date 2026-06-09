@@ -11,6 +11,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CashRegisterService } from "../cash-register/cash-register.service";
 import { CreateLuggageDto } from "./dto/create-luggage.dto";
 import { IncidentLuggageDto } from "./dto/incident-luggage.dto";
 import { UpdateLuggagePaymentDto } from "./dto/update-luggage-payment.dto";
@@ -37,7 +38,10 @@ export type Actor = { user_id: number; name: string } | null;
 
 @Injectable()
 export class LuggageService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cashRegister: CashRegisterService,
+  ) {}
 
   /**
    * Crear ticket. La unicidad de ficha activa la enforce el partial
@@ -60,6 +64,7 @@ export class LuggageService {
       });
     }
     try {
+      const cashSession = await this.cashRegister.requireOpen();
       const created = await this.prisma.luggageTicket.create({
         data: {
           ticket_number: dto.ticket_number,
@@ -72,6 +77,7 @@ export class LuggageService {
               ? LuggagePaymentStatus.paid
               : LuggagePaymentStatus.pending,
           status: LuggageStatus.active,
+          cash_register_session_id: cashSession.id,
           notes: dto.notes?.trim() || null,
           created_by: actor?.name ?? null,
         },

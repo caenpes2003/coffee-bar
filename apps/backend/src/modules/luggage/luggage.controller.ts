@@ -15,6 +15,7 @@ import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { AuthKinds } from "../auth/guards/decorators";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import type { AuthPayload } from "../auth/types";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 import { CreateLuggageDto } from "./dto/create-luggage.dto";
 import { IncidentLuggageDto } from "./dto/incident-luggage.dto";
 import { UpdateLuggagePaymentDto } from "./dto/update-luggage-payment.dto";
@@ -38,6 +39,8 @@ export class LuggageController {
   constructor(private readonly service: LuggageService) {}
 
   @Post()
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
+  @AuthKinds("admin")
   create(@Body() dto: CreateLuggageDto, @CurrentAuth() auth: AuthPayload) {
     return this.service.create(dto, toActor(auth));
   }

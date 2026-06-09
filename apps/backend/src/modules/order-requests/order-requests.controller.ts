@@ -19,6 +19,7 @@ import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import type { AuthPayload } from "../auth/types";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
 @Controller("order-requests")
 export class OrderRequestsController {
@@ -77,7 +78,7 @@ export class OrderRequestsController {
    * the source of truth.
    */
   @Post()
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("session")
   async create(
     @Body() dto: CreateOrderRequestDto,
@@ -103,7 +104,7 @@ export class OrderRequestsController {
   }
 
   @Post(":id/accept")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async accept(@Param("id", ParseIntPipe) id: number) {
     const request = await this.service.accept(id);
@@ -117,7 +118,7 @@ export class OrderRequestsController {
    * (request → accept) for things they themselves typed.
    */
   @Post("admin/quick-add")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async quickAdd(@Body() dto: CreateOrderRequestDto) {
     const request = await this.service.createAndAccept(dto);

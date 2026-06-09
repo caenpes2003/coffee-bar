@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { TableSessionsService } from "./table-sessions.service";
+import { MarkPaidDto } from "./dto/mark-paid.dto";
 import { OpenSessionDto } from "./dto/open-session.dto";
 import { VoidSessionDto } from "./dto/void-session.dto";
 import { JwtGuard } from "../auth/guards/jwt.guard";
@@ -19,6 +20,7 @@ import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { TokenService } from "../auth/token.service";
 import type { AuthPayload } from "../auth/types";
 import { AuditLogService } from "../audit-log/audit-log.service";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
 @Controller()
 export class TableSessionsController {
@@ -38,7 +40,7 @@ export class TableSessionsController {
    * will use from now on for bill/orders/requests/sockets.
    */
   @Post("table-sessions/open")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("table")
   async open(@Body() dto: OpenSessionDto, @CurrentAuth() auth: AuthPayload) {
     if (auth.kind !== "table" || auth.table_id !== dto.table_id) {
@@ -110,7 +112,7 @@ export class TableSessionsController {
    * effect on a NEW session — we don't rename someone else's account.
    */
   @Post("admin/table-sessions/open")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async openByAdmin(
     @Body() dto: OpenSessionDto & { custom_name?: string },
@@ -244,11 +246,12 @@ export class TableSessionsController {
    * step. The customer must scan the QR again to start a new session.
    */
   @Post("table-sessions/:id/mark-paid")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async markPaid(
     @Param("id", ParseIntPipe) id: number,
     @CurrentAuth() auth: AuthPayload,
+    @Body() dto: MarkPaidDto = {},
   ) {
     if (!auth || auth.kind !== "admin") {
       throw new ForbiddenException({
@@ -256,7 +259,10 @@ export class TableSessionsController {
         code: "AUTH_NOT_ADMIN",
       });
     }
-    const session = await this.sessions.markPaid(id);
+    const session = await this.sessions.markPaid(id, {
+      payments: dto.payments,
+      actor: { user_id: auth.sub, name: auth.name },
+    });
     void this.audit.record({
       kind: "session_marked_paid",
       actor_id: auth.sub,

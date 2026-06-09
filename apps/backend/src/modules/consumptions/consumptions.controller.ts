@@ -17,6 +17,7 @@ import { SessionAccessGuard } from "../auth/guards/session-access.guard";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import type { AuthPayload } from "../auth/types";
 import { AuditLogService } from "../audit-log/audit-log.service";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
 @Controller()
 export class ConsumptionsController {
@@ -38,7 +39,7 @@ export class ConsumptionsController {
   }
 
   @Post("bill/:sessionId/adjustments")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async createAdjustment(
     @Param("sessionId", ParseIntPipe) sessionId: number,
@@ -73,7 +74,7 @@ export class ConsumptionsController {
    * "adjustment" in the discount/correction sense.
    */
   @Post("bill/:sessionId/partial-payment")
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("admin")
   async recordPartialPayment(
     @Param("sessionId", ParseIntPipe) sessionId: number,
@@ -84,6 +85,7 @@ export class ConsumptionsController {
       sessionId,
       dto.amount,
       toActor(auth),
+      dto.payment_method,
     );
     if (auth && auth.kind === "admin") {
       void this.audit.record({

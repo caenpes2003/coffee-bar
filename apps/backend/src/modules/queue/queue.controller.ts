@@ -17,6 +17,7 @@ import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import type { AuthPayload } from "../auth/types";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
 @Controller("queue")
 export class QueueController {
@@ -90,7 +91,7 @@ export class QueueController {
    * session token's `table_id` — the token is the source of truth.
    */
   @Post()
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
   @AuthKinds("session")
   create(
     @Body() dto: CreateQueueItemDto,

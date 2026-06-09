@@ -8,13 +8,16 @@ import {
 import {
   OrderRequestStatus,
   OrderStatus,
+  PaymentMethod,
   Prisma,
   SessionVoidReason,
   TableSession,
   TableSessionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CashRegisterService } from "../cash-register/cash-register.service";
 import { OutboxEventService } from "../outbox/outbox-event.service";
+import { PaymentsService } from "../payments/payments.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TableProjectionService } from "../table-projection/table-projection.service";
 import { serializeSessionForOutbox } from "./outbox-payload";
@@ -42,6 +45,8 @@ export class TableSessionsService {
     private readonly projection: TableProjectionService,
     private readonly realtime: RealtimeGateway,
     private readonly outbox: OutboxEventService,
+    private readonly payments: PaymentsService,
+    private readonly cashRegister: CashRegisterService,
   ) {}
 
   async open(
@@ -416,7 +421,33 @@ export class TableSessionsService {
     return result;
   }
 
-  async markPaid(sessionId: number): Promise<TableSession> {
+  /**
+   * Marca la sesión como pagada y la cierra. Acepta dos firmas para
+   * mantener retrocompatibilidad mientras el frontend migra a la nueva
+   * UI de cobros divididos (Fase A+):
+   *
+   *   - Firma vieja: `markPaid(sessionId)` — el cobro se asume en
+   *     EFECTIVO por el total pendiente. Útil para clientes legacy y
+   *     para gap-time entre deploy de B2 y deploy de B3.
+   *   - Firma nueva: `markPaid(sessionId, { payments, actor })` —
+   *     recibe el desglose por método. Si la suma de payments no
+   *     coincide con el pendiente, se lanza error.
+   *
+   * En ambos casos se crea N filas en la tabla `Payment` (kind=final)
+   * dentro de la misma tx que cierra la sesión.
+   */
+  async markPaid(
+    sessionId: number,
+    opts: {
+      payments?: Array<{
+        method: PaymentMethod;
+        amount: number;
+        reference?: string;
+        notes?: string;
+      }>;
+      actor?: { user_id: number; name: string } | null;
+    } = {},
+  ): Promise<TableSession> {
     const session = await this.requireSessionExists(sessionId);
     if (session.status === TableSessionStatus.closed) {
       throw new BadRequestException({
@@ -425,7 +456,35 @@ export class TableSessionsService {
       });
     }
 
+    const pending = Number(session.total_consumption);
+
+    // Backward-compat: si no nos pasaron payments, asumimos un único
+    // cobro en efectivo por el pendiente. Permite a clientes legacy
+    // seguir cerrando cuentas sin romperse mientras migran a la UI
+    // de cobros divididos. Si pending===0 (sesión sin consumo o ya
+    // pre-pagada con parciales), no creamos Payment(final): el cierre
+    // se hace igual y la conciliación de caja ya tiene los parciales.
+    const finalPayments =
+      opts.payments && opts.payments.length > 0
+        ? opts.payments
+        : pending > 0
+          ? [{ method: PaymentMethod.efectivo, amount: pending }]
+          : [];
+
+    if (finalPayments.length > 0) {
+      const sum = finalPayments.reduce((acc, p) => acc + Number(p.amount), 0);
+      if (Math.abs(sum - pending) > 0.5) {
+        throw new BadRequestException({
+          message: `La suma de pagos ($${sum}) no coincide con el pendiente ($${pending})`,
+          code: "PAYMENT_TOTAL_MISMATCH",
+          expected: pending,
+          received: sum,
+        });
+      }
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
+      const cashSession = await this.cashRegister.requireOpen(tx);
       const activeOrders = await tx.order.count({
         where: {
           table_session_id: sessionId,
@@ -450,6 +509,17 @@ export class TableSessionsService {
           payment_requested_at: null,
         },
       });
+      // Registramos los Payment(kind=final) en la misma tx. Cada uno
+      // emite payment.created al outbox. Si no hay pagos finales
+      // (pending===0, todo cubierto por parciales), saltamos.
+      if (finalPayments.length > 0) {
+        await this.payments.recordFinal(tx, {
+          table_session_id: sessionId,
+          cash_register_session_id: cashSession.id,
+          payments: finalPayments,
+          actor: opts.actor ?? null,
+        });
+      }
       // Enqueue dentro de la MISMA transacción. Emite UN solo evento
       // session.marked_paid aunque también se haya seteado closed_at:
       // semánticamente "cobrar y cerrar" es una sola transición de

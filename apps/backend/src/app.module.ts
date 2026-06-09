@@ -18,9 +18,11 @@ import { MusicModule } from "./modules/music/music.module";
 import { HousePlaylistModule } from "./modules/house-playlist/house-playlist.module";
 import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { AccessCodeModule } from "./modules/access-code/access-code.module";
+import { CashRegisterModule } from "./modules/cash-register/cash-register.module";
 import { ExtraIncomeModule } from "./modules/extra-income/extra-income.module";
 import { LuggageModule } from "./modules/luggage/luggage.module";
 import { OutboxModule } from "./modules/outbox/outbox.module";
+import { PaymentsModule } from "./modules/payments/payments.module";
 import { rateLimitMiddleware } from "./common/rate-limit.middleware";
 import { loggingMiddleware } from "./common/logging.middleware";
 import { PlaybackModule } from "./modules/playback/playback.module";
@@ -48,6 +50,8 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     ExtraIncomeModule,
     LuggageModule,
     OutboxModule,
+    CashRegisterModule,
+    PaymentsModule,
   ],
   providers: [
     // SentryGlobalFilter forwards every uncaught exception to Sentry
@@ -91,6 +95,12 @@ export class AppModule implements NestModule {
           method: RequestMethod.POST,
         },
         { path: "admin/luggage", method: RequestMethod.POST },
+        // Apertura/cierre de día contable. Aunque la unicidad la
+        // garantiza el partial unique index a nivel BD, rate-limit
+        // protege contra double-click del cajero al abrir/cerrar
+        // (evita la avalancha de 409s en logs y la confusión UX).
+        { path: "admin/cash-register/open", method: RequestMethod.POST },
+        { path: "admin/cash-register/close", method: RequestMethod.POST },
       );
   }
 }

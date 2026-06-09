@@ -7,11 +7,14 @@ import {
 import {
   Consumption,
   ConsumptionType,
+  PaymentMethod,
   Prisma,
   TableSessionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CashRegisterService } from "../cash-register/cash-register.service";
 import { OutboxEventService } from "../outbox/outbox-event.service";
+import { PaymentsService } from "../payments/payments.service";
 import { ProductsService } from "../products/products.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TableProjectionService } from "../table-projection/table-projection.service";
@@ -72,6 +75,8 @@ export class ConsumptionsService {
     private readonly realtime: RealtimeGateway,
     private readonly products: ProductsService,
     private readonly outbox: OutboxEventService,
+    private readonly payments: PaymentsService,
+    private readonly cashRegister: CashRegisterService,
   ) {}
 
   async getBill(sessionId: number): Promise<BillView> {
@@ -147,6 +152,7 @@ export class ConsumptionsService {
     const description = this.describeAdjustment(type, dto.reason);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const cashSession = await this.cashRegister.requireOpen(tx);
       const created = await tx.consumption.create({
         data: {
           table_session_id: sessionId,
@@ -155,6 +161,7 @@ export class ConsumptionsService {
           unit_amount: amount,
           amount,
           type,
+          cash_register_session_id: cashSession.id,
           reason: dto.reason,
           notes: dto.notes ?? null,
           // Audit rule: server is the single source of truth. The DTO does
@@ -215,6 +222,7 @@ export class ConsumptionsService {
     sessionId: number,
     rawAmount: number,
     actor: AuditActor = null,
+    paymentMethod: PaymentMethod = PaymentMethod.efectivo,
   ): Promise<ConsumptionFull> {
     const amount = Number(rawAmount);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -258,6 +266,7 @@ export class ConsumptionsService {
     const description = `Pago parcial — ${this.formatCurrency(amount)}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const cashSession = await this.cashRegister.requireOpen(tx);
       const created = await tx.consumption.create({
         data: {
           table_session_id: sessionId,
@@ -266,6 +275,7 @@ export class ConsumptionsService {
           unit_amount: negative,
           amount: negative,
           type: ConsumptionType.partial_payment,
+          cash_register_session_id: cashSession.id,
           // No reason/notes: the description is the receipt's voice;
           // upstream audit log already records actor + timestamp.
           created_by: actor?.name ?? null,
@@ -278,6 +288,18 @@ export class ConsumptionsService {
         aggregate_type: "Consumption",
         aggregate_id: created.external_id,
         payload: serializeConsumptionForOutbox(created),
+      });
+      // Registramos el Payment(kind=partial) en la misma tx. Es la
+      // fuente de verdad para conciliación de caja: el consumption
+      // negativo afecta el saldo, pero la caja se reconcilia contra
+      // Payment.method=efectivo del día.
+      await this.payments.recordPartial(tx, {
+        table_session_id: sessionId,
+        cash_register_session_id: cashSession.id,
+        amount: this.round(amount),
+        method: paymentMethod,
+        consumption_id: created.id,
+        actor,
       });
       await tx.tableSession.update({
         where: { id: sessionId },
@@ -368,6 +390,7 @@ export class ConsumptionsService {
         });
       }
 
+      const cashSession = await this.cashRegister.getCurrentOpen(tx);
       const created = await tx.consumption.create({
         data: {
           table_session_id: original.table_session_id,
@@ -379,6 +402,7 @@ export class ConsumptionsService {
           amount: refundAmount,
           type: ConsumptionType.refund,
           reverses_id: consumptionId,
+          cash_register_session_id: cashSession?.id ?? null,
           reason: dto.reason,
           notes: dto.notes ?? null,
           // Audit rule: see createAdjustment.

@@ -18,6 +18,7 @@ import { AuthKinds } from "../auth/guards/decorators";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import type { AuthPayload } from "../auth/types";
 import { AuditLogService } from "../audit-log/audit-log.service";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
 /**
  * Tables surface = staff only. Customers do not need to list tables; they
@@ -77,6 +78,8 @@ export class TablesController {
    * we'd leak orphan BAR rows the staff couldn't easily clean up.
    */
   @Post("bars/walkin")
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
+  @AuthKinds("admin")
   async openWalkInAccount(
     @Body() dto: CreateBarDto,
     @CurrentAuth() auth: AuthPayload,

@@ -11,6 +11,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CashRegisterService } from "../cash-register/cash-register.service";
 import { ConsumptionsService } from "../consumptions/consumptions.service";
 import { serializeConsumptionForOutbox } from "../consumptions/outbox-payload";
 import { OutboxEventService } from "../outbox/outbox-event.service";
@@ -64,6 +65,7 @@ export class OrdersService {
     private readonly consumptions: ConsumptionsService,
     private readonly products: ProductsService,
     private readonly outbox: OutboxEventService,
+    private readonly cashRegister: CashRegisterService,
   ) {}
 
   async findAll(filter?: {
@@ -266,6 +268,12 @@ export class OrdersService {
     });
     const productById = new Map(products.map((p) => [p.id, p]));
 
+    // Caja del día contable. requireOpen ya fue invocado por el guard
+    // del endpoint que dispara la entrega, pero re-leemos aquí dentro
+    // de la tx para que el id quede capturado con consistencia
+    // transaccional (no por race entre check del guard y commit).
+    const cashSession = await this.cashRegister.requireOpen(tx);
+
     let totalDelta = new Prisma.Decimal(0);
     // Acumulamos mismatches detectados para reportarlos UNA vez al final
     // del ciclo (un solo AuditLog + un solo emit por order). Reportar
@@ -297,6 +305,7 @@ export class OrdersService {
           unit_amount: item.unit_price,
           amount,
           type: ConsumptionType.product,
+          cash_register_session_id: cashSession.id,
         },
       });
       // Enqueue dentro de la MISMA transacción. Si el enqueue falla

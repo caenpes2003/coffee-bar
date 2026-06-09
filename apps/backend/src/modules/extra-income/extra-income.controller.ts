@@ -14,6 +14,7 @@ import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { AuthKinds } from "../auth/guards/decorators";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import type { AuthPayload } from "../auth/types";
+import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 import { CreateManualIncomeDto } from "./dto/create-manual-income.dto";
 import { CreateRestroomIncomeDto } from "./dto/create-restroom-income.dto";
 import { ReverseExtraIncomeDto } from "./dto/reverse-extra-income.dto";
@@ -39,6 +40,8 @@ export class ExtraIncomeController {
   constructor(private readonly service: ExtraIncomeService) {}
 
   @Post("restroom")
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
+  @AuthKinds("admin")
   createRestroom(
     @Body() dto: CreateRestroomIncomeDto,
     @CurrentAuth() auth: AuthPayload,
@@ -52,6 +55,8 @@ export class ExtraIncomeController {
    * rentas, sponsoreos).
    */
   @Post("manual")
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
+  @AuthKinds("admin")
   createManual(
     @Body() dto: CreateManualIncomeDto,
     @CurrentAuth() auth: AuthPayload,

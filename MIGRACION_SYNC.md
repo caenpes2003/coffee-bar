@@ -337,19 +337,32 @@ las 12:00 sin que el sistema cambie de día en medio del turno.
 
 ## Próximos pasos inmediatos
 
-1. **Verificar deploy de commit `2d4aa4c`** (session.*) en producción
-   con el plan de 5 pasos descrito arriba.
-2. **Implementar B1** (schema + migration + outbox infra de Payment +
-   CashRegisterSession).
-3. **Implementar B2** (servicios + bloqueos).
-4. **Implementar B3** (frontend completo).
-5. **Retomar roadmap MVP 2**: productores `order.status_changed`,
+1. ✅ **Verificar deploy de commit `2d4aa4c`** (session.*) — pendiente
+   validación manual del user con flujo de 5 pasos.
+2. ✅ **B1 deployado y verificado en producción** (commit `fd251db`).
+3. ✅ **B2 implementado** (`CashRegisterService` + `PaymentsService` +
+   `RequireOpenCashRegisterGuard` aplicado a todos los endpoints
+   operativos + `cash_register_session_id` poblado en consumption/
+   extraIncome/luggage + `markPaid` refactor con retrocompat para
+   gap-time entre B2 y B3). Type-check verde. Pendiente deploy a prod
+   y verificación manual del flujo (abrir día → operar → cerrar día).
+4. **Implementar B3** (frontend completo: banner "no hay día abierto",
+   modales de cobro con método de pago, sección Resumen con cierre
+   esperado por método, botón CERRAR DÍA con ticket, tab Caja
+   histórico, filtros /admin/sales por sesión de caja).
+5. **Mejora UX: stock derivado de compuestos** (~5-6h). Hoy los compuestos
+   muestran `Product.stock` legacy (a menudo 999) en /admin/products y
+   /admin/sales tab Productos. Propuesta: calcular `derived_stock` en
+   `ProductAvailabilityService` desde componentes + bottleneck, exponer
+   en serializer, ocultar el campo legacy en UI. Aplicar también en
+   editor de receta. Decisión registrada: hacerlo **después** de Fase A+.
+6. **Retomar roadmap MVP 2**: productores `order.status_changed`,
    `inventory.recorded`, `extra_income.*`, `luggage.*`, `audit_log.*`,
    `payment.*`, `cash_register.*`.
-6. **Construir el worker de drain del outbox** (MVP 2 completo
+7. **Construir el worker de drain del outbox** (MVP 2 completo
    requiere worker + endpoint cloud `/sync/ingest`).
-7. **MVP 1 deployment del local** (mini-PC físico).
-8. **MVP 3 failover + QR inteligente**.
+8. **MVP 1 deployment del local** (mini-PC físico).
+9. **MVP 3 failover + QR inteligente**.
 
 ---
 

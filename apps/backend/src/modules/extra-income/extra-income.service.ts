@@ -11,6 +11,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { CashRegisterService } from "../cash-register/cash-register.service";
 import { CreateManualIncomeDto } from "./dto/create-manual-income.dto";
 import { CreateRestroomIncomeDto } from "./dto/create-restroom-income.dto";
 import { ReverseExtraIncomeDto } from "./dto/reverse-extra-income.dto";
@@ -39,7 +40,10 @@ export type Actor = { user_id: number; name: string } | null;
 
 @Injectable()
 export class ExtraIncomeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cashRegister: CashRegisterService,
+  ) {}
 
   /**
    * Registrar cobro de baño. El precio se decide acá según el subtype;
@@ -52,6 +56,7 @@ export class ExtraIncomeService {
     actor: Actor,
   ): Promise<SerializedExtraIncome> {
     const amount = RESTROOM_PRICES[dto.subtype];
+    const cashSession = await this.cashRegister.requireOpen();
     const created = await this.prisma.extraIncome.create({
       data: {
         type: ExtraIncomeType.restroom,
@@ -60,6 +65,7 @@ export class ExtraIncomeService {
         quantity: 1,
         total_amount: new Prisma.Decimal(amount),
         status: ExtraIncomeStatus.active,
+        cash_register_session_id: cashSession.id,
         notes: dto.notes?.trim() || null,
         created_by: actor?.name ?? null,
       },
@@ -78,6 +84,7 @@ export class ExtraIncomeService {
     dto: CreateManualIncomeDto,
     actor: Actor,
   ): Promise<SerializedExtraIncome> {
+    const cashSession = await this.cashRegister.requireOpen();
     const created = await this.prisma.extraIncome.create({
       data: {
         type: ExtraIncomeType.manual,
@@ -86,6 +93,7 @@ export class ExtraIncomeService {
         quantity: 1,
         total_amount: new Prisma.Decimal(dto.amount),
         status: ExtraIncomeStatus.active,
+        cash_register_session_id: cashSession.id,
         concept: dto.concept.trim(),
         notes: dto.notes?.trim() || null,
         created_by: actor?.name ?? null,
