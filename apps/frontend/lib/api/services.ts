@@ -1346,9 +1346,20 @@ export const cashRegisterApi = {
 };
 
 // ─── Payments (Fase A+) ───────────────────────────────────────────────────────
-// Hoy expone solo el reverso. Los cobros (partial/final) viven en sus
-// controllers de dominio (bill, table-sessions) para no romper la API.
+// Los cobros (partial/final) viven en sus controllers de dominio
+// (bill, table-sessions) para no romper la API; este módulo expone
+// el reverso y la lectura asociada a una sesión.
 export const paymentsApi = {
+  /**
+   * Lista todos los Payments asociados a una TableSession (parciales,
+   * finales y reversos). Orden cronológico ascendente. Usado por el
+   * detalle de mesa para mostrar el desglose con acción "reversar".
+   */
+  listForSession: (sessionId: number): Promise<Payment[]> =>
+    adminApi
+      .get<Payment[]>(`/admin/payments/by-session/${sessionId}`)
+      .then((r) => r.data),
+
   /**
    * Reversar un Payment append-only. Crea fila nueva con kind=reversal
    * y amount con signo opuesto. NO borra el original (audit-friendly).

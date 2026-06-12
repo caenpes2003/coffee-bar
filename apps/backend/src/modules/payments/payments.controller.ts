@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   ParseIntPipe,
   Post,
   UseGuards,
 } from "@nestjs/common";
+import type { Payment } from "@prisma/client";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { AuthKinds } from "../auth/guards/decorators";
 import { JwtGuard } from "../auth/guards/jwt.guard";
@@ -15,12 +17,12 @@ import { ReversePaymentDto } from "./dto/reverse-payment.dto";
 import { PaymentsService } from "./payments.service";
 
 /**
- * Endpoints de Payments. Hoy expone solo el reverso — los cobros
- * (partial, final) siguen viviendo en sus controllers de dominio
- * (/bill/:sessionId/partial-payment, /table-sessions/:id/mark-paid)
- * para no romper la API pública.
+ * Endpoints de Payments. Los cobros (partial, final) siguen viviendo
+ * en sus controllers de dominio (/bill/:sessionId/partial-payment,
+ * /table-sessions/:id/mark-paid) para no romper la API pública.
  *
- *   POST /admin/payments/:id/reverse   reversar un Payment previo
+ *   GET  /admin/payments/by-session/:sessionId   listar pagos de una mesa
+ *   POST /admin/payments/:id/reverse              reversar un Payment previo
  *
  * El reverso requiere admin auth y razón obligatoria. NO requiere
  * RequireOpenCashRegisterGuard porque el service ya valida (con un
@@ -35,6 +37,19 @@ export class PaymentsController {
     private readonly service: PaymentsService,
     private readonly audit: AuditLogService,
   ) {}
+
+  /**
+   * Lista los Payments asociados a una TableSession (parciales,
+   * finales y reversos). Usado por el detalle de mesa para mostrar
+   * el desglose y exponer la acción "reversar" por fila.
+   */
+  @Get("by-session/:sessionId")
+  async listForSession(
+    @Param("sessionId", ParseIntPipe) sessionId: number,
+  ) {
+    const payments = await this.service.listForSession(sessionId);
+    return payments.map(serialize);
+  }
 
   @Post(":id/reverse")
   async reverse(
@@ -65,19 +80,31 @@ export class PaymentsController {
         reason_detail: dto.reason_detail ?? null,
       });
     }
-    return {
-      id: reversal.id,
-      external_id: reversal.external_id,
-      table_session_id: reversal.table_session_id,
-      cash_register_session_id: reversal.cash_register_session_id,
-      method: reversal.method,
-      kind: reversal.kind,
-      amount: Number(reversal.amount),
-      reverses_id: reversal.reverses_id,
-      reverse_reason: reversal.reverse_reason,
-      reverse_reason_detail: reversal.reverse_reason_detail,
-      created_at: reversal.created_at,
-      created_by: reversal.created_by,
-    };
+    return serialize(reversal);
   }
+}
+
+/**
+ * Decimal → number, DateTime → ISO string. Mismo shape que el tipo
+ * `Payment` que el frontend declara en @coffee-bar/shared (consumido
+ * por paymentsApi).
+ */
+function serialize(p: Payment) {
+  return {
+    id: p.id,
+    external_id: p.external_id,
+    table_session_id: p.table_session_id,
+    cash_register_session_id: p.cash_register_session_id,
+    method: p.method,
+    kind: p.kind,
+    amount: Number(p.amount),
+    consumption_id: p.consumption_id,
+    reverses_id: p.reverses_id,
+    reverse_reason: p.reverse_reason,
+    reverse_reason_detail: p.reverse_reason_detail,
+    reference: p.reference,
+    notes: p.notes,
+    created_by: p.created_by,
+    created_at: p.created_at.toISOString(),
+  };
 }

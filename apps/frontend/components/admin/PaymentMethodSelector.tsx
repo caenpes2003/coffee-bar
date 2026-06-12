@@ -54,11 +54,61 @@ export function PaymentMethodSelector({
   value,
   onChange,
   disabled,
+  compact = false,
 }: {
   value: PaymentMethod | null;
   onChange: (next: PaymentMethod) => void;
   disabled?: boolean;
+  /**
+   * Variante compacta para cobros divididos: pills horizontales,
+   * sin label arriba ni hint debajo del método. Usado cuando se
+   * apilan N filas { método + monto } dentro del mismo modal y la
+   * variante grande ocuparía demasiado vertical.
+   */
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          flexWrap: "wrap",
+        }}
+      >
+        {METHODS.map((m) => {
+          const selected = value === m.key;
+          return (
+            <button
+              key={m.key}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(m.key)}
+              aria-pressed={selected}
+              style={{
+                padding: "6px 12px",
+                background: selected ? C.goldSoft : C.cream,
+                border: `1px solid ${selected ? C.gold : C.sand}`,
+                borderRadius: 999,
+                cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.55 : 1,
+                transition:
+                  "background 120ms ease, border-color 120ms ease",
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 1.5,
+                color: selected ? C.ink : C.mute,
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div>
       <span

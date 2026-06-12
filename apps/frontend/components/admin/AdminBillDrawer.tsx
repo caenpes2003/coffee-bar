@@ -17,6 +17,7 @@ import { useSocket } from "@/lib/socket/useSocket";
 import {
   billApi,
   orderRequestsApi,
+  paymentsApi,
   productsApi,
   tableSessionsApi,
   type ProductRecipeSlotView,
@@ -25,7 +26,10 @@ import { getErrorMessage } from "@/lib/errors";
 import type {
   BillView,
   Consumption,
+  MarkPaidPaymentInput,
+  Payment,
   PaymentMethod,
+  PaymentReverseReason,
   Product,
   TableSession,
 } from "@coffee-bar/shared";
@@ -95,11 +99,16 @@ export function AdminBillDrawer({
 }: Props) {
   const [bill, setBill] = useState<BillView | null>(null);
   const [session, setSession] = useState<TableSession | null>(null);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [paymentBusy, setPaymentBusy] = useState<
     "mark-paid" | "close" | null
   >(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  // Fase A+ B3.7: modal de reverso de Payment. payment=null => cerrado.
+  const [reverseTarget, setReverseTarget] = useState<Payment | null>(null);
+  const [reverseBusy, setReverseBusy] = useState(false);
+  const [reverseError, setReverseError] = useState<string | null>(null);
 
   const [actionOpen, setActionOpen] = useState<null | {
     kind: ActionKind;
@@ -127,6 +136,12 @@ export function AdminBillDrawer({
       .getById(sessionId)
       .then(setSession)
       .catch((e: unknown) => setLoadError(getErrorMessage(e)));
+    // Payments cargan independientes: si la sesión no tiene cobros
+    // (apenas abierta), la lista vendrá vacía — no es error.
+    paymentsApi
+      .listForSession(sessionId)
+      .then(setPayments)
+      .catch(() => setPayments([]));
   }, [sessionId]);
 
   useEffect(() => {
@@ -134,7 +149,10 @@ export function AdminBillDrawer({
     if (!open) {
       setBill(null);
       setSession(null);
+      setPayments([]);
       setPaymentError(null);
+      setReverseTarget(null);
+      setReverseError(null);
     }
   }, [open, sessionId, load]);
 
@@ -184,24 +202,48 @@ export function AdminBillDrawer({
   }
 
   /**
-   * Fase A+ B3: cobrar con método explícito. Hoy soporta UN solo
-   * método (el modal envía `payments=[{ method, amount: pending }]`).
-   * Cobros divididos vienen en B3.5 — mismo endpoint, varios items.
+   * Fase A+ B3.5: cobrar con N métodos (cobros divididos). El modal
+   * valida que la suma coincida con el pendiente antes de invocar; el
+   * backend revalida con tolerancia ±$0.5. Si todos los pagos van con
+   * el mismo método, el modal envía igual un array de 1 elemento — el
+   * backend lo trata idénticamente.
    */
-  async function runMarkPaidWithMethod(method: PaymentMethod) {
-    if (sessionId == null || bill == null) return;
+  async function runMarkPaidWithPayments(
+    payments: MarkPaidPaymentInput[],
+  ) {
+    if (sessionId == null) return;
     setPaymentBusy("mark-paid");
     setPaymentError(null);
     try {
-      const pending = bill.summary.total;
-      await tableSessionsApi.markPaid(sessionId, [
-        { method, amount: pending },
-      ]);
+      await tableSessionsApi.markPaid(sessionId, payments);
       onClose();
     } catch (err) {
       setPaymentError(getErrorMessage(err));
     } finally {
       setPaymentBusy(null);
+    }
+  }
+
+  /**
+   * Fase A+ B3.7: reversar un Payment. El service del backend crea
+   * una fila kind=reversal con amount opuesto y deja el original
+   * intacto. Tras éxito refrescamos el bill (porque si era un parcial,
+   * su Consumption negativo cambió la suma) y la lista de Payments.
+   */
+  async function runReverse(
+    paymentId: number,
+    body: { reason: PaymentReverseReason; reason_detail?: string },
+  ) {
+    setReverseBusy(true);
+    setReverseError(null);
+    try {
+      await paymentsApi.reverse(paymentId, body);
+      setReverseTarget(null);
+      load();
+    } catch (err) {
+      setReverseError(getErrorMessage(err));
+    } finally {
+      setReverseBusy(false);
     }
   }
 
@@ -330,6 +372,13 @@ export function AdminBillDrawer({
                   })
                 }
               />
+              {payments.length > 0 && (
+                <PaymentsList
+                  payments={payments}
+                  readOnly={readOnly}
+                  onReverse={(p) => setReverseTarget(p)}
+                />
+              )}
             </>
           )}
         </div>
@@ -524,9 +573,9 @@ export function AdminBillDrawer({
           pending={bill.summary.total}
           busy={paymentBusy === "mark-paid"}
           error={paymentError}
-          onConfirm={(method) => {
+          onConfirm={(payments) => {
             setConfirmOpen(null);
-            void runMarkPaidWithMethod(method);
+            void runMarkPaidWithPayments(payments);
           }}
           onCancel={() => setConfirmOpen(null)}
         />
@@ -552,6 +601,19 @@ export function AdminBillDrawer({
             runPaymentAction("close");
           }}
           onCancel={() => setConfirmOpen(null)}
+        />
+      )}
+
+      {reverseTarget && (
+        <ReversePaymentModal
+          payment={reverseTarget}
+          busy={reverseBusy}
+          error={reverseError}
+          onConfirm={(body) => void runReverse(reverseTarget.id, body)}
+          onCancel={() => {
+            setReverseTarget(null);
+            setReverseError(null);
+          }}
         />
       )}
     </div>
@@ -2393,6 +2455,16 @@ function formatCop(n: number): string {
  * completo). Cobros divididos vienen en B3.5: este mismo modal
  * crece para aceptar N filas y validar sum == pendiente.
  */
+// Una fila de split en el modal de cobrar y cerrar. `method` es null
+// hasta que el cajero elige; `amountStr` es el string del input crudo
+// (preservamos el string original para no perder ceros a la derecha
+// mientras el usuario tipea).
+type SplitRow = {
+  id: number;
+  method: PaymentMethod | null;
+  amountStr: string;
+};
+
 function MarkPaidModal({
   accountLabel,
   pending,
@@ -2405,11 +2477,67 @@ function MarkPaidModal({
   pending: number;
   busy: boolean;
   error: string | null;
-  onConfirm: (method: PaymentMethod) => void;
+  onConfirm: (payments: MarkPaidPaymentInput[]) => void;
   onCancel: () => void;
 }) {
-  const [method, setMethod] = useState<PaymentMethod | null>(null);
-  const canSubmit = method !== null && !busy;
+  // Estado: array de filas { method, amount }. Empezamos con UNA fila
+  // y monto pre-cargado = pendiente. El cajero puede agregar más filas
+  // para cobros divididos ("$30k tarjeta + $20k efectivo").
+  const [rows, setRows] = useState<SplitRow[]>(() => [
+    { id: 1, method: null, amountStr: String(Math.round(pending)) },
+  ]);
+
+  // Próximo id (no reuso ids de filas removidas para evitar problemas
+  // de key en React si se agrega/quita rápido).
+  const [nextId, setNextId] = useState(2);
+
+  const updateRow = (id: number, patch: Partial<Omit<SplitRow, "id">>) => {
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    );
+  };
+
+  const addRow = () => {
+    // Pre-cargar el monto faltante para que el cajero solo tenga que
+    // elegir método. Si la suma actual ya cubre, agregamos fila con 0
+    // (caso raro; igual permitimos por flexibilidad).
+    const sumNow = rows.reduce((acc, r) => acc + (Number(r.amountStr) || 0), 0);
+    const remaining = Math.max(0, Math.round(pending - sumNow));
+    setRows((prev) => [
+      ...prev,
+      { id: nextId, method: null, amountStr: String(remaining) },
+    ]);
+    setNextId((n) => n + 1);
+  };
+
+  const removeRow = (id: number) => {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const sum = rows.reduce((acc, r) => acc + (Number(r.amountStr) || 0), 0);
+  const sumMatches = Math.abs(sum - pending) < 0.5;
+  const allMethodsChosen = rows.every((r) => r.method !== null);
+  const allAmountsValid = rows.every(
+    (r) =>
+      r.amountStr.trim().length > 0 &&
+      Number.isFinite(Number(r.amountStr)) &&
+      Number(r.amountStr) > 0,
+  );
+  const canSubmit =
+    !busy && allMethodsChosen && allAmountsValid && sumMatches;
+
+  const submit = () => {
+    if (!canSubmit) return;
+    // Mapeamos a MarkPaidPaymentInput[]. allMethodsChosen garantiza
+    // que ningún method es null, pero el cast explícito calma a TS.
+    onConfirm(
+      rows.map((r) => ({
+        method: r.method as PaymentMethod,
+        amount: Number(r.amountStr),
+      })),
+    );
+  };
+
   return (
     <div
       role="dialog"
@@ -2429,7 +2557,7 @@ function MarkPaidModal({
       <div
         style={{
           width: "100%",
-          maxWidth: 460,
+          maxWidth: 480,
           background: C.paper,
           borderRadius: 16,
           padding: 22,
@@ -2437,6 +2565,8 @@ function MarkPaidModal({
           flexDirection: "column",
           gap: 14,
           boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+          maxHeight: "90vh",
+          overflowY: "auto",
         }}
       >
         <div>
@@ -2499,11 +2629,604 @@ function MarkPaidModal({
           </strong>
         </div>
 
-        <PaymentMethodSelector
-          value={method}
-          onChange={setMethod}
+        {/* Lista de filas { método + monto }. Si solo hay 1, no se
+            muestra el botón de remover. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {rows.map((row, idx) => (
+            <div
+              key={row.id}
+              style={{
+                padding: 12,
+                border: `1px solid ${C.sand}`,
+                borderRadius: 10,
+                background: C.cream,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 2,
+                    color: C.mute,
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                  }}
+                >
+                  Pago {idx + 1}
+                </span>
+                {rows.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeRow(row.id)}
+                    disabled={busy}
+                    aria-label="Quitar este pago"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: C.burgundy,
+                      fontFamily: FONT_MONO,
+                      fontSize: 10,
+                      letterSpacing: 1.5,
+                      textTransform: "uppercase",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      fontWeight: 700,
+                      padding: "2px 6px",
+                    }}
+                  >
+                    × Quitar
+                  </button>
+                )}
+              </div>
+              <PaymentMethodSelector
+                value={row.method}
+                onChange={(m) => updateRow(row.id, { method: m })}
+                disabled={busy}
+                compact
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                value={row.amountStr}
+                onChange={(e) =>
+                  updateRow(row.id, { amountStr: e.target.value })
+                }
+                placeholder="0"
+                disabled={busy}
+                style={{
+                  padding: "8px 12px",
+                  border: `1px solid ${C.sand}`,
+                  borderRadius: 8,
+                  fontFamily: FONT_MONO,
+                  fontSize: 13,
+                  background: C.paper,
+                  color: C.ink,
+                  outline: "none",
+                  width: "100%",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={addRow}
           disabled={busy}
-        />
+          style={{
+            padding: "8px 14px",
+            border: `1px dashed ${C.sand}`,
+            borderRadius: 10,
+            background: "transparent",
+            color: C.cacao,
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            letterSpacing: 1.5,
+            cursor: busy ? "not-allowed" : "pointer",
+            textTransform: "uppercase",
+            fontWeight: 700,
+          }}
+        >
+          + Agregar otro método
+        </button>
+
+        {/* Indicador de suma en vivo. Verde si cuadra, rojo si no. */}
+        <div
+          style={{
+            padding: "10px 14px",
+            background: sumMatches ? C.oliveSoft : C.burgundySoft,
+            border: `1px solid ${sumMatches ? C.olive : C.burgundy}`,
+            borderRadius: 8,
+            fontFamily: FONT_MONO,
+            fontSize: 12,
+            color: C.ink,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ letterSpacing: 1.5, textTransform: "uppercase" }}>
+            Suma de pagos
+          </span>
+          <strong>
+            {formatCop(sum)} / {formatCop(pending)}
+            {sumMatches ? " ·  cuadra" : ` · faltan ${formatCop(pending - sum)}`}
+          </strong>
+        </div>
+
+        {error && (
+          <p
+            role="alert"
+            style={{
+              margin: 0,
+              padding: 10,
+              background: C.burgundySoft,
+              color: C.burgundy,
+              borderRadius: 8,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+            }}
+          >
+            {error}
+          </p>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            justifyContent: "flex-end",
+            marginTop: 6,
+          }}
+        >
+          <CancelButton onClick={onCancel} busy={busy} />
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canSubmit}
+            style={{
+              padding: "10px 22px",
+              border: "none",
+              borderRadius: 999,
+              background: canSubmit ? C.olive : C.mute,
+              color: C.paper,
+              fontFamily: FONT_DISPLAY,
+              fontSize: 13,
+              letterSpacing: 2.5,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}
+          >
+            {busy ? "Cobrando..." : "Sí, cobrar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Lista de Payments + acción Reversar (Fase A+ B3.7) ────────────────────
+
+/**
+ * Render de los cobros (parciales, finales) y reversos asociados a la
+ * sesión. Por fila muestra: método, kind, monto (con signo en reversos),
+ * timestamp, autor; en reversos también la razón. La acción "Reversar"
+ * solo aparece en filas elegibles (no reversal y sin reverso previo).
+ */
+function PaymentsList({
+  payments,
+  readOnly,
+  onReverse,
+}: {
+  payments: Payment[];
+  readOnly?: boolean;
+  onReverse: (p: Payment) => void;
+}) {
+  // Set de ids reversados: para cada fila kind=reversal, su `reverses_id`
+  // apunta al Payment original ya anulado. Lo usamos para deshabilitar
+  // "Reversar" en filas ya con reverso.
+  const reversedIds = new Set<number>();
+  for (const p of payments) {
+    if (p.kind === "reversal" && p.reverses_id != null) {
+      reversedIds.add(p.reverses_id);
+    }
+  }
+
+  return (
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <h4
+        style={{
+          margin: 0,
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          letterSpacing: 3,
+          color: C.mute,
+          textTransform: "uppercase",
+          fontWeight: 700,
+        }}
+      >
+        — Pagos registrados
+      </h4>
+      <ul
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {payments.map((p) => {
+          const isReversal = p.kind === "reversal";
+          const alreadyReversed = reversedIds.has(p.id);
+          const canReverse = !readOnly && !isReversal && !alreadyReversed;
+          return (
+            <li
+              key={p.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 12px",
+                background: isReversal ? C.burgundySoft : C.cream,
+                border: `1px solid ${isReversal ? C.burgundy : C.sand}`,
+                borderRadius: 10,
+                opacity: alreadyReversed ? 0.6 : 1,
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span
+                  style={{
+                    fontFamily: FONT_UI,
+                    fontSize: 13,
+                    color: C.ink,
+                    fontWeight: 700,
+                  }}
+                >
+                  {paymentMethodLabel(p.method)} ·{" "}
+                  {paymentKindLabel(p.kind)}
+                </span>
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 0.5,
+                    color: C.mute,
+                  }}
+                >
+                  {formatPaymentTimestamp(p.created_at)}
+                  {p.created_by ? ` · ${p.created_by}` : ""}
+                  {alreadyReversed ? " · reversado" : ""}
+                </span>
+                {isReversal && p.reverse_reason && (
+                  <span
+                    style={{
+                      fontFamily: FONT_MONO,
+                      fontSize: 10,
+                      letterSpacing: 0.5,
+                      color: C.burgundy,
+                      marginTop: 2,
+                    }}
+                  >
+                    Razón: {reverseReasonLabel(p.reverse_reason)}
+                    {p.reverse_reason_detail
+                      ? ` — ${p.reverse_reason_detail}`
+                      : ""}
+                  </span>
+                )}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                  gap: 4,
+                }}
+              >
+                <strong
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 18,
+                    color: isReversal ? C.burgundy : C.ink,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  {p.amount < 0 ? "−" : ""}
+                  {formatCop(Math.abs(p.amount))}
+                </strong>
+                {canReverse && (
+                  <button
+                    type="button"
+                    onClick={() => onReverse(p)}
+                    style={{
+                      padding: "4px 10px",
+                      border: `1px solid ${C.burgundy}`,
+                      background: "transparent",
+                      color: C.burgundy,
+                      borderRadius: 999,
+                      fontFamily: FONT_MONO,
+                      fontSize: 10,
+                      letterSpacing: 1.5,
+                      cursor: "pointer",
+                      textTransform: "uppercase",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Reversar
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function paymentMethodLabel(m: PaymentMethod): string {
+  if (m === "efectivo") return "Efectivo";
+  if (m === "tarjeta_bold") return "Tarjeta Bold";
+  if (m === "qr_bold") return "QR Bold";
+  return m;
+}
+
+function paymentKindLabel(k: "partial" | "final" | "reversal"): string {
+  if (k === "partial") return "Parcial";
+  if (k === "final") return "Final";
+  if (k === "reversal") return "Reverso";
+  return k;
+}
+
+function reverseReasonLabel(r: PaymentReverseReason): string {
+  switch (r) {
+    case "bold_rejected":
+      return "Bold rechazó la tarjeta";
+    case "wrong_session":
+      return "Cobro a mesa equivocada";
+    case "double_charge":
+      return "Doble cobro";
+    case "customer_refund":
+      return "Devolución al cliente";
+    case "test_operation":
+      return "Operación de prueba";
+    case "staff_error":
+      return "Error del staff";
+    case "other":
+      return "Otro";
+  }
+}
+
+function formatPaymentTimestamp(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat("es-CO", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(d);
+  } catch {
+    return iso;
+  }
+}
+
+// ─── Modal: reversar Payment con razón (Fase A+ B3.7) ──────────────────────
+
+const REVERSE_REASONS: ReadonlyArray<{
+  key: PaymentReverseReason;
+  label: string;
+}> = [
+  { key: "bold_rejected", label: "Bold rechazó la tarjeta" },
+  { key: "wrong_session", label: "Cobro a mesa equivocada" },
+  { key: "double_charge", label: "Doble cobro accidental" },
+  { key: "customer_refund", label: "Devolución al cliente" },
+  { key: "test_operation", label: "Operación de prueba" },
+  { key: "staff_error", label: "Error del staff" },
+  { key: "other", label: "Otro motivo" },
+];
+
+function ReversePaymentModal({
+  payment,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  payment: Payment;
+  busy: boolean;
+  error: string | null;
+  onConfirm: (body: {
+    reason: PaymentReverseReason;
+    reason_detail?: string;
+  }) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState<PaymentReverseReason | null>(null);
+  const [detail, setDetail] = useState("");
+
+  // Escape cierra. Mismo patrón que ModalShell del CashRegisterBanner.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  const needsDetail = reason === "other";
+  const detailValid = !needsDetail || detail.trim().length >= 3;
+  const canSubmit = reason !== null && detailValid && !busy;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Reversar cobro"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(43,29,20,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 90,
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 460,
+          background: C.paper,
+          borderRadius: 16,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow: "0 30px 80px -20px rgba(43,29,20,0.45)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.burgundy,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Reversar cobro
+          </span>
+          <h3
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 22,
+              letterSpacing: 0.5,
+              color: C.ink,
+              margin: "4px 0 0",
+            }}
+          >
+            {paymentMethodLabel(payment.method)} · {formatCop(payment.amount)}
+          </h3>
+          <p
+            style={{
+              margin: "8px 0 0",
+              fontFamily: FONT_UI,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: C.cacao,
+            }}
+          >
+            El cobro original NO se borra. Se crea una fila de reverso con
+            el monto opuesto, queda en la auditoría y se descuenta del
+            cuadre de caja de la jornada actual.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 2,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            — Motivo
+          </span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {REVERSE_REASONS.map((r) => {
+              const selected = reason === r.key;
+              return (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => setReason(r.key)}
+                  disabled={busy}
+                  aria-pressed={selected}
+                  style={{
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    background: selected ? C.burgundySoft : C.cream,
+                    border: `1px solid ${selected ? C.burgundy : C.sand}`,
+                    borderRadius: 10,
+                    fontFamily: FONT_UI,
+                    fontSize: 13,
+                    color: selected ? C.burgundy : C.ink,
+                    cursor: busy ? "not-allowed" : "pointer",
+                    fontWeight: selected ? 700 : 500,
+                  }}
+                >
+                  {r.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {needsDetail && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 2,
+                color: C.mute,
+                textTransform: "uppercase",
+                fontWeight: 600,
+              }}
+            >
+              Detalle (obligatorio, mín. 3 caracteres)
+            </span>
+            <input
+              type="text"
+              value={detail}
+              onChange={(e) => setDetail(e.target.value)}
+              placeholder="Describe brevemente el motivo del reverso"
+              maxLength={500}
+              disabled={busy}
+              style={{
+                padding: "10px 12px",
+                border: `1px solid ${C.sand}`,
+                borderRadius: 8,
+                fontFamily: FONT_MONO,
+                fontSize: 13,
+                background: C.cream,
+                color: C.ink,
+                outline: "none",
+              }}
+            />
+          </label>
+        )}
 
         {error && (
           <p
@@ -2536,14 +3259,19 @@ function MarkPaidModal({
           <button
             type="button"
             onClick={() => {
-              if (method !== null) onConfirm(method);
+              if (reason !== null) {
+                onConfirm({
+                  reason,
+                  reason_detail: needsDetail ? detail.trim() : undefined,
+                });
+              }
             }}
             disabled={!canSubmit}
             style={{
               padding: "10px 22px",
               border: "none",
               borderRadius: 999,
-              background: canSubmit ? C.olive : C.mute,
+              background: canSubmit ? C.burgundy : C.mute,
               color: C.paper,
               fontFamily: FONT_DISPLAY,
               fontSize: 13,
@@ -2553,7 +3281,7 @@ function MarkPaidModal({
               fontWeight: 600,
             }}
           >
-            {busy ? "Cobrando..." : "Sí, cobrar"}
+            {busy ? "Reversando..." : "Reversar"}
           </button>
         </div>
       </div>

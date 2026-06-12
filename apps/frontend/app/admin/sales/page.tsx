@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { CashRegisterTab } from "./CashRegisterTab";
+import { cashRegisterApi } from "@/lib/api/services";
+import type { CashRegisterSession } from "@coffee-bar/shared";
 import {
   salesInsightsApi,
   extraIncomeApi,
@@ -59,13 +62,17 @@ const DEFAULT_RANGE: DateRange = {
   days: 1,
 };
 
-type TabKey = "summary" | "detail" | "products" | "extras";
+type TabKey = "summary" | "detail" | "products" | "extras" | "cash";
 
 const TAB_STORAGE_KEY = "admin_sales_tab";
 
 function isValidTab(v: unknown): v is TabKey {
   return (
-    v === "summary" || v === "detail" || v === "products" || v === "extras"
+    v === "summary" ||
+    v === "detail" ||
+    v === "products" ||
+    v === "extras" ||
+    v === "cash"
   );
 }
 
@@ -79,6 +86,19 @@ export default function AdminSalesPage() {
   const [extrasRevenue, setExtrasRevenue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Jornada de caja actual (Fase A+ B3.6b). Si hay una abierta, el
+  // RangeFilter ofrece un chip extra "Jornada actual" que mapea a un
+  // rango custom (opened_at, now). Si no hay jornada abierta, el chip
+  // no aparece. Mantenemos null mientras carga inicial para no
+  // parpadear el chip.
+  const [currentCashSession, setCurrentCashSession] =
+    useState<CashRegisterSession | null>(null);
+  useEffect(() => {
+    cashRegisterApi
+      .current()
+      .then((r) => setCurrentCashSession(r.session))
+      .catch(() => setCurrentCashSession(null));
+  }, []);
   // Persistimos la última pestaña en sessionStorage para que un refresh
   // del navegador devuelva al operador al mismo sitio. Al inicio
   // chequeamos la query string `?tab=` para que enlaces externos
@@ -250,7 +270,11 @@ export default function AdminSalesPage() {
         </Link>
       </header>
 
-      <RangeFilter value={range} onChange={setRange} />
+      <RangeFilter
+        value={range}
+        onChange={setRange}
+        currentCashSession={currentCashSession}
+      />
       <TabBar value={tab} onChange={setTab} />
 
       {error && (
@@ -424,6 +448,7 @@ export default function AdminSalesPage() {
       {tab === "detail" && <DetailTab range={range} liveTick={liveJustRefreshed} />}
       {tab === "products" && <ProductsTab range={range} liveTick={liveJustRefreshed} />}
       {tab === "extras" && <ExtrasTab range={range} />}
+      {tab === "cash" && <CashRegisterTab />}
     </main>
     </>
   );
@@ -445,6 +470,11 @@ function TabBar({
       key: "extras",
       label: "Extras",
       hint: "Ingresos no operativos: baño y guardarropa",
+    },
+    {
+      key: "cash",
+      label: "Caja",
+      hint: "Histórico de jornadas: apertura, cierre y diferencia",
     },
   ];
   return (
@@ -519,13 +549,41 @@ const PRESETS: {
 function RangeFilter({
   value,
   onChange,
+  currentCashSession,
 }: {
   value: DateRange;
   onChange: (next: DateRange) => void;
+  /**
+   * Si hay una jornada de caja abierta, aparece un chip extra
+   * "Jornada actual" que aplica from = opened_at y to = hoy. Soluciona
+   * el caso "los turnos cruzan medianoche" (Opción A de MIGRACION_SYNC.md):
+   * el cajero filtra por sesión en vez de por calendario.
+   */
+  currentCashSession: CashRegisterSession | null;
 }) {
   const isCustom = value.kind === "custom";
   const activePreset =
     value.kind === "preset" ? value.preset : ("custom" as const);
+
+  // Chip "Jornada actual" activo cuando el rango custom coincide con
+  // el rango de la jornada abierta. Comparación por strings ISO de día
+  // — suficiente porque los inputs de RangeFilter operan al nivel día.
+  const cashSessionFrom = currentCashSession
+    ? isoDay(new Date(currentCashSession.opened_at))
+    : null;
+  const cashSessionTo = currentCashSession ? isoDay(today()) : null;
+  const isCashSessionActive =
+    value.kind === "custom" &&
+    cashSessionFrom !== null &&
+    cashSessionTo !== null &&
+    value.from === cashSessionFrom &&
+    value.to === cashSessionTo;
+
+  function pickCashSession() {
+    if (cashSessionFrom !== null && cashSessionTo !== null) {
+      onChange({ kind: "custom", from: cashSessionFrom, to: cashSessionTo });
+    }
+  }
 
   // Borradores del custom range — el operador puede tipear ambos campos
   // antes de aplicar. Se inicializan con el rango activo si ya estaba en
@@ -601,12 +659,24 @@ function RangeFilter({
             </button>
           );
         })}
+        {currentCashSession && (
+          <button
+            type="button"
+            onClick={pickCashSession}
+            className="crown-btn"
+            aria-pressed={isCashSessionActive}
+            style={chipStyle(isCashSessionActive)}
+            title="Filtrar por la jornada de caja actualmente abierta"
+          >
+            Jornada actual
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onChange({ kind: "custom", from: draftFrom, to: draftTo })}
           className="crown-btn"
-          aria-pressed={isCustom}
-          style={chipStyle(isCustom)}
+          aria-pressed={isCustom && !isCashSessionActive}
+          style={chipStyle(isCustom && !isCashSessionActive)}
         >
           Personalizado
         </button>
