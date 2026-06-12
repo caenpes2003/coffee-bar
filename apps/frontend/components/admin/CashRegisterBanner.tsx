@@ -564,21 +564,18 @@ function CloseDayModal({
               hint={`${detail.totals_by_method.qr_bold.count} pagos`}
               dim
             />
-            {(detail.extra_income_total > 0 ||
-              detail.luggage_total > 0) && <Divider />}
-            {detail.extra_income_total > 0 && (
-              <TicketRow
-                label="Ingresos extra"
-                value={fmtCOP(detail.extra_income_total)}
-                dim
-              />
-            )}
-            {detail.luggage_total > 0 && (
-              <TicketRow
-                label="Guardarropa"
-                value={fmtCOP(detail.luggage_total)}
-                dim
-              />
+            {detail.extra_income_total + detail.luggage_total > 0 && (
+              <>
+                <Divider />
+                <TicketRow
+                  label="Ingresos extra"
+                  value={fmtCOP(
+                    detail.extra_income_total + detail.luggage_total,
+                  )}
+                  hint="baños, ingresos manuales y otros"
+                  dim
+                />
+              </>
             )}
             <Divider />
             <TicketRow
