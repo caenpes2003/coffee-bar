@@ -7,6 +7,7 @@ import type {
   CashRegisterSession,
   CashRegisterSessionDetail,
 } from "@coffee-bar/shared";
+import { CancelButton } from "./CancelButton";
 
 /**
  * Banner global de estado del día contable (Fase A+ B3).
@@ -14,9 +15,9 @@ import type {
  * Visible en todas las páginas admin autenticadas. Muestra:
  *
  *   - Si NO hay día abierto: barra roja sticky en el TOP con CTA
- *     "Abrir día" → modal con base inicial + bypass opcional.
+ *     "Abrir jornada" → modal con base inicial + bypass opcional.
  *   - Si hay día abierto: pill discreta en el TOP-RIGHT mostrando
- *     "Día abierto · base $X · hace Y" + botón "Cerrar día".
+ *     "Jornada abierta · base $X · hace Y" + botón "Cerrar jornada".
  *
  * El cierre dispara un modal-ticket que muestra:
  *   - opening_balance
@@ -135,7 +136,7 @@ export function CashRegisterBanner() {
                 textTransform: "uppercase",
               }}
             >
-              No hay día de caja abierto
+              No hay jornada de caja abierta
             </strong>
             <span
               style={{
@@ -145,8 +146,8 @@ export function CashRegisterBanner() {
                 opacity: 0.9,
               }}
             >
-              Cobros, pedidos y aperturas de mesa están bloqueados hasta que
-              abras día.
+              Los cobros, pedidos y aperturas de mesa están bloqueados
+              hasta que se abra la jornada.
             </span>
           </div>
           <button
@@ -166,7 +167,7 @@ export function CashRegisterBanner() {
               fontWeight: 700,
             }}
           >
-            Abrir día
+            Abrir jornada
           </button>
         </div>
         {openModalShown && (
@@ -216,7 +217,7 @@ export function CashRegisterBanner() {
               fontWeight: 700,
             }}
           >
-            ● Día abierto
+            ● Jornada abierta
           </span>
           <span
             style={{
@@ -246,7 +247,7 @@ export function CashRegisterBanner() {
               }}
               title={session.opened_bypass_reason ?? ""}
             >
-              ⚠ Apertura bypass
+              ⚠ Apertura excepcional
             </span>
           )}
         </div>
@@ -267,7 +268,7 @@ export function CashRegisterBanner() {
             fontWeight: 700,
           }}
         >
-          Cerrar día
+          Cerrar jornada
         </button>
       </div>
       {closeModalShown && (
@@ -330,7 +331,7 @@ function OpenDayModal({
   };
 
   return (
-    <ModalShell onCancel={onClose} title="Abrir día" eyebrow="— Apertura de caja">
+    <ModalShell onCancel={onClose} title="Abrir jornada" eyebrow="— Apertura de caja">
       <p
         style={{
           margin: 0,
@@ -340,9 +341,10 @@ function OpenDayModal({
           lineHeight: 1.5,
         }}
       >
-        Cuenta físicamente la plata que hay ahora en la caja (cambio para
-        vueltos + lo que haya quedado). Ese monto es la base contra la que
-        se calcula el cuadre al cierre.
+        Realice el conteo físico del dinero disponible en la caja en este
+        momento (efectivo para vueltos más cualquier saldo previo). Este
+        valor servirá como base para verificar el cuadre al cierre de la
+        jornada.
       </p>
 
       <label style={labelStyle}>
@@ -397,7 +399,7 @@ function OpenDayModal({
               fontWeight: 600,
             }}
           >
-            Modo bypass
+            Apertura excepcional
           </div>
           <div
             style={{
@@ -409,8 +411,9 @@ function OpenDayModal({
               lineHeight: 1.5,
             }}
           >
-            Solo activa esto si no podés contar la base ahora (emergencia
-            operativa). Queda marcado en el cierre del día.
+            Active esta opción únicamente si no es posible verificar la
+            base en este momento. La sesión quedará marcada como
+            apertura excepcional en el reporte de cierre.
           </div>
         </div>
       </label>
@@ -418,13 +421,14 @@ function OpenDayModal({
       {bypass && (
         <label style={labelStyle}>
           <span style={labelTextStyle}>
-            Razón del bypass (obligatoria, mín. 3 caracteres)
+            Motivo de la apertura excepcional (obligatorio, mín. 3
+            caracteres)
           </span>
           <input
             type="text"
             value={bypassReason}
             onChange={(e) => setBypassReason(e.target.value)}
-            placeholder="Ej: emergencia, sin tiempo de contar"
+            placeholder="Ej. urgencia operativa, sin tiempo para conteo"
             maxLength={200}
             style={inputStyle}
           />
@@ -435,7 +439,7 @@ function OpenDayModal({
 
       <ModalActions
         cancelLabel="Cancelar"
-        confirmLabel={submitting ? "Abriendo..." : "Abrir día"}
+        confirmLabel={submitting ? "Abriendo..." : "Abrir jornada"}
         canSubmit={canSubmit}
         busy={submitting}
         onCancel={onClose}
@@ -504,7 +508,7 @@ function CloseDayModal({
   return (
     <ModalShell
       onCancel={onClose}
-      title="Cerrar día"
+      title="Cerrar jornada"
       eyebrow="— Cierre de caja"
       maxWidth={520}
     >
@@ -560,15 +564,33 @@ function CloseDayModal({
               hint={`${detail.totals_by_method.qr_bold.count} pagos`}
               dim
             />
+            {(detail.extra_income_total > 0 ||
+              detail.luggage_total > 0) && <Divider />}
+            {detail.extra_income_total > 0 && (
+              <TicketRow
+                label="Ingresos extra"
+                value={fmtCOP(detail.extra_income_total)}
+                dim
+              />
+            )}
+            {detail.luggage_total > 0 && (
+              <TicketRow
+                label="Guardarropa"
+                value={fmtCOP(detail.luggage_total)}
+                dim
+              />
+            )}
             <Divider />
             <TicketRow
-              label="Ingresos extra"
-              value={fmtCOP(detail.extra_income_total)}
-              dim
-            />
-            <TicketRow
-              label="Guardarropa"
-              value={fmtCOP(detail.luggage_total)}
+              label="Ingreso total del día"
+              value={fmtCOP(
+                cashIn +
+                  detail.totals_by_method.tarjeta_bold.amount +
+                  detail.totals_by_method.qr_bold.amount +
+                  detail.extra_income_total +
+                  detail.luggage_total,
+              )}
+              hint="suma de todos los métodos"
               dim
             />
             <Divider />
@@ -576,7 +598,7 @@ function CloseDayModal({
               label="Esperado en caja"
               value={fmtCOP(expected)}
               strong
-              hint="opening + efectivo cobrado"
+              hint="base + efectivo cobrado"
             />
           </div>
 
@@ -698,6 +720,16 @@ function ModalShell({
   onCancel: () => void;
   maxWidth?: number;
 }) {
+  // Escape cierra el modal. Click fuera NO cierra — caja contable es
+  // crítica y un click accidental en el overlay puede tirar la
+  // declaración a medio escribir.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   return (
     <div
       role="dialog"
@@ -713,10 +745,8 @@ function ModalShell({
         zIndex: 90,
         padding: 20,
       }}
-      onClick={onCancel}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth,
@@ -789,26 +819,7 @@ function ModalActions({
         marginTop: 6,
       }}
     >
-      <button
-        type="button"
-        onClick={onCancel}
-        disabled={busy}
-        style={{
-          padding: "10px 18px",
-          border: `1px solid ${C.sand}`,
-          background: "transparent",
-          color: C.cacao,
-          borderRadius: 999,
-          fontFamily: FONT_MONO,
-          fontSize: 11,
-          letterSpacing: 2,
-          cursor: busy ? "not-allowed" : "pointer",
-          textTransform: "uppercase",
-          opacity: busy ? 0.5 : 1,
-        }}
-      >
-        {cancelLabel}
-      </button>
+      <CancelButton label={cancelLabel} onClick={onCancel} busy={busy} />
       <button
         type="button"
         onClick={onConfirm}

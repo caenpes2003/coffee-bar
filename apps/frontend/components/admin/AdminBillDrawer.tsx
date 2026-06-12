@@ -33,6 +33,7 @@ import {
   CompositionPicker,
   type CompositionPick,
 } from "../orders/CompositionPicker";
+import { CancelButton } from "./CancelButton";
 import { PaymentMethodSelector } from "./PaymentMethodSelector";
 
 const fmt = (n: number) =>
@@ -1043,10 +1044,8 @@ function ActionModal({
         zIndex: 70,
         padding: 20,
       }}
-      onClick={onClose}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 440,
@@ -1239,24 +1238,7 @@ function ActionModal({
         )}
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              padding: "10px 18px",
-              border: `1px solid ${C.sand}`,
-              background: "transparent",
-              color: C.cacao,
-              borderRadius: 999,
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
-              cursor: "pointer",
-              textTransform: "uppercase",
-            }}
-          >
-            Cancelar
-          </button>
+          <CancelButton onClick={onClose} />
           <button
             type="button"
             onClick={submit}
@@ -1395,10 +1377,8 @@ function ConfirmModal({
         zIndex: 80,
         padding: 20,
       }}
-      onClick={onCancel}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 400,
@@ -1455,24 +1435,7 @@ function ConfirmModal({
             marginTop: 6,
           }}
         >
-          <button
-            type="button"
-            onClick={onCancel}
-            style={{
-              padding: "10px 18px",
-              border: `1px solid ${C.sand}`,
-              background: "transparent",
-              color: C.cacao,
-              borderRadius: 999,
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
-              cursor: "pointer",
-              textTransform: "uppercase",
-            }}
-          >
-            Cancelar
-          </button>
+          <CancelButton onClick={onCancel} />
           <button
             type="button"
             onClick={onConfirm}
@@ -1665,7 +1628,6 @@ function ProductsAddModal({
       role="dialog"
       aria-modal
       aria-label="Agregar productos"
-      onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -1678,7 +1640,6 @@ function ProductsAddModal({
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 520,
@@ -2065,26 +2026,7 @@ function ProductsAddModal({
               justifyContent: "flex-end",
             }}
           >
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={submitting}
-              style={{
-                padding: "10px 18px",
-                border: `1px solid ${C.sand}`,
-                background: "transparent",
-                color: C.cacao,
-                borderRadius: 999,
-                fontFamily: FONT_MONO,
-                fontSize: 11,
-                letterSpacing: 2,
-                textTransform: "uppercase",
-                cursor: submitting ? "not-allowed" : "pointer",
-                fontWeight: 700,
-              }}
-            >
-              Cancelar
-            </button>
+            <CancelButton onClick={onClose} busy={submitting} />
             <button
               type="button"
               onClick={submit}
@@ -2211,10 +2153,8 @@ function VoidReasonModal({
         zIndex: 90,
         padding: 20,
       }}
-      onClick={busy ? undefined : onCancel}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 480,
@@ -2397,28 +2337,11 @@ function VoidReasonModal({
             marginTop: 4,
           }}
         >
-          <button
-            type="button"
+          <CancelButton
             onClick={onCancel}
-            disabled={busy}
-            className="crown-btn crown-btn-ghost"
-            style={{
-              flex: 1,
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: `1px solid ${C.sand}`,
-              background: C.paper,
-              color: C.cacao,
-              fontFamily: FONT_UI,
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: busy ? "not-allowed" : "pointer",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}
-          >
-            Cancelar
-          </button>
+            busy={busy}
+            style={{ flex: 1, fontSize: 13, letterSpacing: 0.5 }}
+          />
           <button
             type="button"
             onClick={() =>
@@ -2502,10 +2425,8 @@ function MarkPaidModal({
         zIndex: 80,
         padding: 20,
       }}
-      onClick={onCancel}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 460,
@@ -2611,26 +2532,7 @@ function MarkPaidModal({
             marginTop: 6,
           }}
         >
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            style={{
-              padding: "10px 18px",
-              border: `1px solid ${C.sand}`,
-              background: "transparent",
-              color: C.cacao,
-              borderRadius: 999,
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
-              cursor: busy ? "not-allowed" : "pointer",
-              textTransform: "uppercase",
-              opacity: busy ? 0.5 : 1,
-            }}
-          >
-            Cancelar
-          </button>
+          <CancelButton onClick={onCancel} busy={busy} />
           <button
             type="button"
             onClick={() => {
