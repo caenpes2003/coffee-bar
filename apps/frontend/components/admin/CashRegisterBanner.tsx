@@ -744,6 +744,11 @@ function ModalShell({
       }}
     >
       <div
+        // stopPropagation defensivo: el banner se monta en AdminLayout
+        // y no debería burbujear a ningún handler superior, pero los
+        // modales del bill drawer SÍ lo necesitan (regresión 7ca7df2)
+        // y mantener el mismo patrón en todos evita futuras sorpresas.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth,

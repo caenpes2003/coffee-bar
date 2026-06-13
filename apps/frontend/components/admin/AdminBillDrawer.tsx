@@ -1108,6 +1108,12 @@ function ActionModal({
       }}
     >
       <div
+        // stopPropagation: el modal vive dentro de AdminBillDrawer, cuyo
+        // overlay tiene onClick=onClose. Sin esto, clics dentro del modal
+        // burbujean hasta el drawer y lo cierran (regresión del commit
+        // 7ca7df2 que removió click-outside-cierra de los modales pero
+        // dejó al overlay del drawer atrapando esos eventos).
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 440,
@@ -1441,6 +1447,9 @@ function ConfirmModal({
       }}
     >
       <div
+        // stopPropagation: ver comentario en ActionModal. Mismo motivo —
+        // el modal vive dentro de AdminBillDrawer.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 400,
@@ -1702,6 +1711,9 @@ function ProductsAddModal({
       }}
     >
       <div
+        // stopPropagation: ver comentario en ActionModal. Mismo motivo —
+        // el modal vive dentro de AdminBillDrawer.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 520,
@@ -2217,6 +2229,9 @@ function VoidReasonModal({
       }}
     >
       <div
+        // stopPropagation: ver comentario en ActionModal. Mismo motivo —
+        // el modal vive dentro de AdminBillDrawer.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 480,
@@ -2555,6 +2570,9 @@ function MarkPaidModal({
       }}
     >
       <div
+        // stopPropagation: ver comentario en ActionModal. Mismo motivo —
+        // el modal vive dentro de AdminBillDrawer.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 480,
@@ -3097,6 +3115,9 @@ function ReversePaymentModal({
       }}
     >
       <div
+        // stopPropagation: ver comentario en ActionModal. Mismo motivo —
+        // el modal vive dentro de AdminBillDrawer.
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 460,
