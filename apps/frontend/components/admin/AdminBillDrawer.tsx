@@ -375,7 +375,6 @@ export function AdminBillDrawer({
               {payments.length > 0 && (
                 <PaymentsList
                   payments={payments}
-                  readOnly={readOnly}
                   onReverse={(p) => setReverseTarget(p)}
                 />
               )}
@@ -2846,11 +2845,9 @@ function MarkPaidModal({
  */
 function PaymentsList({
   payments,
-  readOnly,
   onReverse,
 }: {
   payments: Payment[];
-  readOnly?: boolean;
   onReverse: (p: Payment) => void;
 }) {
   // Set de ids reversados: para cada fila kind=reversal, su `reverses_id`
@@ -2897,7 +2894,13 @@ function PaymentsList({
         {payments.map((p) => {
           const isReversal = p.kind === "reversal";
           const alreadyReversed = reversedIds.has(p.id);
-          const canReverse = !readOnly && !isReversal && !alreadyReversed;
+          // Reverso de Payment SÍ se permite en mesas cerradas: Bold
+          // puede rechazar la tarjeta minutos después del cierre, el
+          // cliente puede reclamar al día siguiente, o se descubre un
+          // doble cobro al hacer la conciliación. El backend solo
+          // exige que la jornada de caja esté abierta — alineamos la
+          // UI a esa misma regla y no dependemos de readOnly.
+          const canReverse = !isReversal && !alreadyReversed;
           return (
             <li
               key={p.id}
