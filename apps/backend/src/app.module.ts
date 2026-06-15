@@ -19,6 +19,7 @@ import { HousePlaylistModule } from "./modules/house-playlist/house-playlist.mod
 import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { AccessCodeModule } from "./modules/access-code/access-code.module";
 import { CashRegisterModule } from "./modules/cash-register/cash-register.module";
+import { ExpensesModule } from "./modules/expenses/expenses.module";
 import { ExtraIncomeModule } from "./modules/extra-income/extra-income.module";
 import { LuggageModule } from "./modules/luggage/luggage.module";
 import { OutboxModule } from "./modules/outbox/outbox.module";
@@ -52,6 +53,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     OutboxModule,
     CashRegisterModule,
     PaymentsModule,
+    ExpensesModule,
   ],
   providers: [
     // SentryGlobalFilter forwards every uncaught exception to Sentry
@@ -101,6 +103,9 @@ export class AppModule implements NestModule {
         // (evita la avalancha de 409s en logs y la confusión UX).
         { path: "admin/cash-register/open", method: RequestMethod.POST },
         { path: "admin/cash-register/close", method: RequestMethod.POST },
+        // Gastos: rate-limit para que un click accidental largo no
+        // genere 20 egresos duplicados.
+        { path: "admin/expenses", method: RequestMethod.POST },
       );
   }
 }

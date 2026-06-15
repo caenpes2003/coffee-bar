@@ -230,6 +230,36 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireNumber(payload, "difference", errors);
     return errors;
   },
+
+  // ─── Expense (Fase A+ — Gastos v1) ───────────────────────────────────
+  // Egreso de caja: reposición de productos, insumos, servicios, etc.
+  // Resta del expected del cierre de jornada según el método.
+  "expense.created": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    requireString(payload, "method", errors);
+    requireString(payload, "category", errors);
+    requireNumber(payload, "amount", errors);
+    requireString(payload, "concept", errors);
+    return errors;
+  },
+
+  // expense.reversed: anulación append-only de un Expense previo. La
+  // fila tiene kind='reversal', amount con signo opuesto al original y
+  // reverses_external_id apuntando al Expense anulado.
+  "expense.reversed": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireExternalId(payload, "reverses_external_id", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    requireString(payload, "method", errors);
+    requireNumber(payload, "amount", errors);
+    requireString(payload, "reverse_reason", errors);
+    return errors;
+  },
 };
 
 /**

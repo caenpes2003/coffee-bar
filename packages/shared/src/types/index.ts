@@ -394,4 +394,48 @@ export interface CashRegisterSessionDetail {
   payments_count: number;
   extra_income_total: number;
   luggage_total: number;
+  // Gastos netos (kind=expense - kind=reversal) por método. Los de
+  // efectivo se restan del expected en caja; los de Bold se reflejan
+  // en el "neto Bold del día" del ticket.
+  expenses_by_method: Record<PaymentMethod, number>;
+  expenses_total: number;
+  expenses_count: number;
+}
+
+// ─── Fase A+ — Expense (Gastos v1) ─────────────────────────────────────────
+
+export type ExpenseCategory =
+  | "mercancia"
+  | "insumos"
+  | "mantenimiento"
+  | "servicios"
+  | "personal"
+  | "otros";
+
+export type ExpenseKind = "expense" | "reversal";
+
+export interface Expense {
+  id: number;
+  external_id: string;
+  cash_register_session_id: number;
+  method: PaymentMethod;
+  category: ExpenseCategory;
+  kind: ExpenseKind;
+  // POSITIVO en kind=expense, NEGATIVO en kind=reversal.
+  amount: number;
+  concept: string;
+  supplier: string | null;
+  receipt_number: string | null;
+  notes: string | null;
+  reverses_id: number | null;
+  reverse_reason: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface ExpenseSummary {
+  by_method: Record<PaymentMethod, number>;
+  by_category: Record<ExpenseCategory, number>;
+  total: number;
+  count: number;
 }

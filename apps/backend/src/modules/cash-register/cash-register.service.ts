@@ -12,6 +12,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { ExpensesService } from "../expenses/expenses.service";
 import { OutboxEventService } from "../outbox/outbox-event.service";
 import { CloseCashRegisterDto } from "./dto/close-cash-register.dto";
 import { OpenCashRegisterDto } from "./dto/open-cash-register.dto";
@@ -43,6 +44,7 @@ export class CashRegisterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxEventService,
+    private readonly expenses: ExpensesService,
   ) {}
 
   /**
@@ -172,7 +174,15 @@ export class CashRegisterService {
         });
       }
 
-      // Calcular expected: opening_balance + cobros en efectivo del día.
+      // Calcular expected:
+      //   opening_balance
+      //   + cobros en efectivo del día
+      //   - gastos pagados en efectivo del día (netos: expense - reversal)
+      //
+      // Los gastos pagados con tarjeta/QR Bold NO afectan la caja
+      // física esperada — ese dinero nunca estuvo en caja, salió de
+      // la cuenta Bold directamente. Por eso aquí solo restamos los
+      // efectivo. El neto Bold del día se reporta aparte en el ticket.
       const cashPayments = await tx.payment.aggregate({
         where: {
           cash_register_session_id: open.id,
@@ -181,7 +191,21 @@ export class CashRegisterService {
         _sum: { amount: true },
       });
       const cashIn = cashPayments._sum.amount ?? new Prisma.Decimal(0);
-      const expected = new Prisma.Decimal(open.opening_balance).add(cashIn);
+
+      const cashExpenses = await tx.expense.aggregate({
+        where: {
+          cash_register_session_id: open.id,
+          method: PaymentMethod.efectivo,
+        },
+        _sum: { amount: true },
+      });
+      // amount viene positivo en kind=expense y negativo en kind=reversal,
+      // entonces la SUM ya viene neta. Restar la suma neta del expected.
+      const cashOut = cashExpenses._sum.amount ?? new Prisma.Decimal(0);
+
+      const expected = new Prisma.Decimal(open.opening_balance)
+        .add(cashIn)
+        .sub(cashOut);
       const declared = new Prisma.Decimal(dto.closing_balance_declared);
       const difference = declared.sub(expected);
 
@@ -239,6 +263,9 @@ export class CashRegisterService {
     payments_count: number;
     extra_income_total: number;
     luggage_total: number;
+    expenses_by_method: Record<PaymentMethod, number>;
+    expenses_total: number;
+    expenses_count: number;
   }> {
     const session = await this.prisma.cashRegisterSession.findUnique({
       where: { id: sessionId },
@@ -293,12 +320,19 @@ export class CashRegisterService {
       _sum: { amount: true },
     });
 
+    // Gastos atribuidos a esta sesión (netos: kind=expense suma,
+    // kind=reversal resta). El service de Expenses encapsula la lógica.
+    const expensesSummary = await this.expenses.summaryForSession(sessionId);
+
     return {
       session,
       totals_by_method,
       payments_count: paymentsCount,
       extra_income_total: Number(extras._sum.total_amount ?? 0),
       luggage_total: Number(luggage._sum.amount ?? 0),
+      expenses_by_method: expensesSummary.by_method,
+      expenses_total: expensesSummary.total,
+      expenses_count: expensesSummary.count,
     };
   }
 }

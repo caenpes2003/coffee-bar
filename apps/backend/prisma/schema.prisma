@@ -1023,6 +1023,7 @@ model CashRegisterSession {
   consumptions    Consumption[]
   extra_incomes   ExtraIncome[]
   luggage_tickets LuggageTicket[]
+  expenses        Expense[]
 
   @@index([status, opened_at])
   @@index([closed_at])
@@ -1103,4 +1104,68 @@ model Payment {
   @@index([table_session_id, created_at])
   @@index([cash_register_session_id, method])
   @@index([method, created_at])
+}
+
+// ─── Expense (Fase A+ — Gastos v1) ────────────────────────────────────────
+//
+// Egresos de caja registrados durante la operación: reposición de
+// productos al proveedor, insumos, mantenimiento, servicios pagados
+// en el momento, etc. Cada Expense reduce el `expected` del cierre de
+// jornada en su método correspondiente:
+//   - efectivo      → resta de caja física esperada
+//   - tarjeta_bold  → resta del neto Bold del día
+//   - qr_bold       → resta del neto Bold del día
+//
+// Append-only: los errores se corrigen creando una fila kind=reversal
+// con amount opuesto (mismo patrón que Payment reversal). El original
+// nunca se borra ni se modifica.
+//
+// `method` reusa PaymentMethod (Fase A+ B2) — los métodos de cobro y
+// de gasto son los mismos hoy. Si en el futuro aparece "transferencia
+// bancaria" para gastos pero no para cobros, se evaluará separar.
+
+enum ExpenseCategory {
+  mercancia        // cervezas, licores, mixers, bebidas
+  insumos          // vasos, servilletas, hielo, hieleras
+  mantenimiento    // reparaciones, limpieza, fumigación
+  servicios        // luz/agua/internet pagados en el momento
+  personal         // propinas adelantadas, vales, transporte staff
+  otros            // todo lo demás (concepto libre obligatorio)
+}
+
+enum ExpenseKind {
+  expense    // egreso normal
+  reversal   // anulación de un egreso previo (amount opuesto)
+}
+
+model Expense {
+  id                        Int                  @id @default(autoincrement())
+  external_id               String               @unique @default(uuid())
+  cash_register_session_id  Int
+  method                    PaymentMethod
+  category                  ExpenseCategory
+  kind                      ExpenseKind          @default(expense)
+  // amount POSITIVO para kind=expense, NEGATIVO para kind=reversal.
+  // La suma neta de Expenses del día se resta del expected del cierre.
+  amount                    Decimal              @db.Decimal(12, 2)
+  // Descripción operativa libre — siempre obligatoria. Ej: "Cerveza
+  // Aguila ×24 a proveedor X", "Reparación licuadora", "Vale Pedro".
+  concept                   String
+  // Datos opcionales para reportes/auditoría.
+  supplier                  String?
+  receipt_number            String?
+  notes                     String?
+  // Self-FK para reversals. UNIQUE → solo un reverso por Expense.
+  reverses_id               Int?                 @unique
+  reverse_reason            String?
+  created_by                String?
+  created_at                DateTime             @default(now())
+
+  cash_register   CashRegisterSession @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
+  reverses        Expense?            @relation("ExpenseReversal", fields: [reverses_id], references: [id], onDelete: Restrict)
+  reversed_by     Expense?            @relation("ExpenseReversal")
+
+  @@index([cash_register_session_id, method])
+  @@index([category, created_at])
+  @@index([created_at])
 }
