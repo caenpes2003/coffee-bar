@@ -4,6 +4,9 @@ import type {
   CashRegisterSession,
   CashRegisterSessionDetail,
   Consumption,
+  Expense,
+  ExpenseCategory,
+  ExpenseSummary,
   InventoryMovement,
   InventoryMovementType,
   MarkPaidPaymentInput,
@@ -1375,5 +1378,69 @@ export const paymentsApi = {
   ): Promise<Payment> =>
     adminApi
       .post<Payment>(`/admin/payments/${paymentId}/reverse`, body)
+      .then((r) => r.data),
+};
+
+// ─── Expenses (Fase A+ Gastos v1) ─────────────────────────────────────────
+// Egresos de caja: reposición de mercancía, insumos, mantenimiento,
+// servicios pagados en el momento. Restan del expected del cierre de
+// jornada en su método correspondiente.
+export const expensesApi = {
+  /**
+   * Registrar un egreso. La jornada de caja debe estar abierta; si
+   * no, responde 412 CASH_REGISTER_CLOSED (mismo código que los
+   * endpoints operativos protegidos por el guard).
+   */
+  create: (body: {
+    method: PaymentMethod;
+    category: ExpenseCategory;
+    amount: number;
+    concept: string;
+    supplier?: string;
+    receipt_number?: string;
+    notes?: string;
+  }): Promise<Expense> =>
+    adminApi.post<Expense>("/admin/expenses", body).then((r) => r.data),
+
+  /**
+   * Reversar un egreso. Append-only: crea fila nueva con kind=reversal
+   * y amount opuesto. El original queda intacto para auditoría. El
+   * reverso se atribuye a la jornada actualmente abierta.
+   */
+  reverse: (expenseId: number, body: { reason: string }): Promise<Expense> =>
+    adminApi
+      .post<Expense>(`/admin/expenses/${expenseId}/reverse`, body)
+      .then((r) => r.data),
+
+  /**
+   * Listar con filtros. Sin filtros devuelve los últimos 100 ordenados
+   * por fecha descendente.
+   */
+  list: (params?: {
+    session_id?: number;
+    method?: PaymentMethod;
+    category?: ExpenseCategory;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }): Promise<Expense[]> => {
+    const q = new URLSearchParams();
+    if (params?.session_id !== undefined)
+      q.set("session_id", String(params.session_id));
+    if (params?.method) q.set("method", params.method);
+    if (params?.category) q.set("category", params.category);
+    if (params?.from) q.set("from", params.from);
+    if (params?.to) q.set("to", params.to);
+    if (params?.limit) q.set("limit", String(params.limit));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return adminApi
+      .get<Expense[]>(`/admin/expenses${suffix}`)
+      .then((r) => r.data);
+  },
+
+  /** Totales netos por método y categoría + conteo de egresos vivos. */
+  summary: (sessionId: number): Promise<ExpenseSummary> =>
+    adminApi
+      .get<ExpenseSummary>(`/admin/expenses/session/${sessionId}/summary`)
       .then((r) => r.data),
 };

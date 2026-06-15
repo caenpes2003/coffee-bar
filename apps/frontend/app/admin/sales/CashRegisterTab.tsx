@@ -427,10 +427,15 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
   const bold = totals_by_method.tarjeta_bold.amount;
   const qr = totals_by_method.qr_bold.amount;
   const extras = detail.extra_income_total + detail.luggage_total;
+  const cashOut = detail.expenses_by_method.efectivo;
+  const cardOut = detail.expenses_by_method.tarjeta_bold;
+  const qrOut = detail.expenses_by_method.qr_bold;
+  const expensesTotal = detail.expenses_total;
+  const boldNet = bold + qr - (cardOut + qrOut);
   const expected =
     session.closing_balance_expected !== null
       ? Number(session.closing_balance_expected)
-      : opening + cashIn;
+      : opening + cashIn - cashOut;
   const declared =
     session.closing_balance_declared !== null
       ? Number(session.closing_balance_declared)
@@ -495,13 +500,59 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
         hint="suma de todos los métodos"
         dim
       />
+      {expensesTotal > 0 && (
+        <>
+          <Divider />
+          {cashOut > 0 && (
+            <Row
+              label="Egresos efectivo"
+              value={`−${fmt(cashOut)}`}
+              hint="restan de la caja física"
+              negative
+            />
+          )}
+          {cardOut > 0 && (
+            <Row
+              label="Egresos tarjeta Bold"
+              value={`−${fmt(cardOut)}`}
+              hint="restan del neto Bold"
+              negative
+              dim
+            />
+          )}
+          {qrOut > 0 && (
+            <Row
+              label="Egresos QR Bold"
+              value={`−${fmt(qrOut)}`}
+              hint="restan del neto Bold"
+              negative
+              dim
+            />
+          )}
+          <Row
+            label="Egresos total"
+            value={`−${fmt(expensesTotal)}`}
+            hint={`${detail.expenses_count} ${detail.expenses_count === 1 ? "egreso" : "egresos"}`}
+            negative
+            dim
+          />
+        </>
+      )}
       <Divider />
       <Row
         label="Esperado en caja"
         value={fmt(expected)}
-        hint="base + efectivo cobrado"
+        hint={cashOut > 0 ? "base + efectivo cobrado − egresos efectivo" : "base + efectivo cobrado"}
         strong
       />
+      {(bold > 0 || qr > 0 || cardOut > 0 || qrOut > 0) && (
+        <Row
+          label="Neto Bold del día"
+          value={`${boldNet >= 0 ? "+" : ""}${fmt(boldNet)}`}
+          hint="cobros Bold − egresos Bold"
+          dim
+        />
+      )}
       {declared !== null && (
         <Row label="Declarado al cierre" value={fmt(declared)} />
       )}
@@ -562,12 +613,14 @@ function Row({
   hint,
   strong,
   dim,
+  negative,
 }: {
   label: string;
   value: string;
   hint?: string;
   strong?: boolean;
   dim?: boolean;
+  negative?: boolean;
 }) {
   return (
     <div
@@ -601,6 +654,7 @@ function Row({
           fontFamily: strong ? FONT_DISPLAY : FONT_MONO,
           fontSize: strong ? 18 : 13,
           letterSpacing: strong ? 0.5 : 0,
+          color: negative ? C.terracotta : undefined,
         }}
       >
         {value}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CashRegisterTab } from "./CashRegisterTab";
+import { ExpensesTab } from "./ExpensesTab";
 import { cashRegisterApi } from "@/lib/api/services";
 import type { CashRegisterSession } from "@coffee-bar/shared";
 import {
@@ -62,7 +63,13 @@ const DEFAULT_RANGE: DateRange = {
   days: 1,
 };
 
-type TabKey = "summary" | "detail" | "products" | "extras" | "cash";
+type TabKey =
+  | "summary"
+  | "detail"
+  | "products"
+  | "extras"
+  | "cash"
+  | "expenses";
 
 const TAB_STORAGE_KEY = "admin_sales_tab";
 
@@ -72,7 +79,8 @@ function isValidTab(v: unknown): v is TabKey {
     v === "detail" ||
     v === "products" ||
     v === "extras" ||
-    v === "cash"
+    v === "cash" ||
+    v === "expenses"
   );
 }
 
@@ -449,6 +457,7 @@ export default function AdminSalesPage() {
       {tab === "products" && <ProductsTab range={range} liveTick={liveJustRefreshed} />}
       {tab === "extras" && <ExtrasTab range={range} />}
       {tab === "cash" && <CashRegisterTab />}
+      {tab === "expenses" && <ExpensesTab />}
     </main>
     </>
   );
@@ -475,6 +484,11 @@ function TabBar({
       key: "cash",
       label: "Caja",
       hint: "Histórico de jornadas: apertura, cierre y diferencia",
+    },
+    {
+      key: "expenses",
+      label: "Gastos",
+      hint: "Egresos de caja: reposición, insumos, mantenimiento",
     },
   ];
   return (

@@ -8,6 +8,7 @@ import type {
   CashRegisterSessionDetail,
 } from "@coffee-bar/shared";
 import { CancelButton } from "./CancelButton";
+import { ExpenseModal } from "./ExpenseModal";
 
 /**
  * Banner global de estado del día contable (Fase A+ B3).
@@ -59,6 +60,7 @@ export function CashRegisterBanner() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [openModalShown, setOpenModalShown] = useState(false);
   const [closeModalShown, setCloseModalShown] = useState(false);
+  const [expenseModalShown, setExpenseModalShown] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -251,25 +253,47 @@ export function CashRegisterBanner() {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setCloseModalShown(true)}
-          style={{
-            padding: "6px 16px",
-            border: `1px solid ${C.burgundy}`,
-            borderRadius: 999,
-            background: "transparent",
-            color: C.burgundy,
-            fontFamily: FONT_MONO,
-            fontSize: 11,
-            letterSpacing: 2,
-            cursor: "pointer",
-            textTransform: "uppercase",
-            fontWeight: 700,
-          }}
-        >
-          Cerrar jornada
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => setExpenseModalShown(true)}
+            style={{
+              padding: "6px 16px",
+              border: `1px solid ${C.gold}`,
+              borderRadius: 999,
+              background: C.goldSoft,
+              color: C.ink,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 2,
+              cursor: "pointer",
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+            title="Registrar un egreso de caja (reposición, insumos, servicios)"
+          >
+            + Gasto
+          </button>
+          <button
+            type="button"
+            onClick={() => setCloseModalShown(true)}
+            style={{
+              padding: "6px 16px",
+              border: `1px solid ${C.burgundy}`,
+              borderRadius: 999,
+              background: "transparent",
+              color: C.burgundy,
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: 2,
+              cursor: "pointer",
+              textTransform: "uppercase",
+              fontWeight: 700,
+            }}
+          >
+            Cerrar jornada
+          </button>
+        </div>
       </div>
       {closeModalShown && (
         <CloseDayModal
@@ -278,6 +302,17 @@ export function CashRegisterBanner() {
           onDone={() => {
             setCloseModalShown(false);
             void refresh();
+          }}
+        />
+      )}
+      {expenseModalShown && (
+        <ExpenseModal
+          onClose={() => setExpenseModalShown(false)}
+          onDone={() => {
+            setExpenseModalShown(false);
+            // No hace falta refresh del banner — el banner mostraría
+            // los mismos datos. El ticket de cierre y tab Gastos se
+            // re-fetchean cuando se abren.
           }}
         />
       )}
@@ -479,7 +514,23 @@ function CloseDayModal({
 
   const opening = detail ? Number(detail.session.opening_balance) : 0;
   const cashIn = detail?.totals_by_method.efectivo.amount ?? 0;
-  const expected = opening + cashIn;
+  // Egresos netos por método (suma de kind=expense − kind=reversal).
+  // Vienen del backend ya consolidados en expenses_by_method.
+  const cashOut = detail?.expenses_by_method.efectivo ?? 0;
+  const cardOut = detail?.expenses_by_method.tarjeta_bold ?? 0;
+  const qrOut = detail?.expenses_by_method.qr_bold ?? 0;
+  const expensesTotal = detail?.expenses_total ?? 0;
+  // Expected en caja física: solo descuenta los egresos pagados en
+  // efectivo. Los pagados con Bold salen de la cuenta Bold, no de la
+  // caja. Coincide con el cálculo del backend en CashRegisterService.close.
+  const expected = opening + cashIn - cashOut;
+  // Neto Bold del día = cobros Bold - egresos Bold (tarjeta + QR).
+  // Útil para conciliar contra el consolidado Bold al cierre.
+  const boldIn =
+    (detail?.totals_by_method.tarjeta_bold.amount ?? 0) +
+    (detail?.totals_by_method.qr_bold.amount ?? 0);
+  const boldOut = cardOut + qrOut;
+  const boldNet = boldIn - boldOut;
   const declaredNum = Number(declaredStr);
   const declaredValid =
     declaredStr.trim().length > 0 &&
@@ -590,13 +641,63 @@ function CloseDayModal({
               hint="suma de todos los métodos"
               dim
             />
+            {expensesTotal > 0 && (
+              <>
+                <Divider />
+                {cashOut > 0 && (
+                  <TicketRow
+                    label="Egresos efectivo"
+                    value={`−${fmtCOP(cashOut)}`}
+                    hint="restan de la caja física"
+                    negative
+                  />
+                )}
+                {cardOut > 0 && (
+                  <TicketRow
+                    label="Egresos tarjeta Bold"
+                    value={`−${fmtCOP(cardOut)}`}
+                    hint="restan del neto Bold"
+                    negative
+                    dim
+                  />
+                )}
+                {qrOut > 0 && (
+                  <TicketRow
+                    label="Egresos QR Bold"
+                    value={`−${fmtCOP(qrOut)}`}
+                    hint="restan del neto Bold"
+                    negative
+                    dim
+                  />
+                )}
+                <TicketRow
+                  label="Egresos total"
+                  value={`−${fmtCOP(expensesTotal)}`}
+                  hint={`${detail.expenses_count} ${
+                    detail.expenses_count === 1 ? "egreso" : "egresos"
+                  }`}
+                  negative
+                  dim
+                />
+              </>
+            )}
             <Divider />
             <TicketRow
               label="Esperado en caja"
               value={fmtCOP(expected)}
               strong
-              hint="base + efectivo cobrado"
+              hint={cashOut > 0
+                ? "base + efectivo cobrado − egresos efectivo"
+                : "base + efectivo cobrado"}
             />
+            {(boldIn > 0 || boldOut > 0) && (
+              <TicketRow
+                label="Neto Bold del día"
+                value={`${boldNet >= 0 ? "+" : ""}${fmtCOP(boldNet)}`}
+                hint="cobros Bold − egresos Bold"
+                dim
+              />
+            )}
           </div>
 
           <label style={labelStyle}>
@@ -873,13 +974,19 @@ function TicketRow({
   hint,
   strong,
   dim,
+  negative,
 }: {
   label: string;
   value: string;
   hint?: string;
   strong?: boolean;
   dim?: boolean;
+  // Egresos: pinta el valor en burgundy para que el cajero distinga
+  // ingresos (color normal) vs egresos (rojo) sin tener que leer
+  // el signo de cada línea.
+  negative?: boolean;
 }) {
+  const valueColor = negative ? C.burgundy : undefined;
   return (
     <div
       style={{
@@ -912,6 +1019,7 @@ function TicketRow({
           fontFamily: strong ? FONT_DISPLAY : FONT_MONO,
           fontSize: strong ? 18 : 13,
           letterSpacing: strong ? 0.5 : 0,
+          color: valueColor,
         }}
       >
         {value}
