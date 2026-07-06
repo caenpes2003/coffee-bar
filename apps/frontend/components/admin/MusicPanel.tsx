@@ -47,6 +47,12 @@ interface Props {
   onSkipQueueItem: (id: number) => void;
   onAdd: () => void;
   actionInProgress: string | null;
+  /**
+   * Layout móvil: el panel ocupa todo el ancho de su pane y el
+   * colapso lateral pierde sentido (el pane entero ya es conmutable
+   * desde el selector Mesas|Pedidos|Música) — se fuerza expandido.
+   */
+  fullWidth?: boolean;
 }
 
 export function MusicPanel(props: Props) {
@@ -76,14 +82,20 @@ export function MusicPanel(props: Props) {
     });
   };
 
+  // fullWidth (móvil): forzar expandido — el colapso lateral no tiene
+  // sentido cuando el panel es el único contenido visible del pane.
+  const effectiveCollapsed = props.fullWidth ? false : collapsed;
+
   return (
     <motion.aside
       initial={false}
-      animate={{ width: collapsed ? 56 : 340 }}
+      animate={{
+        width: props.fullWidth ? "100%" : effectiveCollapsed ? 56 : 340,
+      }}
       transition={{ duration: DUR_SLOW / 1000, ease: [0.16, 1, 0.3, 1] }}
       style={{
         flexShrink: 0,
-        borderLeft: `1px solid ${C.sand}`,
+        borderLeft: props.fullWidth ? "none" : `1px solid ${C.sand}`,
         background: C.paper,
         display: "flex",
         flexDirection: "column",
@@ -91,7 +103,7 @@ export function MusicPanel(props: Props) {
       }}
     >
       <AnimatePresence mode="wait" initial={false}>
-        {collapsed ? (
+        {effectiveCollapsed ? (
           <CollapsedView
             key="collapsed"
             playback={props.playback}
@@ -102,6 +114,7 @@ export function MusicPanel(props: Props) {
             key="expanded"
             {...props}
             onCollapse={toggle}
+            hideCollapse={props.fullWidth}
           />
         )}
       </AnimatePresence>
@@ -215,7 +228,8 @@ function ExpandedView({
   onAdd,
   actionInProgress,
   onCollapse,
-}: Props & { onCollapse: () => void }) {
+  hideCollapse,
+}: Props & { onCollapse: () => void; hideCollapse?: boolean }) {
   const isPlaying = playback?.status === "playing" && Boolean(playback.song);
   const pendingQueue = queue
     .filter((q) => q.status === "pending")
@@ -272,19 +286,21 @@ function ExpandedView({
             Música
           </div>
         </div>
-        <button
-          onClick={onCollapse}
-          aria-label="Colapsar panel de música"
-          title="Colapsar"
-          className="crown-btn crown-btn-ghost"
-          style={{
-            ...btnGhost({ fg: C.cacao, border: C.sand }),
-            padding: "5px 10px",
-            fontSize: 14,
-          }}
-        >
-          →
-        </button>
+        {!hideCollapse && (
+          <button
+            onClick={onCollapse}
+            aria-label="Colapsar panel de música"
+            title="Colapsar"
+            className="crown-btn crown-btn-ghost"
+            style={{
+              ...btnGhost({ fg: C.cacao, border: C.sand }),
+              padding: "5px 10px",
+              fontSize: 14,
+            }}
+          >
+            →
+          </button>
+        )}
       </header>
 
       <div

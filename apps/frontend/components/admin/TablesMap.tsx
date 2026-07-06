@@ -43,6 +43,12 @@ interface Props {
    * component only knows how to ask, not where state lives.
    */
   onMutated?: () => void;
+  /**
+   * Layout móvil (Fase responsive): el mapa ocupa todo el ancho del
+   * pane en lugar del sidebar fijo de 280px. El caller decide según
+   * el viewport (useIsMobile).
+   */
+  fullWidth?: boolean;
 }
 
 const STATUS_RANK: Record<string, number> = {
@@ -67,7 +73,7 @@ function sortTables(tables: Table[]): Table[] {
   });
 }
 
-export function TablesMap({ tables, onSelect, onMutated }: Props) {
+export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
   // Default kind to "TABLE" for any rows that came from a backend
   // without the kind column (defensive — the backend always sends it
   // post-migration, but this keeps the UI robust if the cache is stale).
@@ -112,9 +118,9 @@ export function TablesMap({ tables, onSelect, onMutated }: Props) {
         display: "flex",
         flexDirection: "column",
         background: C.paper,
-        borderRight: `1px solid ${C.sand}`,
-        minWidth: 260,
-        width: 280,
+        borderRight: fullWidth ? "none" : `1px solid ${C.sand}`,
+        minWidth: fullWidth ? 0 : 260,
+        width: fullWidth ? "100%" : 280,
         overflow: "hidden",
       }}
     >

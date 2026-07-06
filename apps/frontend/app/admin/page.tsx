@@ -15,6 +15,7 @@ import {
   musicApi,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import { useAdminAuth } from "@/lib/auth/auth-context";
 import { AdminBillDrawer } from "@/components/admin/AdminBillDrawer";
 import { KpiStrip, type Kpi } from "@/components/admin/KpiStrip";
@@ -1181,6 +1182,13 @@ export default function AdminPage() {
   const actionRef = useRef(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Layout móvil (< 768px): las 4 columnas del dashboard no caben —
+  // se convierten en panes conmutables por un selector segmentado
+  // (Mesas | Pedidos | Música). En desktop el layout no cambia.
+  const isMobile = useIsMobile();
+  const [mobilePane, setMobilePane] = useState<
+    "mesas" | "pedidos" | "musica"
+  >("mesas");
   // Catalog snapshot, used to resolve product names inside OrderRequest.items
   // (the JSON column on OrderRequest only stores product_id + quantity).
   const [products, setProducts] = useState<Product[]>([]);
@@ -1572,62 +1580,92 @@ export default function AdminPage() {
 
         <LowStockBanner products={products} />
 
-        {/* Layout principal: mapa de mesas (sidebar) + zona central con
-            las columnas de operación (cola, solicitudes, pedidos). El
+        {/* Layout principal.
+            Desktop: mapa de mesas (sidebar) + columnas de operación
+            (solicitudes, pedidos) + panel de música, lado a lado. El
             mapa es siempre visible — el operador no debe perder de
-            vista el estado del salón. */}
+            vista el estado del salón.
+            Móvil (<768px): un solo pane a la vez, conmutado por el
+            selector segmentado Mesas | Pedidos | Música. Los badges
+            del selector muestran la carga pendiente para que el
+            operador sepa cuándo cambiar de pane sin estar mirando. */}
+        {isMobile && (
+          <MobilePaneSwitcher
+            active={mobilePane}
+            onChange={setMobilePane}
+            pendingCount={pendingRequests.length + activeOrders.length}
+            queueCount={queue.filter((q) => q.status === "pending").length}
+          />
+        )}
         <div
           style={{
             flex: 1,
             display: "flex",
             overflow: "hidden",
-            margin: 16,
+            margin: isMobile ? "8px 8px 8px" : 16,
             borderRadius: 16,
             border: `1px solid ${C.sand}`,
             boxShadow: C.shadow,
             background: C.paper,
           }}
         >
-          <TablesMap
-            tables={allTables}
-            onSelect={(sessionId, tableNumber, table) => {
-              if (sessionId == null) return;
-              const customName = table.current_session?.custom_name;
-              const accountLabel =
-                customName && customName.trim().length > 0
-                  ? customName
-                  : tableNumber != null
-                    ? `Mesa ${pad(tableNumber)}`
-                    : `Cuenta ${sessionId}`;
-              setBillDrawer({
-                open: true,
-                sessionId,
-                tableNumber,
-                accountLabel,
-              });
-            }}
-            onMutated={() => {
-              tablesApi.getAll().then(setAllTables).catch(console.error);
-            }}
-          />
-          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            <PendingRequestsColumn
-              requests={pendingRequests}
+          {(!isMobile || mobilePane === "mesas") && (
+            <TablesMap
               tables={allTables}
-              products={products}
+              fullWidth={isMobile}
+              onSelect={(sessionId, tableNumber, table) => {
+                if (sessionId == null) return;
+                const customName = table.current_session?.custom_name;
+                const accountLabel =
+                  customName && customName.trim().length > 0
+                    ? customName
+                    : tableNumber != null
+                      ? `Mesa ${pad(tableNumber)}`
+                      : `Cuenta ${sessionId}`;
+                setBillDrawer({
+                  open: true,
+                  sessionId,
+                  tableNumber,
+                  accountLabel,
+                });
+              }}
+              onMutated={() => {
+                tablesApi.getAll().then(setAllTables).catch(console.error);
+              }}
             />
-            <OrdersColumn orders={activeOrders} tables={allTables} />
-          </div>
-          <MusicPanel
-            playback={currentPlayback}
-            queue={queue}
-            onPlayNext={() => void handlePlayNext()}
-            onSkip={() => void handleSkipCurrent()}
-            onFinish={() => void handleFinishCurrent()}
-            onSkipQueueItem={(id) => void queueApi.skip(id)}
-            onAdd={() => setSearchOpen(true)}
-            actionInProgress={actionInProgress}
-          />
+          )}
+          {(!isMobile || mobilePane === "pedidos") && (
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                // Móvil: solicitudes y pedidos apilados verticalmente
+                // dentro del pane (cada uno con su propio scroll).
+                flexDirection: isMobile ? "column" : "row",
+                overflow: "hidden",
+              }}
+            >
+              <PendingRequestsColumn
+                requests={pendingRequests}
+                tables={allTables}
+                products={products}
+              />
+              <OrdersColumn orders={activeOrders} tables={allTables} />
+            </div>
+          )}
+          {(!isMobile || mobilePane === "musica") && (
+            <MusicPanel
+              playback={currentPlayback}
+              queue={queue}
+              fullWidth={isMobile}
+              onPlayNext={() => void handlePlayNext()}
+              onSkip={() => void handleSkipCurrent()}
+              onFinish={() => void handleFinishCurrent()}
+              onSkipQueueItem={(id) => void queueApi.skip(id)}
+              onAdd={() => setSearchOpen(true)}
+              actionInProgress={actionInProgress}
+            />
+          )}
         </div>
       </div>
 
@@ -1732,5 +1770,95 @@ function ToastStack({
           ))}
         </AnimatePresence>
     </div>
+  );
+}
+
+// ─── Selector segmentado de panes (layout móvil) ────────────────────────────
+
+/**
+ * Conmutador Mesas | Pedidos | Música para el dashboard en móvil.
+ * Los badges muestran carga pendiente (solicitudes+pedidos activos,
+ * canciones en cola) para que el operador sepa cuándo cambiar de pane
+ * sin tener que ir a mirar.
+ */
+function MobilePaneSwitcher({
+  active,
+  onChange,
+  pendingCount,
+  queueCount,
+}: {
+  active: "mesas" | "pedidos" | "musica";
+  onChange: (pane: "mesas" | "pedidos" | "musica") => void;
+  pendingCount: number;
+  queueCount: number;
+}) {
+  const panes: {
+    key: "mesas" | "pedidos" | "musica";
+    label: string;
+    badge: number;
+  }[] = [
+    { key: "mesas", label: "Mesas", badge: 0 },
+    { key: "pedidos", label: "Pedidos", badge: pendingCount },
+    { key: "musica", label: "Música", badge: queueCount },
+  ];
+  return (
+    <nav
+      role="tablist"
+      aria-label="Secciones del panel"
+      style={{
+        display: "flex",
+        gap: 6,
+        padding: "8px 8px 0",
+      }}
+    >
+      {panes.map((p) => {
+        const isActive = p.key === active;
+        return (
+          <button
+            key={p.key}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(p.key)}
+            style={{
+              flex: 1,
+              padding: "10px 8px",
+              border: `1px solid ${isActive ? C.ink : C.sand}`,
+              background: isActive ? C.ink : C.paper,
+              color: isActive ? C.paper : C.cacao,
+              borderRadius: 12,
+              fontFamily: FONT_DISPLAY,
+              fontSize: 13,
+              letterSpacing: 2,
+              textTransform: "uppercase",
+              cursor: "pointer",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            {p.label}
+            {p.badge > 0 && (
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  background: isActive ? C.paper : C.terracotta,
+                  color: isActive ? C.ink : C.paper,
+                  borderRadius: 999,
+                  padding: "1px 7px",
+                  letterSpacing: 0,
+                }}
+              >
+                {p.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
   );
 }
