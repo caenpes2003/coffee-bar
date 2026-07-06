@@ -337,32 +337,38 @@ las 12:00 sin que el sistema cambie de día en medio del turno.
 
 ## Próximos pasos inmediatos
 
-1. ✅ **Verificar deploy de commit `2d4aa4c`** (session.*) — pendiente
-   validación manual del user con flujo de 5 pasos.
-2. ✅ **B1 deployado y verificado en producción** (commit `fd251db`).
-3. ✅ **B2 implementado** (`CashRegisterService` + `PaymentsService` +
-   `RequireOpenCashRegisterGuard` aplicado a todos los endpoints
-   operativos + `cash_register_session_id` poblado en consumption/
-   extraIncome/luggage + `markPaid` refactor con retrocompat para
-   gap-time entre B2 y B3). Type-check verde. Pendiente deploy a prod
-   y verificación manual del flujo (abrir día → operar → cerrar día).
-4. **Implementar B3** (frontend completo: banner "no hay día abierto",
-   modales de cobro con método de pago, sección Resumen con cierre
-   esperado por método, botón CERRAR DÍA con ticket, tab Caja
-   histórico, filtros /admin/sales por sesión de caja).
-5. **Mejora UX: stock derivado de compuestos** (~5-6h). Hoy los compuestos
+1. ✅ **Fase A+ COMPLETA y validada en producción** (jun 2026):
+   - B1 schema (`fd251db` → reescrito como `953269c`).
+   - B2 services + guards (`2f7ce74`). Validado en prod: auto-day de
+     migration funcionó, open/close por API OK, outbox emite.
+   - Payment reversal append-only (`13c23d5`) + reverso permitido en
+     mesas cerradas (`ddae7c9`).
+   - B3 frontend completo (`90e5fab` + `455a79a`): banner jornada,
+     modales con método obligatorio, cobros divididos, tab Caja,
+     filtro "Jornada actual", lista de Payments con reverso.
+   - Fixes UX post-validación (`7ca7df2`, `b13d54a`, `d3a68f0`).
+   - **Gastos v1** (`9965291` backend + `bbd0bdd` frontend): Expense
+     con categorías, reverso append-only, botón "+ Gasto" en banner,
+     tab Gastos, expected del cierre netea egresos efectivo, "Neto
+     Bold del día" en tickets. Pendiente validación manual en prod.
+2. **Mejora UX: stock derivado de compuestos** (~5-6h). Hoy los compuestos
    muestran `Product.stock` legacy (a menudo 999) en /admin/products y
    /admin/sales tab Productos. Propuesta: calcular `derived_stock` en
    `ProductAvailabilityService` desde componentes + bottleneck, exponer
    en serializer, ocultar el campo legacy en UI. Aplicar también en
-   editor de receta. Decisión registrada: hacerlo **después** de Fase A+.
-6. **Retomar roadmap MVP 2**: productores `order.status_changed`,
-   `inventory.recorded`, `extra_income.*`, `luggage.*`, `audit_log.*`,
-   `payment.*`, `cash_register.*`.
-7. **Construir el worker de drain del outbox** (MVP 2 completo
-   requiere worker + endpoint cloud `/sync/ingest`).
-8. **MVP 1 deployment del local** (mini-PC físico).
-9. **MVP 3 failover + QR inteligente**.
+   editor de receta. **Siguiente en cola** (acordado 2026-06-14).
+3. **Retomar roadmap MVP 2 — productores faltantes**:
+   - Registrados sin productor: `order.status_changed`,
+     `inventory.recorded`.
+   - Sin registrar ni productor: `extra_income.*`, `luggage.*`,
+     `audit_log.*`.
+   - Ya emitiendo (11 event types): consumption.created, session.*,
+     payment.*, cash_register.*, expense.*.
+4. **Construir el worker de drain del outbox** (MVP 2 completo
+   requiere worker + endpoint cloud `/sync/ingest`). Hoy NADIE procesa
+   los OutboxEvent status=pending — solo se acumulan.
+5. **MVP 1 deployment del local** (mini-PC físico).
+6. **MVP 3 failover + QR inteligente**.
 
 ---
 
