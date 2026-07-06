@@ -26,6 +26,7 @@ import {
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import { useEscapeKey } from "@/lib/hooks/useEscapeKey";
+import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
   C,
@@ -85,6 +86,7 @@ function isValidTab(v: unknown): v is TabKey {
 }
 
 export default function AdminSalesPage() {
+  const isMobilePage = useIsMobile();
   const [range, setRange] = useState<DateRange>(DEFAULT_RANGE);
   const [data, setData] = useState<SalesInsightsResponse | null>(null);
   // Ingresos no operacionales del MISMO rango que `data`. Se muestran
@@ -227,7 +229,7 @@ export default function AdminSalesPage() {
         background: C.cream,
         color: C.ink,
         fontFamily: FONT_UI,
-        padding: "20px 24px 40px",
+        padding: isMobilePage ? "12px 12px 32px" : "20px 24px 40px",
       }}
     >
       <header
@@ -575,6 +577,7 @@ function RangeFilter({
    */
   currentCashSession: CashRegisterSession | null;
 }) {
+  const isMobileFilter = useIsMobile();
   const isCustom = value.kind === "custom";
   const activePreset =
     value.kind === "preset" ? value.preset : ("custom" as const);
@@ -631,7 +634,7 @@ function RangeFilter({
   return (
     <section
       style={{
-        marginBottom: 18,
+        marginBottom: isMobileFilter ? 12 : 18,
         display: "flex",
         flexDirection: "column",
         gap: 10,
@@ -641,8 +644,14 @@ function RangeFilter({
         style={{
           display: "flex",
           gap: 6,
-          flexWrap: "wrap",
+          // Móvil: una sola fila con scroll horizontal — el wrap de 8+
+          // chips ocupaba un tercio de la pantalla antes de llegar al
+          // contenido.
+          flexWrap: isMobileFilter ? "nowrap" : "wrap",
+          overflowX: isMobileFilter ? "auto" : undefined,
+          WebkitOverflowScrolling: isMobileFilter ? "touch" : undefined,
           alignItems: "center",
+          paddingBottom: isMobileFilter ? 4 : undefined,
         }}
       >
         <span
@@ -757,6 +766,10 @@ function chipStyle(active: boolean): React.CSSProperties {
     textTransform: "uppercase",
     cursor: "pointer",
     fontWeight: 700,
+    // Los chips viven en una fila con scroll horizontal en móvil —
+    // nowrap + no-shrink para que no se aplasten.
+    whiteSpace: "nowrap",
+    flexShrink: 0,
   };
 }
 

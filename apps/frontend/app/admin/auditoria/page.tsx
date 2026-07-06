@@ -8,6 +8,7 @@ import {
   type AuditEventKind,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import {
   C,
   FONT_DISPLAY,
@@ -31,6 +32,7 @@ import {
  * and CSV export, but for the bar's day-to-day this is enough.
  */
 export default function AuditLogPage() {
+  const pageIsMobile = useIsMobile();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +138,7 @@ export default function AuditLogPage() {
           background: C.cream,
           color: C.ink,
           fontFamily: FONT_UI,
-          padding: "20px 24px 40px",
+          padding: pageIsMobile ? "12px 12px 32px" : "20px 24px 40px",
         }}
       >
         <header
@@ -264,6 +266,7 @@ function FilterBar({
   active: FilterKey;
   onChange: (k: FilterKey) => void;
 }) {
+  const isMobile = useIsMobile();
   const filters: { key: FilterKey; label: string }[] = [
     { key: "all", label: "Todos" },
     { key: "auth", label: "Sesión / Auth" },
@@ -277,9 +280,14 @@ function FilterBar({
     <div
       style={{
         display: "flex",
-        flexWrap: "wrap",
+        // Móvil: fila única con scroll horizontal — los 6 chips en
+        // wrap ocupaban ~3 filas de pantalla antes del contenido.
+        flexWrap: isMobile ? "nowrap" : "wrap",
+        overflowX: isMobile ? "auto" : undefined,
+        WebkitOverflowScrolling: isMobile ? "touch" : undefined,
         gap: 8,
-        marginBottom: 18,
+        marginBottom: isMobile ? 12 : 18,
+        paddingBottom: isMobile ? 4 : undefined,
       }}
     >
       {filters.map((f) => {
@@ -291,17 +299,19 @@ function FilterBar({
             type="button"
             onClick={() => onChange(f.key)}
             style={{
-              padding: "8px 14px",
+              padding: isMobile ? "6px 12px" : "8px 14px",
               border: `1px solid ${selected ? C.ink : C.sand}`,
               background: selected ? C.ink : C.paper,
               color: selected ? C.paper : C.cacao,
               borderRadius: 999,
               fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 1.5,
+              fontSize: isMobile ? 10 : 11,
+              letterSpacing: isMobile ? 1 : 1.5,
               fontWeight: 700,
               textTransform: "uppercase",
               cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
               transition: "background 0.15s ease, color 0.15s ease",
             }}
           >

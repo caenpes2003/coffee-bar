@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { cashRegisterApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import type {
   CashRegisterSession,
   CashRegisterSessionDetail,
@@ -54,6 +55,7 @@ const FONT_UI = "var(--font-manrope)";
 const POLL_INTERVAL_MS = 30_000;
 
 export function CashRegisterBanner() {
+  const isMobile = useIsMobile();
   const [session, setSession] = useState<CashRegisterSession | null | "loading">(
     "loading",
   );
@@ -118,55 +120,58 @@ export function CashRegisterBanner() {
           style={{
             background: C.burgundy,
             color: C.paper,
-            padding: "14px 20px",
+            padding: isMobile ? "10px 12px" : "14px 20px",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            gap: 16,
-            flexWrap: "wrap",
+            gap: isMobile ? 10 : 16,
+            flexWrap: isMobile ? "nowrap" : "wrap",
             position: "sticky",
             top: 0,
             zIndex: 60,
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
             <strong
               style={{
                 fontFamily: FONT_DISPLAY,
-                fontSize: 18,
+                fontSize: isMobile ? 15 : 18,
                 letterSpacing: 1,
                 textTransform: "uppercase",
               }}
             >
-              No hay jornada de caja abierta
+              {isMobile ? "Jornada cerrada" : "No hay jornada de caja abierta"}
             </strong>
             <span
               style={{
                 fontFamily: FONT_MONO,
-                fontSize: 11,
-                letterSpacing: 1,
+                fontSize: isMobile ? 10 : 11,
+                letterSpacing: isMobile ? 0.5 : 1,
                 opacity: 0.9,
               }}
             >
-              Los cobros, pedidos y aperturas de mesa están bloqueados
-              hasta que se abra la jornada.
+              {isMobile
+                ? "Operación bloqueada hasta abrir."
+                : "Los cobros, pedidos y aperturas de mesa están bloqueados hasta que se abra la jornada."}
             </span>
           </div>
           <button
             type="button"
             onClick={() => setOpenModalShown(true)}
             style={{
-              padding: "10px 22px",
+              padding: isMobile ? "8px 14px" : "10px 22px",
               border: "none",
               borderRadius: 999,
               background: C.paper,
               color: C.burgundy,
               fontFamily: FONT_DISPLAY,
-              fontSize: 13,
-              letterSpacing: 2.5,
+              fontSize: isMobile ? 12 : 13,
+              letterSpacing: isMobile ? 1.5 : 2.5,
               cursor: "pointer",
               textTransform: "uppercase",
               fontWeight: 700,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             Abrir jornada
@@ -186,55 +191,72 @@ export function CashRegisterBanner() {
   }
 
   // ─── HAY DÍA ABIERTO: pill discreta + botón cerrar ──────────────
+  // Móvil: una sola fila compacta — punto de estado + base abreviada
+  // a la izquierda, botones chicos a la derecha. Sin wrap para no
+  // duplicar la altura del banner en pantallas chicas.
   return (
     <>
       <div
         style={{
           background: session.opened_via_bypass ? C.goldSoft : C.oliveSoft,
           color: C.ink,
-          padding: "8px 20px",
+          padding: isMobile ? "6px 10px" : "8px 20px",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          gap: 16,
-          flexWrap: "wrap",
+          gap: isMobile ? 8 : 16,
+          flexWrap: isMobile ? "nowrap" : "wrap",
           borderBottom: `1px solid ${C.sand}`,
+          minWidth: 0,
         }}
       >
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 14,
-            flexWrap: "wrap",
+            gap: isMobile ? 8 : 14,
+            flexWrap: isMobile ? "nowrap" : "wrap",
+            minWidth: 0,
+            overflow: "hidden",
           }}
         >
           <span
             style={{
               fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
+              fontSize: isMobile ? 10 : 11,
+              letterSpacing: isMobile ? 1 : 2,
               textTransform: "uppercase",
               color: C.cacao,
               fontWeight: 700,
+              whiteSpace: "nowrap",
             }}
+            title={
+              session.opened_via_bypass
+                ? (session.opened_bypass_reason ?? "Apertura excepcional")
+                : undefined
+            }
           >
-            ● Jornada abierta
+            ● {isMobile ? "Jornada" : "Jornada abierta"}
+            {isMobile && session.opened_via_bypass ? " ⚠" : ""}
           </span>
           <span
             style={{
               fontFamily: FONT_UI,
-              fontSize: 12,
+              fontSize: isMobile ? 11 : 12,
               color: C.cacao,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
             }}
           >
             Base{" "}
             <strong style={{ color: C.ink }}>
               {fmtCOP(Number(session.opening_balance))}
-            </strong>{" "}
-            · desde {fmtRelative(session.opened_at)}
+            </strong>
+            {!isMobile && <> · desde {fmtRelative(session.opened_at)}</>}
           </span>
-          {session.opened_via_bypass && (
+          {!isMobile && session.opened_via_bypass && (
             <span
               style={{
                 fontFamily: FONT_MONO,
@@ -253,22 +275,30 @@ export function CashRegisterBanner() {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: isMobile ? 6 : 8,
+            flexWrap: "nowrap",
+            flexShrink: 0,
+          }}
+        >
           <button
             type="button"
             onClick={() => setExpenseModalShown(true)}
             style={{
-              padding: "6px 16px",
+              padding: isMobile ? "5px 10px" : "6px 16px",
               border: `1px solid ${C.gold}`,
               borderRadius: 999,
               background: C.goldSoft,
               color: C.ink,
               fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
+              fontSize: isMobile ? 10 : 11,
+              letterSpacing: isMobile ? 1 : 2,
               cursor: "pointer",
               textTransform: "uppercase",
               fontWeight: 700,
+              whiteSpace: "nowrap",
             }}
             title="Registrar un egreso de caja (reposición, insumos, servicios)"
           >
@@ -278,20 +308,21 @@ export function CashRegisterBanner() {
             type="button"
             onClick={() => setCloseModalShown(true)}
             style={{
-              padding: "6px 16px",
+              padding: isMobile ? "5px 10px" : "6px 16px",
               border: `1px solid ${C.burgundy}`,
               borderRadius: 999,
               background: "transparent",
               color: C.burgundy,
               fontFamily: FONT_MONO,
-              fontSize: 11,
-              letterSpacing: 2,
+              fontSize: isMobile ? 10 : 11,
+              letterSpacing: isMobile ? 1 : 2,
               cursor: "pointer",
               textTransform: "uppercase",
               fontWeight: 700,
+              whiteSpace: "nowrap",
             }}
           >
-            Cerrar jornada
+            {isMobile ? "Cerrar" : "Cerrar jornada"}
           </button>
         </div>
       </div>

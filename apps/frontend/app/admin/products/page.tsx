@@ -221,7 +221,7 @@ export default function AdminProductsPage() {
         background: C.cream,
         color: C.ink,
         fontFamily: FONT_UI,
-        padding: "20px 24px 40px",
+        padding: isMobile ? "12px 12px 32px" : "20px 24px 40px",
       }}
     >
       <header
@@ -662,7 +662,11 @@ function CatalogFilters({
             margin: 0,
             display: "flex",
             flexDirection: horizontal ? "row" : "column",
-            flexWrap: horizontal ? "wrap" : undefined,
+            // Móvil: UNA fila con scroll horizontal en vez de wrap —
+            // ocupaba demasiado alto con muchas categorías y empujaba
+            // el catálogo fuera de la vista.
+            overflowX: horizontal ? "auto" : undefined,
+            WebkitOverflowScrolling: horizontal ? "touch" : undefined,
             gap: 4,
           }}
         >
@@ -694,6 +698,7 @@ function CatalogFilters({
                     cursor: "pointer",
                     textAlign: "left",
                     textTransform: "uppercase",
+                    whiteSpace: horizontal ? "nowrap" : undefined,
                     transition:
                       "background 160ms cubic-bezier(0.16,1,0.3,1), color 160ms cubic-bezier(0.16,1,0.3,1)",
                   }}
@@ -744,7 +749,9 @@ function CatalogFilters({
               margin: 0,
               display: "flex",
               flexDirection: horizontal ? "row" : "column",
-              flexWrap: horizontal ? "wrap" : undefined,
+              // Móvil: fila única con scroll horizontal (ver Estado).
+              overflowX: horizontal ? "auto" : undefined,
+              WebkitOverflowScrolling: horizontal ? "touch" : undefined,
               gap: horizontal ? 4 : 2,
               maxHeight: horizontal ? undefined : 360,
               overflowY: horizontal ? undefined : "auto",
@@ -775,6 +782,7 @@ function CatalogFilters({
                       fontWeight: isActive ? 700 : 500,
                       cursor: "pointer",
                       textAlign: "left",
+                      whiteSpace: horizontal ? "nowrap" : undefined,
                       transition:
                         "background 160ms cubic-bezier(0.16,1,0.3,1)",
                     }}

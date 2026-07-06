@@ -220,6 +220,9 @@ export function ExtrasDock() {
               style={{
                 pointerEvents: "auto",
                 width: 320,
+                // Móvil: 320px fijos casi tapaban la pantalla completa;
+                // el cap deja siempre visible un margen del contenido.
+                maxWidth: "calc(100vw - 32px)",
                 background: C.paper,
                 border: `1px solid ${C.sand}`,
                 borderRadius: 14,
