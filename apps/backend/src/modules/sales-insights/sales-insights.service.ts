@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { ConsumptionType } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { ProductAvailabilityService } from "../products/product-availability.service";
 
 export type ProductSummary = {
   product_id: number;
@@ -180,6 +181,12 @@ export type ProductMetricsRow = {
   is_active: boolean;
   stock: number;
   /**
+   * Solo compuestos: unidades armables con el stock actual de
+   * componentes. undefined para productos simples. La UI muestra
+   * ESTO en lugar de `stock` cuando está presente.
+   */
+  derived_stock?: number;
+  /**
    * Unidades totales movidas en el rango: directas + las que salieron
    * como componente de un compuesto (cubetazo, sixpack). Para Águila,
    * esto incluye las latas vendidas sueltas + las latas dentro de
@@ -247,7 +254,10 @@ export type ProductSalesHistory = {
  */
 @Injectable()
 export class SalesInsightsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly availability: ProductAvailabilityService,
+  ) {}
 
   async getInsights(opts: {
     /** Calendar day YYYY-MM-DD; default: today. Ignored if `from`/`to`. */
@@ -409,13 +419,22 @@ export class SalesInsightsService {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, topLimit);
 
+    // Para compuestos el `stock` propio es legacy (999): usamos las
+    // unidades armables reales para el filtro "con stock" y para el
+    // número que muestra el panel Sin rotación.
+    const lowRotationAvailability =
+      await this.availability.computeForProducts(allProducts.map((p) => p.id));
     const lowRotation = allProducts
-      .filter((p) => p.is_active && p.stock > 0 && !aggByProduct.has(p.id))
+      .filter((p) => {
+        if (!p.is_active || aggByProduct.has(p.id)) return false;
+        const derived = lowRotationAvailability.get(p.id)?.derived_stock;
+        return (derived ?? p.stock) > 0;
+      })
       .map((p) => ({
         product_id: p.id,
         name: p.name,
         category: p.category,
-        stock: p.stock,
+        stock: lowRotationAvailability.get(p.id)?.derived_stock ?? p.stock,
       }));
 
     const lowStockHighDemand = topSelling
@@ -1002,6 +1021,12 @@ export class SalesInsightsService {
       },
     });
 
+    // Stock real de compuestos: unidades armables según componentes.
+    // Solo aparece en el mapa para productos con receta.
+    const availabilityMap = await this.availability.computeForProducts(
+      products.map((p) => p.id),
+    );
+
     let rows: ProductMetricsRow[] = products.map((p) => {
       const agg = productAgg.get(p.id);
       const unitsDirect = agg?.units_direct ?? 0;
@@ -1015,6 +1040,7 @@ export class SalesInsightsService {
         category: p.category,
         is_active: p.is_active,
         stock: p.stock,
+        derived_stock: availabilityMap.get(p.id)?.derived_stock,
         // units_sold combina ambas fuentes para vista operativa
         // (cuántas unidades físicas salieron). El operador ve el
         // detalle en `units_via_composite` si quiere desglosarlo.

@@ -643,6 +643,8 @@ export type ProductMetricsRowApi = {
   category: string;
   is_active: boolean;
   stock: number;
+  /** Solo compuestos: unidades armables según stock de componentes. */
+  derived_stock?: number;
   /** Unidades totales movidas: directas + via compuestos. */
   units_sold: number;
   /** Solo ventas directas (no incluye uso como componente). */

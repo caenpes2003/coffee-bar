@@ -1949,7 +1949,11 @@ function ProductsAddModal({
                 const soldOut = isCompositeP
                   ? p.availability === "out_of_stock"
                   : p.stock === 0;
-                const atCap = isCompositeP ? false : qty >= p.stock;
+                // Compuestos se topean en derived_stock (armables
+                // según componentes). Simples: stock real.
+                const atCap = isCompositeP
+                  ? p.derived_stock !== undefined && qty >= p.derived_stock
+                  : qty >= p.stock;
                 return (
                   <li
                     key={p.id}

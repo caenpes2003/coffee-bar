@@ -262,11 +262,15 @@ export function OrderRequestCart({
     setCart((prev) => {
       const current = prev[product.id] ?? 0;
       const next = Math.max(0, current + delta);
-      // Cap locally at stock para productos simples. Compuestos
-      // fijos no tienen "stock" propio significativo; el cap del
-      // armable lo da el picker.
+      // Cap local: simples usan su stock; compuestos usan
+      // derived_stock (unidades armables según componentes, computado
+      // por el server). Fallback a Infinity si el payload es viejo y
+      // no trae derived_stock — el backend valida igual al aceptar.
       const recipe = recipeOf(product);
-      const cap = recipe && recipe.length > 0 ? Infinity : product.stock;
+      const cap =
+        recipe && recipe.length > 0
+          ? (product.derived_stock ?? Infinity)
+          : product.stock;
       const capped = Math.min(next, cap);
       if (capped === current) return prev;
       const updated = { ...prev, [product.id]: capped };
@@ -871,9 +875,12 @@ function ProductsView({
             const soldOut = isComposite
               ? !p.is_active || p.availability === "out_of_stock"
               : !p.is_active || p.stock === 0;
-            // Compuestos no tienen cap por stock propio; el backend
-            // valida al aceptar. Simples se topean en el stock real.
-            const atCap = isComposite ? false : qty >= p.stock;
+            // Compuestos se topean en derived_stock (armables según
+            // componentes); si el payload no lo trae, sin cap — el
+            // backend valida al aceptar. Simples: stock real.
+            const atCap = isComposite
+              ? p.derived_stock !== undefined && qty >= p.derived_stock
+              : qty >= p.stock;
             return (
               <li
                 key={p.id}

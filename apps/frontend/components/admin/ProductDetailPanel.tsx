@@ -272,7 +272,9 @@ function ViewMode({
               {fmt(product.price)}
             </span>
           </SummaryTile>
-          <SummaryTile label="Stock">
+          <SummaryTile
+            label={product.derived_stock !== undefined ? "Armables" : "Stock"}
+          >
             <span
               style={{
                 fontFamily: FONT_DISPLAY,
@@ -285,9 +287,11 @@ function ViewMode({
                 letterSpacing: 0.5,
               }}
             >
-              {product.stock}
+              {product.derived_stock !== undefined
+                ? product.derived_stock
+                : product.stock}
             </span>
-            {product.low_stock_threshold > 0 && (
+            {product.derived_stock !== undefined ? (
               <div
                 style={{
                   fontFamily: FONT_MONO,
@@ -299,8 +303,24 @@ function ViewMode({
                   fontWeight: 600,
                 }}
               >
-                Umbral {product.low_stock_threshold}
+                Según stock de componentes
               </div>
+            ) : (
+              product.low_stock_threshold > 0 && (
+                <div
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 9,
+                    color: C.mute,
+                    letterSpacing: 1.2,
+                    marginTop: 2,
+                    textTransform: "uppercase",
+                    fontWeight: 600,
+                  }}
+                >
+                  Umbral {product.low_stock_threshold}
+                </div>
+              )
             )}
           </SummaryTile>
         </div>
@@ -675,6 +695,28 @@ function StockMode({
             {product.stock}
           </strong>
         </div>
+
+        {product.derived_stock !== undefined && (
+          <p
+            role="note"
+            style={{
+              margin: 0,
+              padding: 10,
+              background: C.goldSoft,
+              borderRadius: 8,
+              fontFamily: FONT_UI,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: C.cacao,
+            }}
+          >
+            Este producto es <strong>compuesto</strong>: su disponibilidad
+            real ({product.derived_stock} armables) se calcula desde el
+            stock de sus componentes. Mover el stock propio de este
+            producto NO cambia cuántos se pueden armar — para eso
+            reabastecé los componentes de la receta.
+          </p>
+        )}
 
         <Field label="Tipo">
           <div style={{ display: "flex", gap: 6 }}>

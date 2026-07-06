@@ -177,6 +177,12 @@ export interface Product {
   // caso contrario "out_of_stock". Para productos simples puede
   // omitirse — el frontend cae a `stock > 0`.
   availability?: "available" | "out_of_stock";
+  // Computed by the API for productos compuestos: unidades completas
+  // armables con el stock actual de componentes (bottleneck entre
+  // slots; 0 si el gating estricto bloquea el producto). La UI debe
+  // mostrar ESTO en lugar de `stock` cuando está presente — el
+  // `stock` propio de un compuesto es legacy y no significa nada.
+  derived_stock?: number;
 }
 
 export type InventoryMovementType =

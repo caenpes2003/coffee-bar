@@ -3,7 +3,10 @@ import { Prisma, Product } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
-import { ProductAvailabilityService } from "./product-availability.service";
+import {
+  CompositeAvailability,
+  ProductAvailabilityService,
+} from "./product-availability.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 
 /**
@@ -11,14 +14,21 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
  * frontend never has to compare numbers itself. Naming follows the rest of
  * the API (`is_*` snake_case).
  *
- * `availability` se incluye sólo para productos compuestos (los que
- * tienen receta). Para simples, el cliente cae al check `stock > 0`.
+ * `availability` y `derived_stock` se incluyen sólo para productos
+ * compuestos (los que tienen receta). Para simples, el cliente cae al
+ * check `stock > 0` y la UI muestra `stock` directo.
+ *
+ * `derived_stock`: unidades completas del compuesto armables con el
+ * stock actual de componentes (0 si el gating estricto lo bloquea).
+ * Reemplaza en UI al `stock` legacy que para compuestos no significa
+ * nada (suele estar fijo en 999).
  */
 export type SerializedProduct = Omit<Product, "price"> & {
   price: number;
   is_low_stock: boolean;
   is_out_of_stock: boolean;
   availability?: "available" | "out_of_stock";
+  derived_stock?: number;
 };
 
 @Injectable()
@@ -213,7 +223,7 @@ export class ProductsService {
 
   serialize(
     product: Product,
-    availability?: "available" | "out_of_stock",
+    availability?: CompositeAvailability,
   ): SerializedProduct {
     const stock = product.stock;
     const threshold = product.low_stock_threshold;
@@ -230,8 +240,9 @@ export class ProductsService {
     // (derivada del stock de los componentes). Sobrescribimos para
     // que la grilla del admin y los reports reflejen la verdad.
     if (availability !== undefined) {
-      base.availability = availability;
-      base.is_out_of_stock = availability === "out_of_stock";
+      base.availability = availability.status;
+      base.derived_stock = availability.derived_stock;
+      base.is_out_of_stock = availability.status === "out_of_stock";
       // Compuestos no tienen "low stock" propio. Si todos los
       // componentes están bajos pero presentes, el agregado es
       // tema operativo aparte; no lo mezclamos en este flag.

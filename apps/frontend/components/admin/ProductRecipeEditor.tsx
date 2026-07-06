@@ -288,6 +288,10 @@ export function ProductRecipeEditor({ productId, allProducts }: Props) {
         ))
       )}
 
+      {!loading && slots.length > 0 && (
+        <DerivedStockPreview slots={slots} allProducts={allProducts} />
+      )}
+
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <button
           type="button"
@@ -628,12 +632,18 @@ function OptionEditor({
           const isUsed = usedComponentIds.has(p.id);
           return (
             <option key={p.id} value={p.id} disabled={isUsed}>
-              {p.name}
+              {p.name} · stock {p.stock}
               {isUsed ? " (ya elegido)" : ""}
             </option>
           );
         })}
       </select>
+      {option.component_id !== null && (
+        <ComponentStockHint
+          componentId={option.component_id}
+          eligible={eligible}
+        />
+      )}
       <div
         style={{
           display: "flex",
@@ -767,4 +777,116 @@ function validateSlots(slots: SlotState[]): (string | null)[] {
       return `Suma de defaults (${sum}) debe igualar cantidad (${slot.quantity})`;
     return null;
   });
+}
+
+/**
+ * Hint de stock del componente elegido en una opción. Ayuda al
+ * operador a detectar en el acto que armó una receta sobre un
+ * componente agotado (cuello de botella inmediato).
+ */
+function ComponentStockHint({
+  componentId,
+  eligible,
+}: {
+  componentId: number;
+  eligible: Product[];
+}) {
+  const component = eligible.find((p) => p.id === componentId);
+  if (!component) return null;
+  const out = component.stock <= 0;
+  return (
+    <span
+      style={{
+        fontFamily: FONT_MONO,
+        fontSize: 9,
+        letterSpacing: 1,
+        color: out ? C.terracotta : C.mute,
+        textTransform: "uppercase",
+        fontWeight: 700,
+      }}
+    >
+      {out ? "⚠ Sin stock" : `Stock disponible: ${component.stock}`}
+    </span>
+  );
+}
+
+/**
+ * Preview en vivo de cuántas unidades del compuesto se pueden armar
+ * con el stock ACTUAL de los componentes elegidos. Mismo cálculo que
+ * el backend (ProductAvailabilityService): por slot,
+ * floor(suma_stock_opciones / quantity); el producto queda limitado
+ * por el slot más escaso. Regla estricta: si alguna opción no tiene
+ * stock, el gating del cliente bloquea el producto (0 armables
+ * visibles) — lo reflejamos con el mismo criterio para que el número
+ * del editor coincida con la grilla.
+ */
+function DerivedStockPreview({
+  slots,
+  allProducts,
+}: {
+  slots: SlotState[];
+  allProducts: Product[];
+}) {
+  const stockById = new Map(allProducts.map((p) => [p.id, p.stock]));
+
+  let minUnits = Number.POSITIVE_INFINITY;
+  let blocked = false;
+  let incomplete = false;
+
+  for (const slot of slots) {
+    if (slot.quantity <= 0 || slot.options.length === 0) {
+      incomplete = true;
+      continue;
+    }
+    let total = 0;
+    for (const opt of slot.options) {
+      if (opt.component_id == null) {
+        incomplete = true;
+        continue;
+      }
+      const stock = stockById.get(opt.component_id) ?? 0;
+      if (stock <= 0) blocked = true;
+      total += stock;
+    }
+    minUnits = Math.min(minUnits, Math.floor(total / slot.quantity));
+  }
+  if (!Number.isFinite(minUnits)) minUnits = 0;
+  const units = blocked ? 0 : minUnits;
+
+  return (
+    <div
+      style={{
+        padding: "8px 12px",
+        borderRadius: 8,
+        background: blocked ? C.terracottaSoft : C.oliveSoft,
+        fontFamily: FONT_MONO,
+        fontSize: 11,
+        letterSpacing: 1,
+        color: C.ink,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "baseline",
+        gap: 8,
+      }}
+    >
+      <span style={{ textTransform: "uppercase", fontWeight: 700 }}>
+        Armables con stock actual
+      </span>
+      <strong style={{ fontFamily: FONT_DISPLAY, fontSize: 16 }}>
+        {incomplete ? "—" : units}
+        {blocked && !incomplete && (
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              marginLeft: 6,
+              color: C.terracotta,
+            }}
+          >
+            (bloqueado: opción sin stock)
+          </span>
+        )}
+      </strong>
+    </div>
+  );
 }

@@ -975,11 +975,25 @@ function ProductRow({
         {fmt(product.price)}
       </div>
       <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.ink }}>
-        {product.stock}
-        {product.low_stock_threshold > 0 && (
-          <span style={{ color: C.mute, fontSize: 10, marginLeft: 6 }}>
-            (umbral {product.low_stock_threshold})
-          </span>
+        {product.derived_stock !== undefined ? (
+          // Compuesto: el stock propio es legacy (999) y no significa
+          // nada. Mostramos las unidades ARMABLES con el stock real
+          // de los componentes (bottleneck de la receta).
+          <>
+            {product.derived_stock}
+            <span style={{ color: C.mute, fontSize: 10, marginLeft: 6 }}>
+              armables
+            </span>
+          </>
+        ) : (
+          <>
+            {product.stock}
+            {product.low_stock_threshold > 0 && (
+              <span style={{ color: C.mute, fontSize: 10, marginLeft: 6 }}>
+                (umbral {product.low_stock_threshold})
+              </span>
+            )}
+          </>
         )}
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
