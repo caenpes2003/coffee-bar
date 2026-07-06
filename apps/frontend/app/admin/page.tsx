@@ -1505,36 +1505,48 @@ export default function AdminPage() {
           overflow: "hidden",
         }}
       >
-        {/* Header */}
+        {/* Header. Móvil: título + identidad en una fila, navegación en
+            fila propia con wrap (antes el grupo izquierdo no envolvía y
+            los botones se cortaban), y KPIs como grid uniforme 2x2. */}
         <div
           style={{
-            padding: "16px 24px",
+            padding: isMobile ? "12px 12px" : "16px 24px",
             borderBottom: `1px solid ${C.sand}`,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             background: `linear-gradient(180deg, ${C.paper} 0%, ${C.parchment} 100%)`,
-            gap: 24,
+            gap: isMobile ? 12 : 24,
             flexWrap: "wrap",
           }}
         >
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <span
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: 9,
-                letterSpacing: 3,
-                color: C.mute,
-                fontWeight: 600,
-                textTransform: "uppercase",
-              }}
-            >
-              — Crown Bar 4.90
-            </span>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 10,
+              flexWrap: "wrap",
+              minWidth: 0,
+            }}
+          >
+            {!isMobile && (
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9,
+                  letterSpacing: 3,
+                  color: C.mute,
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                }}
+              >
+                — Crown Bar 4.90
+              </span>
+            )}
             <span
               style={{
                 fontFamily: FONT_DISPLAY,
-                fontSize: 22,
+                fontSize: isMobile ? 18 : 22,
                 color: C.ink,
                 letterSpacing: 4,
                 textTransform: "uppercase",
@@ -1548,8 +1560,9 @@ export default function AdminPage() {
               className="crown-btn crown-btn-ghost"
               style={{
                 ...btnGhost({ fg: C.cacao, border: C.sand }),
-                marginLeft: 12,
+                marginLeft: isMobile ? 0 : 12,
                 textDecoration: "none",
+                whiteSpace: "nowrap",
               }}
             >
               Productos →
@@ -1560,6 +1573,7 @@ export default function AdminPage() {
               style={{
                 ...btnGhost({ fg: C.cacao, border: C.sand }),
                 textDecoration: "none",
+                whiteSpace: "nowrap",
               }}
             >
               Ventas →
@@ -1570,12 +1584,13 @@ export default function AdminPage() {
               style={{
                 ...btnGhost({ fg: C.cacao, border: C.sand }),
                 textDecoration: "none",
+                whiteSpace: "nowrap",
               }}
             >
               Auditoría →
             </Link>
           </div>
-          <KpiStrip kpis={kpis} />
+          <KpiStrip kpis={kpis} compact={isMobile} />
         </div>
 
         <LowStockBanner products={products} />

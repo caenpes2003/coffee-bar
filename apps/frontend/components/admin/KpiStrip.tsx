@@ -48,7 +48,34 @@ export interface Kpi {
   format?: (n: number) => string;
 }
 
-export function KpiStrip({ kpis }: { kpis: Kpi[] }) {
+export function KpiStrip({
+  kpis,
+  compact,
+}: {
+  kpis: Kpi[];
+  /**
+   * Layout móvil: grid uniforme de 2 columnas con tiles como mini
+   * cards del mismo tamaño, en lugar de la fila flex con separadores
+   * (que al hacer wrap quedaba dispareja y comía mucho espacio).
+   */
+  compact?: boolean;
+}) {
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 8,
+          width: "100%",
+        }}
+      >
+        {kpis.map((kpi, i) => (
+          <KpiCard key={kpi.label} kpi={kpi} index={i} compact />
+        ))}
+      </div>
+    );
+  }
   return (
     <div
       style={{
@@ -65,7 +92,15 @@ export function KpiStrip({ kpis }: { kpis: Kpi[] }) {
   );
 }
 
-function KpiCard({ kpi, index }: { kpi: Kpi; index: number }) {
+function KpiCard({
+  kpi,
+  index,
+  compact,
+}: {
+  kpi: Kpi;
+  index: number;
+  compact?: boolean;
+}) {
   const color = TONE_COLOR[kpi.tone ?? "neutral"];
   return (
     <motion.div
@@ -76,22 +111,36 @@ function KpiCard({ kpi, index }: { kpi: Kpi; index: number }) {
         ease: [0.16, 1, 0.3, 1],
         delay: index * 0.04,
       }}
-      style={{
-        textAlign: "left",
-        minWidth: 96,
-        paddingRight: 12,
-        borderRight: index < 3 ? `1px solid ${C.sand}` : "none",
-      }}
+      style={
+        compact
+          ? {
+              textAlign: "left",
+              minWidth: 0,
+              padding: "8px 12px",
+              background: C.cream,
+              border: `1px solid ${C.sand}`,
+              borderRadius: 10,
+            }
+          : {
+              textAlign: "left",
+              minWidth: 96,
+              paddingRight: 12,
+              borderRight: index < 3 ? `1px solid ${C.sand}` : "none",
+            }
+      }
     >
       <div
         style={{
           fontFamily: FONT_MONO,
           fontSize: 9,
-          letterSpacing: 2.4,
+          letterSpacing: compact ? 1.5 : 2.4,
           color: C.mute,
           fontWeight: 700,
           textTransform: "uppercase",
           marginBottom: 4,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         }}
       >
         {kpi.label}
@@ -99,7 +148,7 @@ function KpiCard({ kpi, index }: { kpi: Kpi; index: number }) {
       <div
         style={{
           fontFamily: FONT_DISPLAY,
-          fontSize: 28,
+          fontSize: compact ? 20 : 28,
           color,
           letterSpacing: 0.5,
           lineHeight: 1,
