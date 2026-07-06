@@ -153,11 +153,14 @@ function SessionTable({
   onSelect: (id: number) => void;
 }) {
   return (
+    // overflowX: la tabla tiene 6 columnas (~660px mínimo). En móvil
+    // scrollea horizontal dentro de su propio contenedor en lugar de
+    // desbordar la página (body tiene overflow-x hidden y la cortaría).
     <div
       style={{
         border: `1px solid ${C.sand}`,
         borderRadius: 12,
-        overflow: "hidden",
+        overflowX: "auto",
         background: C.paper,
       }}
     >

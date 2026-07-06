@@ -1238,18 +1238,21 @@ function PlaylistTable({
 
   return (
     <>
+      {/* overflowX: la tabla mide ~470px de columnas fijas + 1fr. En
+          móvil scrollea horizontal dentro del card en lugar de que el
+          body (overflow-x hidden) corte el contenido. */}
       <div
         style={{
           background: C.paper,
           border: `1px solid ${C.sand}`,
           borderRadius: 14,
-          overflow: "hidden",
+          overflowX: "auto",
         }}
       >
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "44px 1fr 110px 110px 96px 110px",
+            gridTemplateColumns: "44px minmax(140px,1fr) 110px 110px 96px 110px",
             gap: 0,
             background: C.parchment,
             padding: "10px 14px",
@@ -1275,7 +1278,8 @@ function PlaylistTable({
             key={item.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "44px 1fr 110px 110px 96px 110px",
+              gridTemplateColumns:
+                "44px minmax(140px,1fr) 110px 110px 96px 110px",
               alignItems: "center",
               padding: "12px 14px",
               borderBottom:
