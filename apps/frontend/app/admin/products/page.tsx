@@ -13,6 +13,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { adminProductsApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import type { Product } from "@coffee-bar/shared";
 import {
   C,
@@ -38,6 +39,10 @@ export default function AdminProductsPage() {
   // necesitará leer/escribir esta misma data.
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Layout móvil: grid de 3 columnas colapsa a 1; los filtros pasan a
+  // chips horizontales y el panel de detalle a overlay a pantalla
+  // completa cuando hay producto seleccionado.
+  const isMobile = useIsMobile();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -284,17 +289,20 @@ export default function AdminProductsPage() {
         </div>
       </header>
 
-      {/* Layout 3 columnas:
+      {/* Layout 3 columnas (desktop):
             sidebar filtros (220px) | catálogo (1fr) | detalle (360px)
           Todas siempre visibles. El catálogo se ajusta al espacio sobrante;
           el detalle solo muestra contenido cuando hay producto seleccionado.
-          En pantallas chicas el grid se ajusta con minmax para evitar
-          overflow horizontal. */}
+          Móvil: 1 columna (filtros como chips arriba, catálogo abajo);
+          el detalle se monta como overlay a pantalla completa cuando
+          hay selección. */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "220px minmax(0, 1fr) 360px",
-          gap: 16,
+          gridTemplateColumns: isMobile
+            ? "minmax(0, 1fr)"
+            : "220px minmax(0, 1fr) 360px",
+          gap: isMobile ? 10 : 16,
           alignItems: "start",
         }}
       >
@@ -304,6 +312,7 @@ export default function AdminProductsPage() {
           onFilterChange={setFilter}
           categoryFilter={categoryFilter}
           onCategoryChange={setCategoryFilter}
+          horizontal={isMobile}
         />
         <Catalog
           filtered={filtered}
@@ -311,6 +320,7 @@ export default function AdminProductsPage() {
           error={error}
           query={query}
           selectedId={selectedId}
+          compact={isMobile}
           onSelect={(id) => {
             setSelectedId(id);
             setPanelIntent((p) => ({ mode: "view", nonce: p.nonce + 1 }));
@@ -325,19 +335,50 @@ export default function AdminProductsPage() {
         />
         {/* `key` fuerza remount del panel cada vez que cambia el intent
             del operador (selección normal vs "+ Stock"), reseteando el
-            `mode` interno sin setState-in-effect. */}
-        <ProductDetailPanel
-          key={
-            selectedProduct
-              ? `${selectedProduct.id}-${panelIntent.nonce}`
-              : "empty"
-          }
-          product={selectedProduct}
-          initialMode={panelIntent.mode}
-          allProducts={products}
-          onSaved={() => void refresh()}
-          onClose={() => setSelectedId(null)}
-        />
+            `mode` interno sin setState-in-effect.
+            Móvil: el panel solo se monta cuando hay selección, dentro
+            de un overlay fijo a pantalla completa (con su scroll). El
+            onClose del panel funciona como "volver" y desmonta todo. */}
+        {isMobile ? (
+          selectedProduct && (
+            <div
+              role="dialog"
+              aria-modal
+              aria-label={`Detalle de ${selectedProduct.name}`}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 70,
+                background: C.cream,
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <ProductDetailPanel
+                key={`${selectedProduct.id}-${panelIntent.nonce}`}
+                product={selectedProduct}
+                initialMode={panelIntent.mode}
+                allProducts={products}
+                onSaved={() => void refresh()}
+                onClose={() => setSelectedId(null)}
+              />
+            </div>
+          )
+        ) : (
+          <ProductDetailPanel
+            key={
+              selectedProduct
+                ? `${selectedProduct.id}-${panelIntent.nonce}`
+                : "empty"
+            }
+            product={selectedProduct}
+            initialMode={panelIntent.mode}
+            allProducts={products}
+            onSaved={() => void refresh()}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
       </div>
 
       {editor && (
@@ -424,12 +465,18 @@ function SearchInput({
 // historial, activar/desactivar) viven en el panel derecho contextual
 // que se abre al seleccionar la fila.
 const GRID_COLS = "minmax(180px,2fr) 1fr 1fr 1fr 90px";
+// Móvil: 3 columnas (producto, precio, stock). Categoría y el botón
+// "+ Stock" se ocultan — la categoría ya se filtra con los chips de
+// arriba, y el movimiento de stock vive en el panel de detalle que se
+// abre al tocar la fila.
+const GRID_COLS_COMPACT = "minmax(0,2fr) 1fr 0.8fr";
 function Catalog({
   filtered,
   loading,
   error,
   query,
   selectedId,
+  compact,
   onSelect,
   onStock,
 }: {
@@ -438,6 +485,8 @@ function Catalog({
   error: string | null;
   query: string;
   selectedId: number | null;
+  /** Layout móvil: menos columnas y sin botón de acción por fila. */
+  compact?: boolean;
   onSelect: (id: number | null) => void;
   onStock: (p: Product) => void;
 }) {
@@ -461,8 +510,8 @@ function Catalog({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: GRID_COLS,
-            padding: "12px 18px",
+            gridTemplateColumns: compact ? GRID_COLS_COMPACT : GRID_COLS,
+            padding: compact ? "12px 12px" : "12px 18px",
             background: `linear-gradient(180deg, ${C.paper} 0%, ${C.parchment} 100%)`,
             borderBottom: `1px solid ${C.sand}`,
             fontFamily: FONT_MONO,
@@ -479,16 +528,16 @@ function Catalog({
           }}
         >
           <div>Producto</div>
-          <div>Categoría</div>
+          {!compact && <div>Categoría</div>}
           <div>Precio</div>
           <div>Stock</div>
-          <div style={{ textAlign: "right" }}>Acción</div>
+          {!compact && <div style={{ textAlign: "right" }}>Acción</div>}
         </div>
 
         {loading && filtered.length === 0 && (
           <div aria-label="Cargando productos">
             {Array.from({ length: 6 }).map((_, i) => (
-              <SkeletonRow key={i} index={i} />
+              <SkeletonRow key={i} index={i} compact={compact} />
             ))}
           </div>
         )}
@@ -516,6 +565,7 @@ function Catalog({
             product={p}
             index={i}
             selected={p.id === selectedId}
+            compact={compact}
             onSelect={() => onSelect(p.id === selectedId ? null : p.id)}
             onStock={() => onStock(p)}
           />
@@ -547,12 +597,18 @@ function CatalogFilters({
   onFilterChange,
   categoryFilter,
   onCategoryChange,
+  horizontal,
 }: {
   products: Product[];
   filter: StatusKey;
   onFilterChange: (v: StatusKey) => void;
   categoryFilter: string | null;
   onCategoryChange: (v: string | null) => void;
+  /**
+   * Layout móvil: en lugar de sidebar sticky con listas verticales,
+   * los filtros se muestran como filas de chips que hacen wrap.
+   */
+  horizontal?: boolean;
 }) {
   const counts = useMemo(() => {
     const all = products.length;
@@ -586,15 +642,15 @@ function CatalogFilters({
   return (
     <aside
       style={{
-        position: "sticky",
-        top: 16,
+        position: horizontal ? "static" : "sticky",
+        top: horizontal ? undefined : 16,
         background: C.paper,
         border: `1px solid ${C.sand}`,
         borderRadius: 14,
-        padding: "14px 12px",
+        padding: horizontal ? "10px 12px" : "14px 12px",
         display: "flex",
         flexDirection: "column",
-        gap: 18,
+        gap: horizontal ? 10 : 18,
       }}
     >
       <div>
@@ -605,7 +661,8 @@ function CatalogFilters({
             padding: 0,
             margin: 0,
             display: "flex",
-            flexDirection: "column",
+            flexDirection: horizontal ? "row" : "column",
+            flexWrap: horizontal ? "wrap" : undefined,
             gap: 4,
           }}
         >
@@ -620,17 +677,18 @@ function CatalogFilters({
                   onClick={() => onFilterChange(item.key)}
                   className="crown-btn"
                   style={{
-                    width: "100%",
+                    width: horizontal ? "auto" : "100%",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
-                    padding: "8px 12px",
-                    border: "none",
-                    borderRadius: 10,
+                    gap: horizontal ? 6 : undefined,
+                    padding: horizontal ? "6px 10px" : "8px 12px",
+                    border: horizontal ? `1px solid ${C.sand}` : "none",
+                    borderRadius: horizontal ? 999 : 10,
                     background: isActive ? C.ink : "transparent",
                     color: isActive ? C.paper : isAlert ? C.terracotta : C.cacao,
                     fontFamily: FONT_UI,
-                    fontSize: 12,
+                    fontSize: horizontal ? 11 : 12,
                     fontWeight: 700,
                     letterSpacing: 0.3,
                     cursor: "pointer",
@@ -685,10 +743,11 @@ function CatalogFilters({
               padding: 0,
               margin: 0,
               display: "flex",
-              flexDirection: "column",
-              gap: 2,
-              maxHeight: 360,
-              overflowY: "auto",
+              flexDirection: horizontal ? "row" : "column",
+              flexWrap: horizontal ? "wrap" : undefined,
+              gap: horizontal ? 4 : 2,
+              maxHeight: horizontal ? undefined : 360,
+              overflowY: horizontal ? undefined : "auto",
             }}
           >
             {categories.map((c) => {
@@ -700,19 +759,19 @@ function CatalogFilters({
                     onClick={() => onCategoryChange(isActive ? null : c.name)}
                     className="crown-btn"
                     style={{
-                      width: "100%",
+                      width: horizontal ? "auto" : "100%",
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
                       padding: "6px 10px",
-                      border: "none",
-                      borderRadius: 8,
+                      border: horizontal ? `1px solid ${C.sand}` : "none",
+                      borderRadius: horizontal ? 999 : 8,
                       background: isActive
                         ? `color-mix(in srgb, ${C.goldSoft} 50%, ${C.paper})`
                         : "transparent",
                       color: isActive ? C.cacao : C.ink,
                       fontFamily: FONT_UI,
-                      fontSize: 12,
+                      fontSize: horizontal ? 11 : 12,
                       fontWeight: isActive ? 700 : 500,
                       cursor: "pointer",
                       textAlign: "left",
@@ -820,12 +879,14 @@ function ProductRow({
   product,
   index,
   selected,
+  compact,
   onSelect,
   onStock,
 }: {
   product: Product;
   index: number;
   selected: boolean;
+  compact?: boolean;
   onSelect: () => void;
   onStock: () => void;
 }) {
@@ -874,8 +935,8 @@ function ProductRow({
       style={{
         position: "relative",
         display: "grid",
-        gridTemplateColumns: GRID_COLS,
-        padding: "14px 18px 14px 21px",
+        gridTemplateColumns: compact ? GRID_COLS_COMPACT : GRID_COLS,
+        padding: compact ? "12px 12px 12px 15px" : "14px 18px 14px 21px",
         borderBottom: `1px solid ${C.sand}`,
         borderLeft: `3px solid ${accentBorder}`,
         alignItems: "center",
@@ -962,13 +1023,15 @@ function ProductRow({
           )}
         </div>
       </div>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.cacao }}>
-        {product.category}
-      </div>
+      {!compact && (
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.cacao }}>
+          {product.category}
+        </div>
+      )}
       <div
         style={{
           fontFamily: FONT_DISPLAY,
-          fontSize: 16,
+          fontSize: compact ? 14 : 16,
           color: C.gold,
         }}
       >
@@ -996,26 +1059,28 @@ function ProductRow({
           </>
         )}
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          type="button"
-          className="crown-btn crown-btn-ghost"
-          onClick={(e) => {
-            // Stop propagation: si no, el click sube al row y dispara
-            // selección/deselección — no queremos eso al pulsar +Stock.
-            e.stopPropagation();
-            onStock();
-          }}
-          style={{
-            ...btnGhost({ fg: C.cacao, border: C.sand }),
-            padding: "5px 10px",
-            fontSize: 10,
-            letterSpacing: 1,
-          }}
-        >
-          + Stock
-        </button>
-      </div>
+      {!compact && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            className="crown-btn crown-btn-ghost"
+            onClick={(e) => {
+              // Stop propagation: si no, el click sube al row y dispara
+              // selección/deselección — no queremos eso al pulsar +Stock.
+              e.stopPropagation();
+              onStock();
+            }}
+            style={{
+              ...btnGhost({ fg: C.cacao, border: C.sand }),
+              padding: "5px 10px",
+              fontSize: 10,
+              letterSpacing: 1,
+            }}
+          >
+            + Stock
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -1027,25 +1092,27 @@ function ProductRow({
  * gradient animado en background — no requiere keyframe global porque
  * el animation está inline.
  */
-function SkeletonRow({ index }: { index: number }) {
+function SkeletonRow({ index, compact }: { index: number; compact?: boolean }) {
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: GRID_COLS,
-        padding: "14px 18px 14px 21px",
+        gridTemplateColumns: compact ? GRID_COLS_COMPACT : GRID_COLS,
+        padding: compact ? "12px 12px 12px 15px" : "14px 18px 14px 21px",
         borderBottom: `1px solid ${C.sand}`,
         alignItems: "center",
         opacity: Math.max(0.3, 1 - index * 0.12),
       }}
     >
       <SkeletonBar width="60%" />
-      <SkeletonBar width="50%" />
+      {!compact && <SkeletonBar width="50%" />}
       <SkeletonBar width="40%" />
       <SkeletonBar width="30%" />
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <SkeletonBar width={60} />
-      </div>
+      {!compact && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <SkeletonBar width={60} />
+        </div>
+      )}
     </div>
   );
 }
