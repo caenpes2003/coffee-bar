@@ -18,6 +18,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import { useAdminAuth } from "@/lib/auth/auth-context";
 import { AdminBillDrawer } from "@/components/admin/AdminBillDrawer";
+import { BarBalanceTile } from "@/components/admin/BarBalanceTile";
 import { KpiStrip, type Kpi } from "@/components/admin/KpiStrip";
 import { TablesMap } from "@/components/admin/TablesMap";
 import { MusicPanel } from "@/components/admin/MusicPanel";
@@ -1590,7 +1591,19 @@ export default function AdminPage() {
               Auditoría →
             </Link>
           </div>
-          <KpiStrip kpis={kpis} compact={isMobile} />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: isMobile ? 8 : 16,
+              flexWrap: "wrap",
+              minWidth: 0,
+              width: isMobile ? "100%" : undefined,
+            }}
+          >
+            <BarBalanceTile />
+            <KpiStrip kpis={kpis} compact={isMobile} />
+          </div>
         </div>
 
         <LowStockBanner products={products} />

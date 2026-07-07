@@ -18,6 +18,7 @@ import { MusicModule } from "./modules/music/music.module";
 import { HousePlaylistModule } from "./modules/house-playlist/house-playlist.module";
 import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { AccessCodeModule } from "./modules/access-code/access-code.module";
+import { BarBalanceModule } from "./modules/bar-balance/bar-balance.module";
 import { CashRegisterModule } from "./modules/cash-register/cash-register.module";
 import { ExpensesModule } from "./modules/expenses/expenses.module";
 import { ExtraIncomeModule } from "./modules/extra-income/extra-income.module";
@@ -54,6 +55,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     CashRegisterModule,
     PaymentsModule,
     ExpensesModule,
+    BarBalanceModule,
   ],
   providers: [
     // SentryGlobalFilter forwards every uncaught exception to Sentry
@@ -106,6 +108,9 @@ export class AppModule implements NestModule {
         // Gastos: rate-limit para que un click accidental largo no
         // genere 20 egresos duplicados.
         { path: "admin/expenses", method: RequestMethod.POST },
+        // Saldo del bar: el POST exige un código de autorización de 4
+        // dígitos — sin rate-limit sería fuerza-bruteable en segundos.
+        { path: "admin/bar-balance", method: RequestMethod.POST },
       );
   }
 }

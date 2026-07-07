@@ -1169,3 +1169,32 @@ model Expense {
   @@index([category, created_at])
   @@index([created_at])
 }
+
+// ─── BarBalanceBaseline (Saldo del bar) ────────────────────────────────────
+//
+// Línea base del "saldo del bar": cuánta plata hay en total (efectivo
+// físico + saldo Bold). El valor MOSTRADO nunca se persiste — se deriva:
+//
+//   efectivo = baseline.cash + Σ (declared − opening) de cada
+//              CashRegisterSession CERRADA después de set_at
+//   bold     = baseline.bold + Σ (cobros Bold − egresos Bold) de esas
+//              mismas sesiones
+//
+// Append-only: cada corrección manual inserta una fila nueva (la más
+// reciente es la activa). Preserva historial completo de quién puso
+// qué valor y cuándo — si el saldo "se editó" siempre hay rastro.
+//
+// La edición requiere un código de autorización validado SERVER-SIDE
+// (ver BarBalanceService) — la UI lo pide tras un gesto discreto para
+// que el saldo no parezca editable a simple vista.
+model BarBalanceBaseline {
+  id           Int      @id @default(autoincrement())
+  external_id  String   @unique @default(uuid())
+  cash_amount  Decimal  @db.Decimal(14, 2)
+  bold_amount  Decimal  @db.Decimal(14, 2)
+  set_by       String?
+  note         String?
+  set_at       DateTime @default(now())
+
+  @@index([set_at])
+}

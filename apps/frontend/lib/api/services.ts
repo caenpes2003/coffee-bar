@@ -1383,6 +1383,33 @@ export const paymentsApi = {
       .then((r) => r.data),
 };
 
+// ─── Bar Balance (saldo del bar) ──────────────────────────────────────────
+// Saldo total derivado: línea base manual + deltas de cada cierre de
+// jornada posterior. El POST exige código de autorización (validado
+// server-side) — la edición está escondida tras un gesto en la UI.
+export type BarBalance = {
+  configured: boolean;
+  cash: number;
+  bold: number;
+  baseline_set_at: string | null;
+  sessions_since_baseline: number;
+};
+
+export const barBalanceApi = {
+  get: (): Promise<BarBalance> =>
+    adminApi.get<BarBalance>("/admin/bar-balance").then((r) => r.data),
+
+  set: (body: {
+    code: string;
+    cash_amount: number;
+    bold_amount: number;
+    note?: string;
+  }): Promise<{ ok: true }> =>
+    adminApi
+      .post<{ ok: true }>("/admin/bar-balance", body)
+      .then((r) => r.data),
+};
+
 // ─── Expenses (Fase A+ Gastos v1) ─────────────────────────────────────────
 // Egresos de caja: reposición de mercancía, insumos, mantenimiento,
 // servicios pagados en el momento. Restan del expected del cierre de
