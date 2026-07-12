@@ -27,6 +27,9 @@ const TAPS_REQUIRED = 5;
 
 export function BarBalanceTile() {
   const [revealed, setRevealed] = useState(false);
+  // Segundo nivel de revelado: el desglose efectivo/bold. Por defecto,
+  // al revelar solo se ve el TOTAL; el desglose se pide aparte.
+  const [showBreakdown, setShowBreakdown] = useState(false);
   const [balance, setBalance] = useState<BarBalance | null>(null);
   const [loading, setLoading] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -52,6 +55,9 @@ export function BarBalanceTile() {
   const toggleReveal = () => {
     const next = !revealed;
     setRevealed(next);
+    // Al ocultar, colapsar también el desglose para que el próximo
+    // reveal vuelva a arrancar en "solo total".
+    if (!next) setShowBreakdown(false);
     if (next) void fetchBalance();
   };
 
@@ -99,6 +105,15 @@ export function BarBalanceTile() {
           }}
         >
           <span
+            onClick={(e) => {
+              // Si el desglose está abierto, este click lo colapsa
+              // (sin propagar al gesto secreto). Si no, deja pasar el
+              // tap para el contador del gesto.
+              if (revealed && showBreakdown) {
+                e.stopPropagation();
+                setShowBreakdown(false);
+              }
+            }}
             style={{
               fontFamily: FONT_MONO,
               fontSize: 9,
@@ -110,27 +125,72 @@ export function BarBalanceTile() {
             }}
           >
             Saldo del bar
+            {revealed && showBreakdown && (
+              <span style={{ color: C.gold, marginLeft: 6 }}>▾</span>
+            )}
           </span>
           {revealed && balance ? (
             balance.configured ? (
-              <span
-                style={{
-                  fontFamily: FONT_UI,
-                  fontSize: 12,
-                  color: C.ink,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <strong style={{ fontFamily: FONT_DISPLAY, fontSize: 15 }}>
-                  {fmt(balance.cash)}
-                </strong>{" "}
-                <span style={{ color: C.mute, fontSize: 10 }}>efectivo</span>
-                {" · "}
-                <strong style={{ fontFamily: FONT_DISPLAY, fontSize: 15 }}>
-                  {fmt(balance.bold)}
-                </strong>{" "}
-                <span style={{ color: C.mute, fontSize: 10 }}>bold</span>
-              </span>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {/* Nivel 1: total (efectivo + bold). Es lo primero que
+                    se ve al revelar. */}
+                <span
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 17,
+                    color: C.ink,
+                    letterSpacing: 0.5,
+                    lineHeight: 1.1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {fmt(balance.cash + balance.bold)}
+                </span>
+                {/* Nivel 2: desglose, escondido tras un toggle propio
+                    (no cuenta como tap del gesto secreto: su onClick
+                    frena la propagación). */}
+                {showBreakdown ? (
+                  <span
+                    style={{
+                      fontFamily: FONT_UI,
+                      fontSize: 11,
+                      color: C.cacao,
+                      whiteSpace: "nowrap",
+                      marginTop: 1,
+                    }}
+                  >
+                    {fmt(balance.cash)}{" "}
+                    <span style={{ color: C.mute, fontSize: 9 }}>efectivo</span>
+                    {" · "}
+                    {fmt(balance.bold)}{" "}
+                    <span style={{ color: C.mute, fontSize: 9 }}>bold</span>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowBreakdown(true);
+                    }}
+                    style={{
+                      alignSelf: "flex-start",
+                      border: "none",
+                      background: "transparent",
+                      padding: 0,
+                      marginTop: 1,
+                      cursor: "pointer",
+                      fontFamily: FONT_MONO,
+                      fontSize: 9,
+                      letterSpacing: 1,
+                      color: C.gold,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Ver desglose ▸
+                  </button>
+                )}
+              </div>
             ) : (
               <span
                 style={{
