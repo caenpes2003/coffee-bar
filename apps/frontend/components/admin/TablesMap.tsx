@@ -51,6 +51,24 @@ interface Props {
   fullWidth?: boolean;
 }
 
+/**
+ * Plano físico del bar (visto desde arriba). Cada celda es:
+ *   - número → esa mesa física va en esa posición
+ *   - "door" → puerta de entrada (decorativo, no clickeable)
+ *   - "bar"  → la barra física (muestra cuentas abiertas, abre walk-in)
+ *   - null   → piso (celda vacía)
+ *
+ * Si el bar se reorganiza, editar SOLO esta constante. Las mesas cuyo
+ * número no aparezca acá se muestran aparte bajo el mapa (nunca se
+ * pierde una mesa por no tener celda).
+ */
+const MAP_LAYOUT: (number | "door" | "bar" | null)[][] = [
+  [4, 3, "door"],
+  [5, null, 2],
+  [6, null, 1],
+  [null, null, "bar"],
+];
+
 const STATUS_RANK: Record<string, number> = {
   occupied: 0,
   closing: 1,
@@ -170,25 +188,82 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
         }}
       >
         <Section
-          label="Mesas"
+          label="Salón"
           count={`${realTables.filter((t) => t.status === "occupied").length}/${realTables.length}`}
         >
+          {/* Mapa físico del bar: cada mesa en su posición real.
+              Layout (visto desde arriba):
+                M04 | M03 | PUERTA
+                M05 | ... | M02
+                M06 | ... | M01
+                ... | ... | BARRA
+              Las posiciones viven en MAP_LAYOUT — si el bar se
+              reorganiza, se edita esa constante y listo. */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(2, 1fr)",
-              gap: 10,
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gridAutoRows: "minmax(84px, auto)",
+              gap: 8,
             }}
           >
-            {sortedTables.map((t, i) => (
-              <TableCell
-                key={t.id}
-                table={t}
-                index={i}
-                onSelect={handleSelect}
-              />
-            ))}
+            {MAP_LAYOUT.flat().map((cell, i) => {
+              if (cell === null) return <FloorTile key={`floor-${i}`} />;
+              if (cell === "door") return <DoorTile key="door" />;
+              if (cell === "bar")
+                return (
+                  <BarraTile
+                    key="barra"
+                    openAccounts={bars.length}
+                    onClick={() => setOpeningWalkin(true)}
+                  />
+                );
+              const table = realTables.find((t) => t.number === cell);
+              if (!table) return <FloorTile key={`missing-${cell}`} />;
+              return (
+                <TableCell
+                  key={table.id}
+                  table={table}
+                  index={i}
+                  onSelect={handleSelect}
+                />
+              );
+            })}
           </div>
+
+          {/* Mesas que no están en el plano (creadas después de dibujar
+              el mapa). Aparecen aparte, ordenadas por atención, para
+              que nunca se pierda una mesa por no tener celda. */}
+          {(() => {
+            const mapped = new Set(
+              MAP_LAYOUT.flat().filter(
+                (c): c is number => typeof c === "number",
+              ),
+            );
+            const unmapped = sortedTables.filter(
+              (t) => !mapped.has(t.number ?? -1),
+            );
+            if (unmapped.length === 0) return null;
+            return (
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, 1fr)",
+                  gap: 8,
+                }}
+              >
+                {unmapped.map((t, i) => (
+                  <TableCell
+                    key={t.id}
+                    table={t}
+                    index={i}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
+            );
+          })()}
         </Section>
 
         <Section
@@ -952,5 +1027,100 @@ function MiniBadge({
       {icon && <span style={{ fontSize: 7 }}>{icon}</span>}
       {label}
     </span>
+  );
+}
+
+// ─── Tiles del plano físico ─────────────────────────────────────────────────
+
+/** Celda de piso: espacio vacío del salón. Mantiene la geometría del plano. */
+function FloorTile() {
+  return <div aria-hidden style={{ borderRadius: 12 }} />;
+}
+
+/** Puerta de entrada: referencia visual, no interactiva. */
+function DoorTile() {
+  return (
+    <div
+      aria-label="Puerta de entrada"
+      style={{
+        border: `2px dashed ${C.sandDark}`,
+        borderRadius: 12,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: FONT_MONO,
+        fontSize: 9,
+        letterSpacing: 2,
+        color: C.mute,
+        textTransform: "uppercase",
+        fontWeight: 700,
+        background: `repeating-linear-gradient(45deg, transparent, transparent 6px, ${C.parchment} 6px, ${C.parchment} 12px)`,
+      }}
+    >
+      Puerta
+    </div>
+  );
+}
+
+/**
+ * La barra física del bar. Muestra cuántas cuentas de barra hay
+ * abiertas y sirve de atajo para abrir una nueva (walk-in). Las
+ * cuentas en sí se listan en la sección "Cuentas sin mesa" de abajo.
+ */
+function BarraTile({
+  openAccounts,
+  onClick,
+}: {
+  openAccounts: number;
+  onClick: () => void;
+}) {
+  const hasAccounts = openAccounts > 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Abrir nueva cuenta en barra"
+      style={{
+        border: `1px solid ${hasAccounts ? C.gold : C.sand}`,
+        borderRadius: 12,
+        background: hasAccounts
+          ? `color-mix(in srgb, ${C.goldSoft} 40%, ${C.paper})`
+          : `linear-gradient(180deg, ${C.parchment} 0%, ${C.paper} 100%)`,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        cursor: "pointer",
+        padding: 8,
+        WebkitTapHighlightColor: "transparent",
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 15,
+          letterSpacing: 2,
+          color: C.cacao,
+          textTransform: "uppercase",
+        }}
+      >
+        Barra
+      </span>
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 9,
+          letterSpacing: 1,
+          color: hasAccounts ? C.gold : C.mute,
+          fontWeight: 700,
+          textTransform: "uppercase",
+        }}
+      >
+        {hasAccounts
+          ? `${openAccounts} cuenta${openAccounts === 1 ? "" : "s"}`
+          : "+ cuenta"}
+      </span>
+    </button>
   );
 }
