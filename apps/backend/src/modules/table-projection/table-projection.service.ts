@@ -78,17 +78,10 @@ export class TableProjectionService {
         pending_request_count: true,
       },
     });
-    await client.table.update({
-      where: { id: toTableId },
-      data: {
-        current_session_id: sessionId,
-        status: TableStatus.occupied,
-        total_consumption: source?.total_consumption ?? 0,
-        active_order_count: source?.active_order_count ?? 0,
-        pending_request_count: source?.pending_request_count ?? 0,
-        last_activity_at: new Date(),
-      },
-    });
+    // ORDEN CRÍTICO: current_session_id es UNIQUE en Table. Hay que
+    // SOLTAR la sesión de la mesa origen ANTES de asignarla al
+    // destino — al revés, por un instante dos mesas apuntarían a la
+    // misma sesión y Postgres rechaza con unique violation (P2002).
     await client.table.update({
       where: { id: fromTableId },
       data: {
@@ -97,6 +90,17 @@ export class TableProjectionService {
         total_consumption: 0,
         active_order_count: 0,
         pending_request_count: 0,
+        last_activity_at: new Date(),
+      },
+    });
+    await client.table.update({
+      where: { id: toTableId },
+      data: {
+        current_session_id: sessionId,
+        status: TableStatus.occupied,
+        total_consumption: source?.total_consumption ?? 0,
+        active_order_count: source?.active_order_count ?? 0,
+        pending_request_count: source?.pending_request_count ?? 0,
         last_activity_at: new Date(),
       },
     });

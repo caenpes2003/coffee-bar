@@ -203,28 +203,25 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, 1fr)",
-              gridAutoRows: "minmax(84px, auto)",
-              gap: 8,
+              gridAutoRows: "minmax(56px, auto)",
+              gap: 6,
+              padding: 8,
+              background: `linear-gradient(180deg, ${C.parchment} 0%, ${C.cream} 100%)`,
+              border: `1px solid ${C.sand}`,
+              borderRadius: 14,
             }}
           >
             {MAP_LAYOUT.flat().map((cell, i) => {
               if (cell === null) return <FloorTile key={`floor-${i}`} />;
               if (cell === "door") return <DoorTile key="door" />;
               if (cell === "bar")
-                return (
-                  <BarraTile
-                    key="barra"
-                    openAccounts={bars.length}
-                    onClick={() => setOpeningWalkin(true)}
-                  />
-                );
+                return <BarraTile key="barra" openAccounts={bars.length} />;
               const table = realTables.find((t) => t.number === cell);
               if (!table) return <FloorTile key={`missing-${cell}`} />;
               return (
-                <TableCell
+                <MapTableTile
                   key={table.id}
                   table={table}
-                  index={i}
                   onSelect={handleSelect}
                 />
               );
@@ -1037,52 +1034,183 @@ function FloorTile() {
   return <div aria-hidden style={{ borderRadius: 12 }} />;
 }
 
-/** Puerta de entrada: referencia visual, no interactiva. */
+/**
+ * Mesa en el plano: versión COMPACTA del TableCell — número centrado,
+ * color por estado, consumo pequeño y punto de alerta. Lo justo para
+ * que el plano se lea como un mapa y no como una pila de cards.
+ */
+function MapTableTile({
+  table,
+  onSelect,
+}: {
+  table: Table;
+  onSelect: Props["onSelect"];
+}) {
+  const isAvailable = table.status === "available";
+  const needsAttention = table.pending_request_count > 0;
+  const paidRequested = Boolean(table.current_session?.payment_requested_at);
+
+  let toneBg: string;
+  let toneBorder: string;
+  let numberColor: string;
+  if (needsAttention) {
+    toneBg = `color-mix(in srgb, ${C.terracottaSoft} 40%, ${C.paper})`;
+    toneBorder = C.terracotta;
+    numberColor = C.terracotta;
+  } else if (!isAvailable) {
+    toneBg = `color-mix(in srgb, ${C.oliveSoft} 30%, ${C.paper})`;
+    toneBorder = C.olive;
+    numberColor = C.ink;
+  } else {
+    toneBg = C.paper;
+    toneBorder = C.sand;
+    numberColor = C.mute;
+  }
+
+  return (
+    <motion.button
+      type="button"
+      onClick={() =>
+        onSelect(table.current_session_id ?? null, table.number ?? table.id, table)
+      }
+      whileHover={{ y: -1 }}
+      whileTap={{ scale: 0.96 }}
+      style={{
+        position: "relative",
+        border: `1px solid ${toneBorder}`,
+        borderRadius: 10,
+        background: toneBg,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 1,
+        padding: 4,
+        cursor: "pointer",
+        WebkitTapHighlightColor: "transparent",
+        opacity: isAvailable ? 0.6 : 1,
+        overflow: "hidden",
+      }}
+    >
+      {needsAttention && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: -1,
+            borderRadius: 10,
+            border: `1px solid ${C.terracotta}`,
+            animation: "crown-cell-ping 1.6s ease-out infinite",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <span
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 19,
+          color: numberColor,
+          lineHeight: 1,
+        }}
+      >
+        {pad(table.number ?? table.id)}
+      </span>
+      {!isAvailable && (
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 8.5,
+            color: C.gold,
+            fontWeight: 700,
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {fmt(table.total_consumption)}
+        </span>
+      )}
+      {(needsAttention || paidRequested) && (
+        <span
+          style={{
+            position: "absolute",
+            top: 3,
+            right: 5,
+            fontFamily: FONT_MONO,
+            fontSize: 8,
+            fontWeight: 800,
+            color: needsAttention ? C.terracotta : C.gold,
+          }}
+        >
+          {needsAttention ? `●${table.pending_request_count}` : "$"}
+        </span>
+      )}
+    </motion.button>
+  );
+}
+
+/**
+ * Entrada del bar: SIN caja — solo el texto con dos líneas doradas a
+ * los lados, como la señalética de un plano elegante. No interactivo.
+ */
 function DoorTile() {
   return (
     <div
-      aria-label="Puerta de entrada"
+      aria-label="Entrada"
       style={{
-        border: `2px dashed ${C.sandDark}`,
-        borderRadius: 12,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontFamily: FONT_MONO,
-        fontSize: 9,
-        letterSpacing: 2,
-        color: C.mute,
-        textTransform: "uppercase",
-        fontWeight: 700,
-        background: `repeating-linear-gradient(45deg, transparent, transparent 6px, ${C.parchment} 6px, ${C.parchment} 12px)`,
+        gap: 6,
+        padding: 4,
       }}
     >
-      Puerta
+      <span
+        aria-hidden
+        style={{
+          flex: 1,
+          maxWidth: 18,
+          height: 1,
+          background: `linear-gradient(90deg, transparent, ${C.gold})`,
+        }}
+      />
+      <span
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 12,
+          letterSpacing: 3,
+          color: C.gold,
+          textTransform: "uppercase",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Entrada
+      </span>
+      <span
+        aria-hidden
+        style={{
+          flex: 1,
+          maxWidth: 18,
+          height: 1,
+          background: `linear-gradient(90deg, ${C.gold}, transparent)`,
+        }}
+      />
     </div>
   );
 }
 
 /**
- * La barra física del bar. Muestra cuántas cuentas de barra hay
- * abiertas y sirve de atajo para abrir una nueva (walk-in). Las
- * cuentas en sí se listan en la sección "Cuentas sin mesa" de abajo.
+ * La barra física del bar en el plano. Tile INFORMATIVO (no botón —
+ * abrir cuentas de barra ya tiene su botón "+ Nueva cuenta" en la
+ * sección de abajo): muestra cuántas cuentas de barra hay abiertas.
  */
-function BarraTile({
-  openAccounts,
-  onClick,
-}: {
-  openAccounts: number;
-  onClick: () => void;
-}) {
+function BarraTile({ openAccounts }: { openAccounts: number }) {
   const hasAccounts = openAccounts > 0;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title="Abrir nueva cuenta en barra"
+    <div
+      aria-label={`Barra: ${openAccounts} cuentas abiertas`}
       style={{
-        border: `1px solid ${hasAccounts ? C.gold : C.sand}`,
-        borderRadius: 12,
+        border: `1px solid ${hasAccounts ? C.gold : C.sandDark}`,
+        borderRadius: 10,
         background: hasAccounts
           ? `color-mix(in srgb, ${C.goldSoft} 40%, ${C.paper})`
           : `linear-gradient(180deg, ${C.parchment} 0%, ${C.paper} 100%)`,
@@ -1090,16 +1218,14 @@ function BarraTile({
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 4,
-        cursor: "pointer",
-        padding: 8,
-        WebkitTapHighlightColor: "transparent",
+        gap: 2,
+        padding: 6,
       }}
     >
       <span
         style={{
           fontFamily: FONT_DISPLAY,
-          fontSize: 15,
+          fontSize: 13,
           letterSpacing: 2,
           color: C.cacao,
           textTransform: "uppercase",
@@ -1107,20 +1233,20 @@ function BarraTile({
       >
         Barra
       </span>
-      <span
-        style={{
-          fontFamily: FONT_MONO,
-          fontSize: 9,
-          letterSpacing: 1,
-          color: hasAccounts ? C.gold : C.mute,
-          fontWeight: 700,
-          textTransform: "uppercase",
-        }}
-      >
-        {hasAccounts
-          ? `${openAccounts} cuenta${openAccounts === 1 ? "" : "s"}`
-          : "+ cuenta"}
-      </span>
-    </button>
+      {hasAccounts && (
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 9,
+            letterSpacing: 1,
+            color: C.gold,
+            fontWeight: 700,
+            textTransform: "uppercase",
+          }}
+        >
+          {openAccounts} cuenta{openAccounts === 1 ? "" : "s"}
+        </span>
+      )}
+    </div>
   );
 }
