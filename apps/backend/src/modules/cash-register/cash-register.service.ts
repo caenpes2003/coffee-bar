@@ -8,10 +8,13 @@ import {
 import {
   CashRegisterSession,
   CashRegisterStatus,
+  ExpenseCategory,
+  ExpenseKind,
   PaymentMethod,
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { serializeExpenseForOutbox } from "../expenses/outbox-payload";
 import { ExpensesService } from "../expenses/expenses.service";
 import { OutboxEventService } from "../outbox/outbox-event.service";
 import { CloseCashRegisterDto } from "./dto/close-cash-register.dto";
@@ -226,6 +229,14 @@ export class CashRegisterService {
       const declared = new Prisma.Decimal(dto.closing_balance_declared);
       const difference = declared.sub(expected);
 
+      // "Manejar excepción": nota en la jornada para que quede rastro
+      // legible de que el descuadre se conciliió contra el saldo.
+      const handleDiscrepancy =
+        dto.handle_discrepancy === true && !difference.isZero();
+      const exceptionNote = handleDiscrepancy
+        ? `Excepción manejada: descuadre de ${difference.toString()} registrado como ${difference.isNegative() ? "gasto" : "ingreso extra"} de conciliación.`
+        : null;
+
       const closed = await tx.cashRegisterSession.update({
         where: { id: open.id },
         data: {
@@ -235,11 +246,57 @@ export class CashRegisterService {
           closing_balance_declared: declared,
           closing_balance_expected: expected,
           difference,
-          notes: dto.notes?.trim()
-            ? `${open.notes ? `${open.notes}\n---\n` : ""}${dto.notes.trim()}`
-            : open.notes,
+          notes: [open.notes, dto.notes?.trim(), exceptionNote]
+            .filter((s): s is string => Boolean(s && s.length))
+            .join("\n---\n") || null,
         },
       });
+
+      // Ajuste de conciliación DESPUÉS de persistir expected/difference:
+      // la jornada registra su descuadre intacto (auditoría histórica);
+      // el gasto/ingreso solo corrige el SALDO del bar para que refleje
+      // la plata que físicamente hay.
+      if (handleDiscrepancy) {
+        if (difference.isNegative()) {
+          // Faltante: salió plata que el ledger no explica → gasto.
+          const missing = difference.neg();
+          const expense = await tx.expense.create({
+            data: {
+              cash_register_session_id: closed.id,
+              method: PaymentMethod.efectivo,
+              category: ExpenseCategory.otros,
+              kind: ExpenseKind.expense,
+              amount: missing,
+              concept: `Descuadre de cierre — faltante`,
+              notes: `Conciliación automática al cerrar. Esperado ${expected.toString()}, declarado ${declared.toString()}.`,
+              created_by: actor?.name ?? null,
+            },
+          });
+          await this.outbox.enqueue(tx, {
+            event_type: "expense.created",
+            aggregate_type: "Expense",
+            aggregate_id: expense.external_id,
+            payload: serializeExpenseForOutbox(expense),
+          });
+        } else {
+          // Sobrante: entró plata que el ledger no explica → ingreso
+          // extra manual. (ExtraIncome aún no emite outbox — igual que
+          // los demás ingresos extra, pendiente de MVP 2.)
+          await tx.extraIncome.create({
+            data: {
+              type: "manual",
+              amount: difference,
+              quantity: 1,
+              total_amount: difference,
+              status: "active",
+              concept: "Descuadre de cierre — sobrante",
+              notes: `Conciliación automática al cerrar. Esperado ${expected.toString()}, declarado ${declared.toString()}.`,
+              created_by: actor?.name ?? null,
+              cash_register_session_id: closed.id,
+            },
+          });
+        }
+      }
 
       await this.outbox.enqueue(tx, {
         event_type: "cash_register.closed",

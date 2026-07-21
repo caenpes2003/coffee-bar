@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { cashRegisterApi } from "@/lib/api/services";
+import { barBalanceApi, cashRegisterApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import { useIsMobile } from "@/lib/hooks/useMediaQuery";
 import type {
@@ -368,6 +368,30 @@ function OpenDayModal({
   const [bypassReason, setBypassReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Abrir con todo el efectivo del bar": trae el saldo efectivo
+  // actual y lo fija como base (campo bloqueado). Útil cuando el bar
+  // opera con TODA la plata en la caja (sin guardado aparte) — el
+  // cuadre y el saldo quedan alineados 1:1 con la caja física.
+  const [useFullCash, setUseFullCash] = useState(false);
+  const [fullCash, setFullCash] = useState<number | null>(null);
+  useEffect(() => {
+    // Fetch una sola vez al abrir el modal. Solo se ofrece el atajo
+    // si el saldo está configurado y no es negativo (base < 0 es
+    // inválida — con saldo negativo hay que corregir el saldo antes).
+    barBalanceApi
+      .get()
+      .then((b) => {
+        if (b.configured && b.cash >= 0) setFullCash(Math.round(b.cash));
+      })
+      .catch(() => setFullCash(null));
+  }, []);
+
+  const toggleUseFullCash = (checked: boolean) => {
+    setUseFullCash(checked);
+    if (checked && fullCash !== null) {
+      setOpeningStr(String(fullCash));
+    }
+  };
 
   const openingNum = Number(openingStr);
   const openingValid =
@@ -421,10 +445,63 @@ function OpenDayModal({
           value={openingStr}
           onChange={(e) => setOpeningStr(e.target.value)}
           placeholder="0"
-          style={inputStyle}
+          disabled={useFullCash}
+          style={{
+            ...inputStyle,
+            opacity: useFullCash ? 0.65 : 1,
+            cursor: useFullCash ? "not-allowed" : undefined,
+          }}
           autoFocus
         />
       </label>
+
+      {fullCash !== null && (
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: "10px 12px",
+            border: `1px solid ${useFullCash ? C.gold : C.sand}`,
+            borderRadius: 10,
+            background: useFullCash ? C.goldSoft : C.cream,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={useFullCash}
+            onChange={(e) => toggleUseFullCash(e.target.checked)}
+            style={{ marginTop: 2, cursor: "pointer" }}
+          />
+          <div style={{ flex: 1 }}>
+            <div
+              style={{
+                fontFamily: FONT_UI,
+                fontSize: 13,
+                color: C.ink,
+                fontWeight: 600,
+              }}
+            >
+              Abrir con todo el efectivo del bar
+            </div>
+            <div
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 0.5,
+                color: C.mute,
+                marginTop: 2,
+                lineHeight: 1.5,
+              }}
+            >
+              La base se fija en el saldo actual en efectivo (
+              {fmtCOP(fullCash)}) y el campo queda bloqueado. Desmarque
+              para digitar otra base.
+            </div>
+          </div>
+        </label>
+      )}
 
       <label style={labelStyle}>
         <span style={labelTextStyle}>Notas (opcional)</span>
@@ -573,9 +650,14 @@ function CloseDayModal({
     Number.isFinite(declaredNum) &&
     declaredNum >= 0;
   const difference = declaredValid ? declaredNum - expected : 0;
+  const hasDiscrepancy = declaredValid && Math.abs(difference) >= 0.5;
   const canSubmit = declaredValid && !submitting && detail !== null;
+  // Segundo paso del flujo "Manejar excepción": el botón solo aparece
+  // cuando hay descuadre; al pulsarlo se muestra la confirmación
+  // (¿estás seguro?) antes de cerrar conciliando.
+  const [confirmException, setConfirmException] = useState(false);
 
-  const submit = async () => {
+  const submit = async (handleDiscrepancy = false) => {
     if (!canSubmit) return;
     setSubmitting(true);
     setSubmitError(null);
@@ -583,6 +665,7 @@ function CloseDayModal({
       await cashRegisterApi.close({
         closing_balance_declared: declaredNum,
         notes: notes.trim() || undefined,
+        handle_discrepancy: handleDiscrepancy || undefined,
       });
       // Notifica a otros componentes vivos en la pestaña (saldo del
       // bar, ExtrasDock) que la jornada se cerró — así refrescan sus
@@ -810,15 +893,135 @@ function CloseDayModal({
             />
           </label>
 
+          {/* Manejar excepción: SOLO visible cuando hay descuadre.
+              Cierra la jornada registrando el ajuste de conciliación
+              (faltante → gasto "Descuadre de cierre"; sobrante →
+              ingreso extra) para que el saldo del bar quede alineado
+              con la plata física. El descuadre de la jornada se
+              registra igual — solo cambia el efecto sobre el saldo. */}
+          {hasDiscrepancy && !confirmException && (
+            <button
+              type="button"
+              onClick={() => setConfirmException(true)}
+              disabled={submitting}
+              style={{
+                padding: "10px 14px",
+                border: `1px dashed ${C.gold}`,
+                borderRadius: 10,
+                background: C.goldSoft,
+                color: C.ink,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                letterSpacing: 1.5,
+                cursor: submitting ? "not-allowed" : "pointer",
+                textTransform: "uppercase",
+                fontWeight: 700,
+              }}
+            >
+              ⚠ Manejar excepción del descuadre
+            </button>
+          )}
+
+          {hasDiscrepancy && confirmException && (
+            <div
+              style={{
+                padding: 14,
+                border: `1px solid ${C.gold}`,
+                borderRadius: 10,
+                background: C.goldSoft,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <p
+                style={{
+                  margin: 0,
+                  fontFamily: FONT_UI,
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: C.ink,
+                }}
+              >
+                ¿Estás seguro? Se cerrará la jornada y{" "}
+                {difference < 0 ? (
+                  <>
+                    el faltante de{" "}
+                    <strong>{fmtCOP(Math.abs(difference))}</strong> se
+                    registrará como <strong>gasto</strong> con concepto
+                    &quot;Descuadre de cierre&quot;
+                  </>
+                ) : (
+                  <>
+                    el sobrante de{" "}
+                    <strong>{fmtCOP(difference)}</strong> se registrará
+                    como <strong>ingreso extra</strong> con concepto
+                    &quot;Descuadre de cierre&quot;
+                  </>
+                )}
+                . El saldo del bar quedará ajustado a la plata física. El
+                descuadre de la jornada queda registrado igual.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setConfirmException(false)}
+                  disabled={submitting}
+                  style={{
+                    padding: "8px 14px",
+                    border: `1px solid ${C.sand}`,
+                    borderRadius: 999,
+                    background: C.paper,
+                    color: C.cacao,
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 1.5,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                  }}
+                >
+                  Volver
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submit(true)}
+                  disabled={!canSubmit}
+                  style={{
+                    padding: "8px 16px",
+                    border: "none",
+                    borderRadius: 999,
+                    background: canSubmit ? C.ink : C.mute,
+                    color: C.paper,
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 12,
+                    letterSpacing: 2,
+                    cursor: canSubmit ? "pointer" : "not-allowed",
+                    textTransform: "uppercase",
+                    fontWeight: 600,
+                  }}
+                >
+                  {submitting ? "Cerrando…" : "Sí, cerrar y conciliar"}
+                </button>
+              </div>
+            </div>
+          )}
+
           {submitError && <ErrorRow message={submitError} />}
 
           <ModalActions
             cancelLabel="Cancelar"
             confirmLabel={submitting ? "Cerrando..." : "Confirmar cierre"}
-            canSubmit={canSubmit}
+            canSubmit={canSubmit && !confirmException}
             busy={submitting}
             onCancel={onClose}
-            onConfirm={submit}
+            onConfirm={() => void submit(false)}
             confirmTone="burgundy"
           />
         </>

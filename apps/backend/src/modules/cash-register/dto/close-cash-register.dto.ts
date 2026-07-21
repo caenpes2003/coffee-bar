@@ -1,5 +1,12 @@
 import { Transform } from "class-transformer";
-import { IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from "class-validator";
 import { sanitizeText } from "../../../common/sanitize";
 
 /**
@@ -27,4 +34,20 @@ export class CloseCashRegisterDto {
   @IsString()
   @MaxLength(500)
   notes?: string;
+
+  /**
+   * "Manejar excepción": si hay descuadre (declared ≠ expected), en
+   * lugar de dejar el saldo del bar desalineado de la realidad
+   * física, registra el ajuste en la MISMA tx del cierre:
+   *   - faltante (declared < expected) → Expense en efectivo,
+   *     categoría "otros", concepto "Descuadre de cierre".
+   *   - sobrante (declared > expected) → ExtraIncome manual con
+   *     concepto "Descuadre de cierre — sobrante".
+   * La jornada guarda su expected/difference INTACTOS (el descuadre
+   * queda registrado igual que siempre); solo el saldo se ajusta vía
+   * el gasto/ingreso. Sin descuadre, este flag no hace nada.
+   */
+  @IsOptional()
+  @IsBoolean()
+  handle_discrepancy?: boolean;
 }

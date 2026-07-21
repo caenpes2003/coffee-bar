@@ -1343,10 +1343,16 @@ export const cashRegisterApi = {
    * Cerrar día. El backend calcula `closing_balance_expected` desde
    * opening_balance + cobros efectivo del día, y `difference` = declared
    * - expected.
+   *
+   * `handle_discrepancy`: si hay descuadre, registra el ajuste de
+   * conciliación (faltante → gasto "Descuadre de cierre"; sobrante →
+   * ingreso extra) para que el saldo del bar refleje la realidad
+   * física. La jornada guarda su descuadre intacto.
    */
   close: (body: {
     closing_balance_declared: number;
     notes?: string;
+    handle_discrepancy?: boolean;
   }): Promise<CashRegisterSession> =>
     adminApi
       .post<CashRegisterSession>("/admin/cash-register/close", body)
