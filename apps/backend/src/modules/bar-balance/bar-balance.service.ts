@@ -28,22 +28,30 @@ const BAR_BALANCE_EDIT_CODE = "2906";
 /**
  * BarBalanceService — "cuánta plata hay en el bar".
  *
- * El saldo mostrado se DERIVA, nunca se persiste:
+ * El saldo mostrado se DERIVA, nunca se persiste. Regla única para
+ * AMBOS métodos (cada cobro suma, cada gasto resta):
  *
- *   efectivo = baseline.cash + Σ (declared − opening) por cada
- *              CashRegisterSession CERRADA con closed_at > set_at
- *   bold     = baseline.bold + Σ (cobros Bold − egresos Bold netos)
- *              de esas mismas sesiones
+ *   efectivo = baseline.cash
+ *              + Σ cobros efectivo   (Payment method=efectivo)
+ *              − Σ gastos efectivo   (Expense method=efectivo)
+ *   bold     = baseline.bold
+ *              + Σ cobros Bold       (Payment tarjeta+qr)
+ *              − Σ gastos Bold       (Expense tarjeta+qr)
  *
- * Por qué (declared − opening) y no (ventas − gastos): `declared` es
- * lo que el cajero CONTÓ físicamente al cerrar — ya incluye ventas,
- * gastos, vueltos mal dados y cualquier descuadre real. Es la verdad
- * física, no la teórica. Si la jornada actual está abierta, su
- * movimiento NO cuenta todavía (entra al saldo cuando se cierre).
+ * ...sobre las CashRegisterSession CERRADAS con closed_at > set_at.
+ * Los reversos (kind=reversal) traen amount negativo, así que las
+ * SUMs ya netean.
  *
- * Para Bold no hay "conteo físico": el neto se calcula de los
- * Payment (tarjeta+QR, reversos incluidos vía signo) menos los
- * Expense pagados con Bold de la sesión.
+ * Por qué NO `declared − opening` para el efectivo (bug corregido
+ * 2026-07-20): la caja física se ABRE con una base de vueltos, no
+ * con todo el efectivo del bar, y al cierre solo se cuenta lo que
+ * quedó en esa caja chica. `declared − opening` medía el cambio de
+ * la caja chica, no del efectivo TOTAL del negocio — inflaba el
+ * saldo con el descuadre del cierre. El saldo del bar es
+ * simplemente lo que entró menos lo que salió.
+ *
+ * Si la jornada actual está abierta, su movimiento NO cuenta todavía
+ * (entra al saldo cuando se cierre).
  */
 @Injectable()
 export class BarBalanceService {
@@ -81,11 +89,7 @@ export class BarBalanceService {
         status: CashRegisterStatus.closed,
         closed_at: { gt: baseline.set_at },
       },
-      select: {
-        id: true,
-        opening_balance: true,
-        closing_balance_declared: true,
-      },
+      select: { id: true },
     });
 
     let cash = Number(baseline.cash_amount);
@@ -94,38 +98,55 @@ export class BarBalanceService {
     if (sessions.length > 0) {
       const sessionIds = sessions.map((s) => s.id);
 
-      // Efectivo: delta físico por sesión = declarado − base apertura.
-      for (const s of sessions) {
-        const declared =
-          s.closing_balance_declared !== null
-            ? Number(s.closing_balance_declared)
-            : null;
-        // Sin declarado (no debería pasar en cerradas) → delta 0.
-        if (declared !== null) {
-          cash += declared - Number(s.opening_balance);
-        }
-      }
+      // Regla unificada para AMBOS métodos: cada cobro suma, cada
+      // gasto resta. Los reversos (Payment/Expense kind=reversal)
+      // vienen con amount negativo, así que la SUM ya netea.
+      //
+      // NO se usa `declarado − apertura` para el efectivo: eso medía
+      // el cambio de la CAJA CHICA física (que se abre con una base
+      // de vueltos, no con todo el efectivo del bar) y no tenía
+      // relación con cuánto creció/decreció el efectivo TOTAL del
+      // negocio. El saldo del bar es "cuánta plata hay en total": lo
+      // que entró por cobros menos lo que salió por gastos.
+      const [cashPayments, cashExpenses, boldPayments, boldExpenses] =
+        await Promise.all([
+          this.prisma.payment.aggregate({
+            where: {
+              cash_register_session_id: { in: sessionIds },
+              method: PaymentMethod.efectivo,
+            },
+            _sum: { amount: true },
+          }),
+          this.prisma.expense.aggregate({
+            where: {
+              cash_register_session_id: { in: sessionIds },
+              method: PaymentMethod.efectivo,
+            },
+            _sum: { amount: true },
+          }),
+          this.prisma.payment.aggregate({
+            where: {
+              cash_register_session_id: { in: sessionIds },
+              method: {
+                in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
+              },
+            },
+            _sum: { amount: true },
+          }),
+          this.prisma.expense.aggregate({
+            where: {
+              cash_register_session_id: { in: sessionIds },
+              method: {
+                in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
+              },
+            },
+            _sum: { amount: true },
+          }),
+        ]);
 
-      // Bold: cobros netos (los reversal vienen con amount negativo,
-      // la SUM ya netea) − egresos netos pagados con Bold.
-      const boldPayments = await this.prisma.payment.aggregate({
-        where: {
-          cash_register_session_id: { in: sessionIds },
-          method: {
-            in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
-          },
-        },
-        _sum: { amount: true },
-      });
-      const boldExpenses = await this.prisma.expense.aggregate({
-        where: {
-          cash_register_session_id: { in: sessionIds },
-          method: {
-            in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
-          },
-        },
-        _sum: { amount: true },
-      });
+      cash +=
+        Number(cashPayments._sum.amount ?? 0) -
+        Number(cashExpenses._sum.amount ?? 0);
       bold +=
         Number(boldPayments._sum.amount ?? 0) -
         Number(boldExpenses._sum.amount ?? 0);
