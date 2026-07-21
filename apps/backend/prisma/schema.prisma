@@ -139,6 +139,8 @@ enum AuditEventKind {
   bill_adjustment
   // Reverso de Payment (Bold rechazó, doble cobro, refund a cliente, etc.)
   payment_reversed
+  // Transferencia de cuenta entre mesas/barras
+  session_transferred
 }
 
 model User {

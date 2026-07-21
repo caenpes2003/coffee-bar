@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import {
   BadRequestException,
   ConflictException,
@@ -539,6 +540,186 @@ export class TableSessionsService {
     const snapshot = await this.projection.snapshotForBroadcast(session.table_id);
     if (snapshot) this.realtime.emitTableUpdated(snapshot);
     return result;
+  }
+
+  /**
+   * Transferir la cuenta completa a otra mesa/barra. Los consumos,
+   * pedidos, pagos y solicitudes cuelgan de la SESIÓN, así que viajan
+   * implícitos al cambiar table_id. Las canciones de la cola están
+   * ligadas a la MESA — se re-apuntan explícitamente las del período
+   * de la sesión (así el historial musical y los créditos de canción
+   * siguen a la cuenta, no al mueble).
+   *
+   * Modos (excluyentes):
+   *   - targetTableId: mover a una mesa/barra EXISTENTE. Debe estar
+   *     libre (sin sesión activa) — v1 no fusiona cuentas.
+   *   - newBarName: crear una barra virtual nueva (mismo patrón que
+   *     walk-in) y mover la cuenta ahí. El nombre queda como
+   *     custom_name de la sesión.
+   *
+   * El cliente que tenía el QR viejo: al escanear el QR de la mesa
+   * nueva se une a su misma cuenta (open() ya hace join a sesión
+   * existente). Su token viejo sigue sirviendo para ver la cuenta
+   * (los checks van por session_id) — solo la cola de canciones le
+   * pediría re-escanear.
+   */
+  async transfer(
+    sessionId: number,
+    opts: {
+      targetTableId?: number;
+      newBarName?: string;
+      actor?: { user_id: number; name: string } | null;
+    },
+  ): Promise<{
+    session: TableSession;
+    from_table_id: number;
+    to_table_id: number;
+  }> {
+    const session = await this.requireSessionExists(sessionId);
+    if (session.status === TableSessionStatus.closed) {
+      throw new BadRequestException({
+        message: "Session is closed; transfer is not possible",
+        code: "TABLE_SESSION_CLOSED",
+      });
+    }
+    const fromTableId = session.table_id;
+
+    const hasTarget = opts.targetTableId != null;
+    const hasNewBar =
+      typeof opts.newBarName === "string" && opts.newBarName.trim().length > 0;
+    if (hasTarget === hasNewBar) {
+      // Ninguno o ambos: el caller debe elegir exactamente un modo.
+      throw new BadRequestException({
+        message:
+          "Provide exactly one of `target_table_id` or `new_bar_name`",
+        code: "TRANSFER_TARGET_REQUIRED",
+      });
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      let targetId: number;
+      let customName: string | null = session.custom_name;
+
+      if (hasNewBar) {
+        const name = opts.newBarName!.trim();
+        if (name.length > 80) {
+          throw new BadRequestException({
+            message: "El nombre es demasiado largo (máx 80)",
+            code: "BAR_NAME_TOO_LONG",
+          });
+        }
+        // Crear la barra virtual dentro de la MISMA tx (mismo patrón
+        // que TablesService.createBar, replicado acá para atomicidad:
+        // si la transferencia falla, la barra no queda huérfana).
+        const last = await tx.table.findFirst({
+          orderBy: { number: "desc" },
+          select: { number: true },
+        });
+        const bar = await tx.table.create({
+          data: {
+            number: (last?.number ?? 0) + 1,
+            qr_code: `bar-${randomBytes(8).toString("hex")}`,
+            kind: "BAR",
+          },
+        });
+        targetId = bar.id;
+        customName = name;
+      } else {
+        targetId = opts.targetTableId!;
+        if (targetId === fromTableId) {
+          throw new BadRequestException({
+            message: "La cuenta ya está en esa mesa",
+            code: "TRANSFER_SAME_TABLE",
+          });
+        }
+        const target = await tx.table.findUnique({
+          where: { id: targetId },
+        });
+        if (!target) {
+          throw new NotFoundException({
+            message: `Table ${targetId} not found`,
+            code: "TABLE_NOT_FOUND",
+          });
+        }
+        const occupied = await tx.tableSession.findFirst({
+          where: { table_id: targetId, status: { in: NON_CLOSED } },
+          select: { id: true },
+        });
+        if (occupied) {
+          throw new ConflictException({
+            message:
+              "La mesa destino ya tiene una cuenta abierta. Cerrala o elegí otra.",
+            code: "TRANSFER_TARGET_OCCUPIED",
+          });
+        }
+        // Mesa → barra existente también exige nombre para la cuenta.
+        if (target.kind === "BAR" && !customName) {
+          throw new BadRequestException({
+            message: "Transferir a una barra requiere un nombre de cuenta",
+            code: "TRANSFER_BAR_NAME_REQUIRED",
+          });
+        }
+      }
+
+      const updated = await tx.tableSession.update({
+        where: { id: sessionId },
+        data: {
+          table_id: targetId,
+          custom_name: customName,
+        },
+      });
+
+      // Canciones del período de la sesión siguen a la cuenta: todas
+      // las filas de la mesa origen creadas desde que abrió la sesión
+      // (pendientes E historial) — preserva créditos de canción y el
+      // historial musical de la cuenta en la mesa nueva.
+      await tx.queueItem.updateMany({
+        where: {
+          table_id: fromTableId,
+          created_at: { gte: session.opened_at },
+        },
+        data: { table_id: targetId },
+      });
+
+      // Proyección: destino hereda contadores reales, origen queda libre.
+      await this.projection.onSessionTransferred(
+        fromTableId,
+        targetId,
+        sessionId,
+        tx,
+      );
+
+      // Outbox dentro de la misma tx — el cloud reconstruye el
+      // movimiento con from/to.
+      await this.outbox.enqueue(tx, {
+        event_type: "session.transferred",
+        aggregate_type: "TableSession",
+        aggregate_id: updated.external_id,
+        payload: {
+          ...serializeSessionForOutbox(updated),
+          from_table_id: fromTableId,
+          to_table_id: targetId,
+        },
+      });
+
+      return { updated, targetId };
+    });
+
+    // Sockets post-commit: ambas mesas cambiaron + la sesión.
+    this.realtime.emitTableSessionUpdated(
+      result.updated.id,
+      this.serialize(result.updated),
+    );
+    for (const tableId of [fromTableId, result.targetId]) {
+      const snapshot = await this.projection.snapshotForBroadcast(tableId);
+      if (snapshot) this.realtime.emitTableUpdated(snapshot);
+    }
+
+    return {
+      session: result.updated,
+      from_table_id: fromTableId,
+      to_table_id: result.targetId,
+    };
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────

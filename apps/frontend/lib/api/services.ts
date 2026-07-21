@@ -218,6 +218,23 @@ export const tableSessionsApi = {
     adminApi
       .post<TableSession>(`/table-sessions/${sessionId}/void`, body)
       .then((r) => r.data),
+  /**
+   * Transferir la cuenta completa a otra mesa/barra (los clientes se
+   * cambiaron de sitio). Exactamente UNO de los dos campos:
+   *   - target_table_id: mesa/barra existente y libre.
+   *   - new_bar_name: crea una barra virtual nueva con ese nombre.
+   * Consumos, pedidos, pagos y canciones viajan con la cuenta.
+   */
+  transfer: (
+    sessionId: number,
+    body: { target_table_id?: number; new_bar_name?: string },
+  ): Promise<TableSession & { from_table_id: number; to_table_id: number }> =>
+    adminApi
+      .post<TableSession & { from_table_id: number; to_table_id: number }>(
+        `/table-sessions/${sessionId}/transfer`,
+        body,
+      )
+      .then((r) => r.data),
 };
 
 // ─── Order Requests ───────────────────────────────────────────────────────────

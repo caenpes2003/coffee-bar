@@ -55,6 +55,53 @@ export class TableProjectionService {
     });
   }
 
+  /**
+   * Mueve la proyección completa de una mesa a otra (transferencia de
+   * cuenta). Los contadores (consumo, pedidos activos, solicitudes)
+   * viajan con la sesión — la mesa destino NO arranca en cero, hereda
+   * el estado real de la cuenta. La mesa origen queda disponible.
+   *
+   * Debe llamarse dentro de la MISMA tx que mueve la TableSession.
+   */
+  async onSessionTransferred(
+    fromTableId: number,
+    toTableId: number,
+    sessionId: number,
+    tx?: Tx,
+  ) {
+    const client = this.client(tx);
+    const source = await client.table.findUnique({
+      where: { id: fromTableId },
+      select: {
+        total_consumption: true,
+        active_order_count: true,
+        pending_request_count: true,
+      },
+    });
+    await client.table.update({
+      where: { id: toTableId },
+      data: {
+        current_session_id: sessionId,
+        status: TableStatus.occupied,
+        total_consumption: source?.total_consumption ?? 0,
+        active_order_count: source?.active_order_count ?? 0,
+        pending_request_count: source?.pending_request_count ?? 0,
+        last_activity_at: new Date(),
+      },
+    });
+    await client.table.update({
+      where: { id: fromTableId },
+      data: {
+        current_session_id: null,
+        status: TableStatus.available,
+        total_consumption: 0,
+        active_order_count: 0,
+        pending_request_count: 0,
+        last_activity_at: new Date(),
+      },
+    });
+  }
+
   async onOrderRequestCreated(tableId: number, tx?: Tx) {
     await this.client(tx).table.update({
       where: { id: tableId },

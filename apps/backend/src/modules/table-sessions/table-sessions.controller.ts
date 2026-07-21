@@ -12,6 +12,7 @@ import {
 import { TableSessionsService } from "./table-sessions.service";
 import { MarkPaidDto } from "./dto/mark-paid.dto";
 import { OpenSessionDto } from "./dto/open-session.dto";
+import { TransferSessionDto } from "./dto/transfer-session.dto";
 import { VoidSessionDto } from "./dto/void-session.dto";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
@@ -314,5 +315,64 @@ export class TableSessionsController {
       total_voided: Number(session.total_consumption),
     });
     return this.sessions.serialize(session);
+  }
+
+  /**
+   * Transferir la cuenta completa a otra mesa/barra. Los clientes se
+   * cambiaron de mesa físicamente y la cuenta los sigue: consumos,
+   * pedidos, pagos y canciones. Ver TableSessionsService.transfer.
+   *
+   * Sin RequireOpenCashRegisterGuard: mover una cuenta no es un evento
+   * de dinero, y de facto solo hay cuentas abiertas cuando hay jornada.
+   */
+  @Post("table-sessions/:id/transfer")
+  @UseGuards(JwtGuard)
+  @AuthKinds("admin")
+  async transfer(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: TransferSessionDto,
+    @CurrentAuth() auth: AuthPayload,
+  ) {
+    if (!auth || auth.kind !== "admin") {
+      throw new ForbiddenException({
+        message: "Admin token required",
+        code: "AUTH_NOT_ADMIN",
+      });
+    }
+    const result = await this.sessions.transfer(id, {
+      targetTableId: dto.target_table_id,
+      newBarName: dto.new_bar_name,
+      actor: { user_id: auth.sub, name: auth.name },
+    });
+    // Labels legibles para la auditoría (número de mesa o nombre de
+    // cuenta). Dos lecturas baratas post-commit.
+    const [fromTable, toTable] = await Promise.all([
+      this.sessions.getTableForAudit(result.from_table_id),
+      this.sessions.getTableForAudit(result.to_table_id),
+    ]);
+    const label = (
+      t: { number: number; kind: string } | null,
+      fallbackId: number,
+    ) =>
+      t
+        ? t.kind === "BAR"
+          ? (result.session.custom_name ?? `Barra ${t.number}`)
+          : `Mesa ${t.number}`
+        : `Mesa ${fallbackId}`;
+    void this.audit.record({
+      kind: "session_transferred",
+      actor_id: auth.sub,
+      actor_label: auth.name,
+      session_id: result.session.id,
+      from_table_id: result.from_table_id,
+      to_table_id: result.to_table_id,
+      from_label: label(fromTable, result.from_table_id),
+      to_label: label(toTable, result.to_table_id),
+    });
+    return {
+      ...this.sessions.serialize(result.session),
+      from_table_id: result.from_table_id,
+      to_table_id: result.to_table_id,
+    };
   }
 }

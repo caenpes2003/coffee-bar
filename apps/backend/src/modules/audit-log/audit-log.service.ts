@@ -176,6 +176,16 @@ type RecordInput =
       amount: number;
       reason: string;
       reason_detail: string | null;
+    }
+  | {
+      kind: "session_transferred";
+      actor_id: number;
+      actor_label: string;
+      session_id: number;
+      from_table_id: number;
+      to_table_id: number;
+      from_label: string;
+      to_label: string;
     };
 
 @Injectable()
@@ -426,6 +436,17 @@ export class AuditLogService {
           },
         };
       }
+      case "session_transferred":
+        return {
+          summary: `Cuenta transferida: ${input.from_label} → ${input.to_label} (sesión #${input.session_id})`,
+          metadata: {
+            session_id: input.session_id,
+            from_table_id: input.from_table_id,
+            to_table_id: input.to_table_id,
+            from_label: input.from_label,
+            to_label: input.to_label,
+          },
+        };
     }
   }
 }

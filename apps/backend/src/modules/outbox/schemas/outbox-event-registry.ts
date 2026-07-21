@@ -147,6 +147,18 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     return errors;
   },
 
+  // session.transferred: la cuenta se movió de mesa (mesa↔mesa,
+  // mesa↔barra). Consumos/pedidos/pagos viajan implícitos (cuelgan de
+  // la sesión); el payload trae from/to para reconstruir en cloud.
+  "session.transferred": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireNumber(payload, "from_table_id", errors);
+    requireNumber(payload, "to_table_id", errors);
+    return errors;
+  },
+
   // ─── Order ───────────────────────────────────────────────────────────
   // order.status_changed: una sola event_type para todas las
   // transiciones (accepted → preparing → ready → delivered → cancelled).

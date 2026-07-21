@@ -39,6 +39,7 @@ import {
 } from "../orders/CompositionPicker";
 import { CancelButton } from "./CancelButton";
 import { PaymentMethodSelector } from "./PaymentMethodSelector";
+import { TransferSessionModal } from "./TransferSessionModal";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -123,6 +124,9 @@ export function AdminBillDrawer({
   // es un confirm simple. Se dispara cuando el total > 0 y no se cobró
   // — el flujo "close" simple solo aplica a cuentas con total 0.
   const [voidOpen, setVoidOpen] = useState(false);
+  // Transferencia de cuenta a otra mesa/barra (los clientes se
+  // cambiaron de sitio). Modal con destinos libres + "barra nueva".
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const load = useCallback(() => {
     if (sessionId == null) return;
@@ -489,6 +493,15 @@ export function AdminBillDrawer({
               )}
               <button
                 type="button"
+                onClick={() => setTransferOpen(true)}
+                disabled={paymentBusy != null}
+                className="crown-btn-ghost"
+                style={secondaryActionStyle(false)}
+              >
+                Transferir cuenta
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   if (bill.summary.total > 0) {
                     // Anular: requiere razón obligatoria por trazabilidad.
@@ -612,6 +625,20 @@ export function AdminBillDrawer({
           onCancel={() => {
             setReverseTarget(null);
             setReverseError(null);
+          }}
+        />
+      )}
+
+      {transferOpen && sessionId != null && (
+        <TransferSessionModal
+          sessionId={sessionId}
+          accountLabel={accountLabel ?? `Mesa ${tableNumber ?? ""}`}
+          onClose={() => setTransferOpen(false)}
+          onDone={() => {
+            setTransferOpen(false);
+            // La cuenta ya vive en otra mesa: cerrar el drawer — la
+            // grilla se actualiza sola por los sockets de ambas mesas.
+            onClose();
           }}
         />
       )}
