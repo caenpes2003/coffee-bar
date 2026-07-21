@@ -438,7 +438,7 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
   const expected =
     session.closing_balance_expected !== null
       ? Number(session.closing_balance_expected)
-      : opening + cashIn - cashOut;
+      : opening + cashIn + extras - cashOut;
   const declared =
     session.closing_balance_declared !== null
       ? Number(session.closing_balance_declared)

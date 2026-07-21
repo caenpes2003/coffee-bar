@@ -1171,10 +1171,13 @@ export const extraIncomeApi = {
   summary: (params?: {
     from?: string;
     to?: string;
+    session_id?: number;
   }): Promise<ExtraIncomeSummary> => {
     const q = new URLSearchParams();
     if (params?.from) q.set("from", params.from);
     if (params?.to) q.set("to", params.to);
+    if (params?.session_id !== undefined)
+      q.set("session_id", String(params.session_id));
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return adminApi
       .get<ExtraIncomeSummary>(`/admin/extra-income/summary${suffix}`)
@@ -1251,10 +1254,16 @@ export const luggageApi = {
       )
       .then((r) => r.data),
 
-  summary: (params?: { from?: string; to?: string }): Promise<LuggageSummary> => {
+  summary: (params?: {
+    from?: string;
+    to?: string;
+    session_id?: number;
+  }): Promise<LuggageSummary> => {
     const q = new URLSearchParams();
     if (params?.from) q.set("from", params.from);
     if (params?.to) q.set("to", params.to);
+    if (params?.session_id !== undefined)
+      q.set("session_id", String(params.session_id));
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return adminApi
       .get<LuggageSummary>(`/admin/luggage/summary${suffix}`)

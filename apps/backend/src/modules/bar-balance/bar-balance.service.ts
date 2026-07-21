@@ -108,44 +108,70 @@ export class BarBalanceService {
       // relación con cuánto creció/decreció el efectivo TOTAL del
       // negocio. El saldo del bar es "cuánta plata hay en total": lo
       // que entró por cobros menos lo que salió por gastos.
-      const [cashPayments, cashExpenses, boldPayments, boldExpenses] =
-        await Promise.all([
-          this.prisma.payment.aggregate({
-            where: {
-              cash_register_session_id: { in: sessionIds },
-              method: PaymentMethod.efectivo,
+      //
+      // Los ingresos extra (baños, manuales) y el guardarropa se
+      // asumen SIEMPRE en efectivo (misma decisión operativa que el
+      // cierre) — suman al efectivo del bar.
+      const [
+        cashPayments,
+        cashExpenses,
+        boldPayments,
+        boldExpenses,
+        extraIncome,
+        luggageIncome,
+      ] = await Promise.all([
+        this.prisma.payment.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            method: PaymentMethod.efectivo,
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.expense.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            method: PaymentMethod.efectivo,
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.payment.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            method: {
+              in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
             },
-            _sum: { amount: true },
-          }),
-          this.prisma.expense.aggregate({
-            where: {
-              cash_register_session_id: { in: sessionIds },
-              method: PaymentMethod.efectivo,
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.expense.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            method: {
+              in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
             },
-            _sum: { amount: true },
-          }),
-          this.prisma.payment.aggregate({
-            where: {
-              cash_register_session_id: { in: sessionIds },
-              method: {
-                in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
-              },
-            },
-            _sum: { amount: true },
-          }),
-          this.prisma.expense.aggregate({
-            where: {
-              cash_register_session_id: { in: sessionIds },
-              method: {
-                in: [PaymentMethod.tarjeta_bold, PaymentMethod.qr_bold],
-              },
-            },
-            _sum: { amount: true },
-          }),
-        ]);
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.extraIncome.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            status: "active",
+          },
+          _sum: { total_amount: true },
+        }),
+        this.prisma.luggageTicket.aggregate({
+          where: {
+            cash_register_session_id: { in: sessionIds },
+            payment_status: "paid",
+          },
+          _sum: { amount: true },
+        }),
+      ]);
 
       cash +=
-        Number(cashPayments._sum.amount ?? 0) -
+        Number(cashPayments._sum.amount ?? 0) +
+        Number(extraIncome._sum.total_amount ?? 0) +
+        Number(luggageIncome._sum.amount ?? 0) -
         Number(cashExpenses._sum.amount ?? 0);
       bold +=
         Number(boldPayments._sum.amount ?? 0) -

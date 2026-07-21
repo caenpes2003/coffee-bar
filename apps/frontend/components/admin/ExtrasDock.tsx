@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  cashRegisterApi,
   extraIncomeApi,
   luggageApi,
   type ExtraIncomeApi,
@@ -85,9 +86,21 @@ export function ExtrasDock() {
 
   const loadSummaries = useCallback(async () => {
     try {
+      // El dock cuenta lo cobrado en la JORNADA ACTUAL, no en el día
+      // calendario. Al cerrar una jornada y abrir otra el mismo día,
+      // el contador arranca en $0 (antes seguía mostrando el total
+      // del día completo, dando la sensación de que no se cerró).
+      // Filtramos por session_id exacto (más preciso que la fecha).
+      // Sin jornada abierta, totales en 0.
+      const { session } = await cashRegisterApi.current();
+      if (!session) {
+        setExtras(null);
+        setLuggage(null);
+        return;
+      }
       const [e, l] = await Promise.all([
-        extraIncomeApi.summary(),
-        luggageApi.summary(),
+        extraIncomeApi.summary({ session_id: session.id }),
+        luggageApi.summary({ session_id: session.id }),
       ]);
       setExtras(e);
       setLuggage(l);
@@ -98,11 +111,17 @@ export function ExtrasDock() {
 
   useEffect(() => {
     void loadSummaries();
-    // Auto-refresh suave cada 60s para que el total del día se mantenga
-    // vivo cuando alguien deja la pestaña abierta. No usamos sockets:
-    // este modelo no emite eventos por ahora — overkill.
+    // Refrescar al cerrar jornada: el contador debe volver a 0 cuando
+    // se abre una jornada nueva. Sin sockets — CustomEvent same-tab.
+    const onDayClosed = () => void loadSummaries();
+    window.addEventListener("crown:day-closed", onDayClosed);
+    // Auto-refresh suave cada 60s para que el total se mantenga vivo
+    // cuando alguien deja la pestaña abierta.
     const interval = setInterval(() => void loadSummaries(), 60_000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("crown:day-closed", onDayClosed);
+    };
   }, [loadSummaries]);
 
   const pushToast = (text: string, tone: "ok" | "alert" = "ok") => {

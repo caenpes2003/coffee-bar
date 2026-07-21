@@ -5,7 +5,6 @@ import { expensesApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import type { ExpenseCategory, PaymentMethod } from "@coffee-bar/shared";
 import { CancelButton } from "./CancelButton";
-import { PaymentMethodSelector } from "./PaymentMethodSelector";
 
 /**
  * Modal de registro de gasto (Fase A+ Gastos v1).
@@ -211,12 +210,61 @@ export function ExpenseModal({
           />
         </Field>
 
-        {/* Método */}
-        <PaymentMethodSelector
-          value={method}
-          onChange={setMethod}
-          disabled={submitting}
-        />
+        {/* Método: en gastos NO distinguimos tarjeta vs QR Bold — el
+            proveedor no siempre lo aclara y para el saldo Bold ambos
+            netean juntos. Dos opciones: Efectivo / Bold. "Bold" se
+            persiste como qr_bold (arbitrario; el backend suma
+            tarjeta+qr en un solo neto Bold). */}
+        <div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.mute,
+              textTransform: "uppercase",
+              fontWeight: 600,
+              display: "block",
+              marginBottom: 8,
+            }}
+          >
+            — Método de pago
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(
+              [
+                { key: "efectivo", label: "Efectivo" },
+                { key: "qr_bold", label: "Bold" },
+              ] as { key: PaymentMethod; label: string }[]
+            ).map((m) => {
+              const selected = method === m.key;
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => setMethod(m.key)}
+                  disabled={submitting}
+                  aria-pressed={selected}
+                  style={{
+                    flex: 1,
+                    padding: "12px 14px",
+                    background: selected ? C.goldSoft : C.cream,
+                    border: `1px solid ${selected ? C.gold : C.sand}`,
+                    borderRadius: 10,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    fontFamily: FONT_UI,
+                    fontSize: 14,
+                    fontWeight: 700,
+                    color: C.ink,
+                    textAlign: "center",
+                  }}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {/* Categoría */}
         <div>

@@ -296,6 +296,7 @@ export class LuggageService {
   async getSummary(opts: {
     from?: Date;
     to?: Date;
+    session_id?: number;
   }): Promise<{
     range: { from: string; to: string };
     luggage: {
@@ -307,8 +308,14 @@ export class LuggageService {
     };
   }> {
     const { from, to } = this.resolveDefaultRange(opts.from, opts.to);
+    // session_id → filtro por jornada exacta (ExtrasDock). Sin él,
+    // rango calendario (reportes).
+    const where =
+      opts.session_id !== undefined
+        ? { cash_register_session_id: opts.session_id }
+        : { created_at: { gte: from, lt: to } };
     const rows = await this.prisma.luggageTicket.findMany({
-      where: { created_at: { gte: from, lt: to } },
+      where,
       select: {
         amount: true,
         payment_status: true,

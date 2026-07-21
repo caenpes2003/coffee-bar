@@ -545,16 +545,21 @@ function CloseDayModal({
 
   const opening = detail ? Number(detail.session.opening_balance) : 0;
   const cashIn = detail?.totals_by_method.efectivo.amount ?? 0;
+  // Ingresos extra (baños, manuales) + guardarropa: se asumen en
+  // efectivo y suman a la caja física esperada. Mismo criterio que
+  // el backend en CashRegisterService.close.
+  const extraIn =
+    (detail?.extra_income_total ?? 0) + (detail?.luggage_total ?? 0);
   // Egresos netos por método (suma de kind=expense − kind=reversal).
   // Vienen del backend ya consolidados en expenses_by_method.
   const cashOut = detail?.expenses_by_method.efectivo ?? 0;
   const cardOut = detail?.expenses_by_method.tarjeta_bold ?? 0;
   const qrOut = detail?.expenses_by_method.qr_bold ?? 0;
   const expensesTotal = detail?.expenses_total ?? 0;
-  // Expected en caja física: solo descuenta los egresos pagados en
-  // efectivo. Los pagados con Bold salen de la cuenta Bold, no de la
-  // caja. Coincide con el cálculo del backend en CashRegisterService.close.
-  const expected = opening + cashIn - cashOut;
+  // Expected en caja física: base + cobros efectivo + ingresos extra
+  // − egresos efectivo. Los pagos/gastos Bold salen de la cuenta
+  // Bold, no de la caja. Coincide con el backend.
+  const expected = opening + cashIn + extraIn - cashOut;
   // Neto Bold del día = cobros Bold - egresos Bold (tarjeta + QR).
   // Útil para conciliar contra el consolidado Bold al cierre.
   const boldIn =
@@ -579,6 +584,14 @@ function CloseDayModal({
         closing_balance_declared: declaredNum,
         notes: notes.trim() || undefined,
       });
+      // Notifica a otros componentes vivos en la pestaña (saldo del
+      // bar, ExtrasDock) que la jornada se cerró — así refrescan sus
+      // totales SIN esperar a un recargo manual. El saldo del bar
+      // solo cambia al cerrar jornada, por eso este es su único
+      // trigger de refresh (no cada venta).
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("crown:day-closed"));
+      }
       onDone();
     } catch (err) {
       setSubmitError(getErrorMessage(err));
@@ -717,9 +730,15 @@ function CloseDayModal({
               label="Esperado en caja"
               value={fmtCOP(expected)}
               strong
-              hint={cashOut > 0
-                ? "base + efectivo cobrado − egresos efectivo"
-                : "base + efectivo cobrado"}
+              hint={
+                extraIn > 0 && cashOut > 0
+                  ? "base + efectivo + extras − egresos efectivo"
+                  : extraIn > 0
+                    ? "base + efectivo cobrado + extras"
+                    : cashOut > 0
+                      ? "base + efectivo cobrado − egresos efectivo"
+                      : "base + efectivo cobrado"
+              }
             />
             {(boldIn > 0 || boldOut > 0) && (
               <TicketRow

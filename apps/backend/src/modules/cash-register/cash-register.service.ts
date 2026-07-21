@@ -176,8 +176,14 @@ export class CashRegisterService {
 
       // Calcular expected:
       //   opening_balance
-      //   + cobros en efectivo del día
+      //   + cobros en efectivo del día (Payment)
+      //   + ingresos extra del día (baños, manuales, guardarropa)
       //   - gastos pagados en efectivo del día (netos: expense - reversal)
+      //
+      // Los ingresos extra se asumen SIEMPRE en efectivo (decisión
+      // operativa: los baños y extras chicos se pagan en efectivo;
+      // ExtraIncome no trackea método). Entran a la caja física, así
+      // que suman al esperado.
       //
       // Los gastos pagados con tarjeta/QR Bold NO afectan la caja
       // física esperada — ese dinero nunca estuvo en caja, salió de
@@ -192,6 +198,16 @@ export class CashRegisterService {
       });
       const cashIn = cashPayments._sum.amount ?? new Prisma.Decimal(0);
 
+      // Ingresos extra activos (no reversados) de esta sesión.
+      const extraIncome = await tx.extraIncome.aggregate({
+        where: {
+          cash_register_session_id: open.id,
+          status: "active",
+        },
+        _sum: { total_amount: true },
+      });
+      const extraIn = extraIncome._sum.total_amount ?? new Prisma.Decimal(0);
+
       const cashExpenses = await tx.expense.aggregate({
         where: {
           cash_register_session_id: open.id,
@@ -205,6 +221,7 @@ export class CashRegisterService {
 
       const expected = new Prisma.Decimal(open.opening_balance)
         .add(cashIn)
+        .add(extraIn)
         .sub(cashOut);
       const declared = new Prisma.Decimal(dto.closing_balance_declared);
       const difference = declared.sub(expected);

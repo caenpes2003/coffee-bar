@@ -59,10 +59,15 @@ export class LuggageController {
   }
 
   @Get("summary")
-  summary(@Query("from") from?: string, @Query("to") to?: string) {
+  summary(
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("session_id") sessionId?: string,
+  ) {
     return this.service.getSummary({
       from: parseDate(from, "from"),
       to: parseDate(to, "to"),
+      session_id: sessionId ? Number.parseInt(sessionId, 10) : undefined,
     });
   }
 

@@ -25,10 +25,13 @@ import { ExpenseModal } from "@/components/admin/ExpenseModal";
  * aparecen con opacidad reducida y badge "reversado".
  */
 
+// En gastos no distinguimos tarjeta vs QR Bold — ambos se muestran
+// como "Bold" (el proveedor no siempre aclara cuál, y para el saldo
+// netean juntos).
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   efectivo: "Efectivo",
-  tarjeta_bold: "Tarjeta Bold",
-  qr_bold: "QR Bold",
+  tarjeta_bold: "Bold",
+  qr_bold: "Bold",
 };
 
 const CATEGORY_LABEL: Record<ExpenseCategory, string> = {
@@ -45,9 +48,10 @@ export function ExpensesTab() {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [reverseTarget, setReverseTarget] = useState<Expense | null>(null);
-  const [methodFilter, setMethodFilter] = useState<PaymentMethod | "all">(
-    "all",
-  );
+  // Filtro de método simplificado a Efectivo / Bold (bold = tarjeta+qr).
+  const [methodFilter, setMethodFilter] = useState<
+    "all" | "efectivo" | "bold"
+  >("all");
   const [categoryFilter, setCategoryFilter] = useState<
     ExpenseCategory | "all"
   >("all");
@@ -55,12 +59,23 @@ export function ExpensesTab() {
   const load = useCallback(async () => {
     setError(null);
     try {
+      // Backend filtra por método exacto, pero "bold" agrupa dos
+      // métodos — así que en ese caso traemos por categoría y
+      // filtramos el método en cliente.
       const data = await expensesApi.list({
-        method: methodFilter === "all" ? undefined : methodFilter,
         category: categoryFilter === "all" ? undefined : categoryFilter,
         limit: 100,
       });
-      setExpenses(data);
+      const filtered =
+        methodFilter === "all"
+          ? data
+          : methodFilter === "efectivo"
+            ? data.filter((e) => e.method === "efectivo")
+            : data.filter(
+                (e) =>
+                  e.method === "tarjeta_bold" || e.method === "qr_bold",
+              );
+      setExpenses(filtered);
     } catch (err) {
       setError(getErrorMessage(err));
     }
@@ -237,8 +252,8 @@ function FiltersBar({
   category,
   setCategory,
 }: {
-  method: PaymentMethod | "all";
-  setMethod: (v: PaymentMethod | "all") => void;
+  method: "all" | "efectivo" | "bold";
+  setMethod: (v: "all" | "efectivo" | "bold") => void;
   category: ExpenseCategory | "all";
   setCategory: (v: ExpenseCategory | "all") => void;
 }) {
@@ -259,17 +274,20 @@ function FiltersBar({
         <Chip active={method === "all"} onClick={() => setMethod("all")}>
           Todos
         </Chip>
-        {(["efectivo", "tarjeta_bold", "qr_bold"] as PaymentMethod[]).map(
-          (m) => (
-            <Chip
-              key={m}
-              active={method === m}
-              onClick={() => setMethod(m)}
-            >
-              {METHOD_LABEL[m]}
-            </Chip>
-          ),
-        )}
+        {(
+          [
+            { key: "efectivo", label: "Efectivo" },
+            { key: "bold", label: "Bold" },
+          ] as { key: "efectivo" | "bold"; label: string }[]
+        ).map((m) => (
+          <Chip
+            key={m.key}
+            active={method === m.key}
+            onClick={() => setMethod(m.key)}
+          >
+            {m.label}
+          </Chip>
+        ))}
       </FilterGroup>
       <FilterGroup label="Categoría">
         <Chip

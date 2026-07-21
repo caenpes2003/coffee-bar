@@ -187,6 +187,7 @@ export class ExtraIncomeService {
   async getSummary(opts: {
     from?: Date;
     to?: Date;
+    session_id?: number;
   }): Promise<{
     range: { from: string; to: string };
     restroom: {
@@ -198,11 +199,21 @@ export class ExtraIncomeService {
     total_revenue: number;
   }> {
     const { from, to } = this.resolveDefaultRange(opts.from, opts.to);
+    // Si viene session_id, filtramos por jornada de caja exacta (lo
+    // usa el ExtrasDock para contar solo la jornada actual). Si no,
+    // caemos al rango de fechas calendario (reportes de /admin/sales).
+    const where =
+      opts.session_id !== undefined
+        ? {
+            status: ExtraIncomeStatus.active,
+            cash_register_session_id: opts.session_id,
+          }
+        : {
+            status: ExtraIncomeStatus.active,
+            created_at: { gte: from, lt: to },
+          };
     const rows = await this.prisma.extraIncome.findMany({
-      where: {
-        status: ExtraIncomeStatus.active,
-        created_at: { gte: from, lt: to },
-      },
+      where,
       select: { type: true, subtype: true, quantity: true, total_amount: true },
     });
     let maleCount = 0;

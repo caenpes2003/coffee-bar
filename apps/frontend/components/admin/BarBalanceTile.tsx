@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { barBalanceApi, type BarBalance } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import { C, FONT_DISPLAY, FONT_MONO, FONT_UI, fmt } from "@/lib/theme";
@@ -40,7 +40,7 @@ export function BarBalanceTile() {
     firstAt: 0,
   });
 
-  const fetchBalance = async () => {
+  const fetchBalance = useCallback(async () => {
     setLoading(true);
     try {
       const data = await barBalanceApi.get();
@@ -50,7 +50,21 @@ export function BarBalanceTile() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // El saldo del bar SOLO cambia al cerrar una jornada (cada venta
+  // suelta no lo mueve — entra al saldo cuando la jornada cierra). Por
+  // eso el único auto-refresh es el evento `crown:day-closed` que emite
+  // el CloseDayModal. Si el saldo está revelado, refrescamos el número
+  // en vivo; si está oculto, no hace falta (el próximo reveal ya
+  // re-fetchea).
+  useEffect(() => {
+    const onDayClosed = () => {
+      if (revealed) void fetchBalance();
+    };
+    window.addEventListener("crown:day-closed", onDayClosed);
+    return () => window.removeEventListener("crown:day-closed", onDayClosed);
+  }, [revealed, fetchBalance]);
 
   const toggleReveal = () => {
     const next = !revealed;
