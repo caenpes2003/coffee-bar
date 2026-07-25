@@ -399,6 +399,10 @@ export interface CashRegisterSessionDetail {
   >;
   payments_count: number;
   extra_income_total: number;
+  // Split por método: cash entra al esperado en caja física; bold
+  // entra al neto Bold del día. total = cash + bold.
+  extra_income_cash: number;
+  extra_income_bold: number;
   luggage_total: number;
   // Gastos netos (kind=expense - kind=reversal) por método. Los de
   // efectivo se restan del expected en caja; los de Bold se reflejan

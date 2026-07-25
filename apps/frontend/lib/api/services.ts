@@ -1121,6 +1121,8 @@ export type ExtraIncomeApi = {
   id: number;
   type: "restroom" | "manual";
   subtype: string | null;
+  /** Método de pago. "Bold" se persiste como qr_bold (convención Expense). */
+  method: PaymentMethod;
   amount: number;
   quantity: number;
   total_amount: number;
@@ -1150,16 +1152,22 @@ export const extraIncomeApi = {
   /** Registrar cobro de baño. Precio FORZADO por backend según subtype. */
   createRestroom: (
     subtype: "male" | "female",
+    method: PaymentMethod,
     notes?: string,
   ): Promise<ExtraIncomeApi> =>
     adminApi
-      .post<ExtraIncomeApi>("/admin/extra-income/restroom", { subtype, notes })
+      .post<ExtraIncomeApi>("/admin/extra-income/restroom", {
+        subtype,
+        method,
+        notes,
+      })
       .then((r) => r.data),
 
   /** Registrar un ingreso extra manual (concepto + monto libres). */
   createManual: (payload: {
     concept: string;
     amount: number;
+    method: PaymentMethod;
     notes?: string;
   }): Promise<ExtraIncomeApi> =>
     adminApi

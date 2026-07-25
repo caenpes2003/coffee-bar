@@ -8,6 +8,8 @@
  * Diseño:
  *   - Concepto: input de texto obligatorio (mínimo 3, máximo 120).
  *   - Monto: input numérico entero positivo.
+ *   - Método de pago: obligatorio y SIN default — hubo cierres reales
+ *     con ingresos por Bold registrados como efectivo por el default.
  *   - Notas: opcional.
  *
  * Cierra con click-fuera, Esc, o Cancelar. Mientras está enviando, los
@@ -15,6 +17,7 @@
  */
 
 import { useState } from "react";
+import type { PaymentMethod } from "@coffee-bar/shared";
 import { extraIncomeApi, type ExtraIncomeApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import { useEscapeKey } from "@/lib/hooks/useEscapeKey";
@@ -29,6 +32,9 @@ export function ManualIncomeModal({
 }) {
   const [concept, setConcept] = useState("");
   const [amount, setAmount] = useState("");
+  // Sin default deliberadamente: el operador DEBE elegir. null = aún
+  // no ha elegido y el botón Registrar queda deshabilitado.
+  const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,16 +45,17 @@ export function ManualIncomeModal({
   const conceptOk = concept.trim().length >= 3;
   const amountOk =
     Number.isInteger(parsedAmount) && parsedAmount > 0 && parsedAmount < 100_000_000;
-  const canSubmit = conceptOk && amountOk && !submitting;
+  const canSubmit = conceptOk && amountOk && method !== null && !submitting;
 
   const submit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || method === null) return;
     setSubmitting(true);
     setError(null);
     try {
       const created = await extraIncomeApi.createManual({
         concept: concept.trim(),
         amount: parsedAmount,
+        method,
         notes: notes.trim() || undefined,
       });
       onCreated(created);
@@ -179,6 +186,46 @@ export function ManualIncomeModal({
               <Hint tone="alert">
                 Monto debe ser un entero positivo
               </Hint>
+            )}
+          </section>
+
+          <section>
+            <Label>Método de pago</Label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {/* "Bold" se persiste como qr_bold — misma convención de
+                  unificación que en gastos. */}
+              {(
+                [
+                  { label: "💵 Efectivo", value: "efectivo" },
+                  { label: "📱 Bold", value: "qr_bold" },
+                ] as const
+              ).map((m) => {
+                const active = method === m.value;
+                return (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => setMethod(m.value)}
+                    style={{
+                      flex: 1,
+                      padding: "10px 8px",
+                      border: `1px solid ${active ? C.gold : C.sand}`,
+                      background: active ? "#FBF3E4" : C.paper,
+                      borderRadius: 10,
+                      fontFamily: FONT_UI,
+                      fontSize: 13,
+                      fontWeight: active ? 700 : 600,
+                      color: active ? C.ink : C.cacao,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+            {method === null && (
+              <Hint>Obligatorio — elige con qué pagaron</Hint>
             )}
           </section>
 

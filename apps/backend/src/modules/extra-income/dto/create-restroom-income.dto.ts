@@ -1,4 +1,5 @@
-import { IsIn, IsOptional, IsString, MaxLength } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
+import { IsEnum, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
 import { Transform } from "class-transformer";
 import { sanitizeText } from "../../../common/sanitize";
 
@@ -16,6 +17,15 @@ import { sanitizeText } from "../../../common/sanitize";
 export class CreateRestroomIncomeDto {
   @IsIn(["male", "female"])
   subtype!: "male" | "female";
+
+  /**
+   * Método de pago. Opcional con default efectivo SOLO por
+   * retrocompatibilidad de deploy (gap backend/frontend) — la UI
+   * siempre lo pide explícitamente, sin default visual.
+   */
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  method?: PaymentMethod;
 
   // Notas opcionales (ej. "cliente cobró exacto", "caso especial").
   @IsOptional()

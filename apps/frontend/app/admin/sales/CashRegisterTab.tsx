@@ -430,15 +430,20 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
   const bold = totals_by_method.tarjeta_bold.amount;
   const qr = totals_by_method.qr_bold.amount;
   const extras = detail.extra_income_total + detail.luggage_total;
+  // Split de extras por método: solo los de efectivo (+ guardarropa,
+  // que se asume efectivo) entran al esperado en caja; los de Bold
+  // van al neto Bold del día. Mismo criterio que el backend.
+  const extrasCash = detail.extra_income_cash + detail.luggage_total;
+  const extrasBold = detail.extra_income_bold;
   const cashOut = detail.expenses_by_method.efectivo;
   const cardOut = detail.expenses_by_method.tarjeta_bold;
   const qrOut = detail.expenses_by_method.qr_bold;
   const expensesTotal = detail.expenses_total;
-  const boldNet = bold + qr - (cardOut + qrOut);
+  const boldNet = bold + qr + extrasBold - (cardOut + qrOut);
   const expected =
     session.closing_balance_expected !== null
       ? Number(session.closing_balance_expected)
-      : opening + cashIn + extras - cashOut;
+      : opening + cashIn + extrasCash - cashOut;
   const declared =
     session.closing_balance_declared !== null
       ? Number(session.closing_balance_declared)
@@ -491,7 +496,11 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
           <Row
             label="Ingresos extra"
             value={fmt(extras)}
-            hint="baños, manuales, otros"
+            hint={
+              extrasBold > 0
+                ? `${fmt(extrasCash)} efectivo · ${fmt(extrasBold)} Bold`
+                : "baños, manuales, otros"
+            }
             dim
           />
         </>
@@ -548,11 +557,15 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
         hint={cashOut > 0 ? "base + efectivo cobrado − egresos efectivo" : "base + efectivo cobrado"}
         strong
       />
-      {(bold > 0 || qr > 0 || cardOut > 0 || qrOut > 0) && (
+      {(bold > 0 || qr > 0 || extrasBold > 0 || cardOut > 0 || qrOut > 0) && (
         <Row
           label="Neto Bold del día"
           value={`${boldNet >= 0 ? "+" : ""}${fmt(boldNet)}`}
-          hint="cobros Bold − egresos Bold"
+          hint={
+            extrasBold > 0
+              ? "cobros + extras Bold − egresos Bold"
+              : "cobros Bold − egresos Bold"
+          }
           dim
         />
       )}

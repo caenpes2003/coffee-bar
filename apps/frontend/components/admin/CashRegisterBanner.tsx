@@ -622,11 +622,13 @@ function CloseDayModal({
 
   const opening = detail ? Number(detail.session.opening_balance) : 0;
   const cashIn = detail?.totals_by_method.efectivo.amount ?? 0;
-  // Ingresos extra (baños, manuales) + guardarropa: se asumen en
-  // efectivo y suman a la caja física esperada. Mismo criterio que
-  // el backend en CashRegisterService.close.
+  // Ingresos extra: SOLO los cobrados en efectivo suman a la caja
+  // física esperada — los de Bold van al neto Bold del día. El
+  // guardarropa (sin método propio) se asume efectivo. Mismo criterio
+  // que el backend en CashRegisterService.close.
   const extraIn =
-    (detail?.extra_income_total ?? 0) + (detail?.luggage_total ?? 0);
+    (detail?.extra_income_cash ?? 0) + (detail?.luggage_total ?? 0);
+  const extraBold = detail?.extra_income_bold ?? 0;
   // Egresos netos por método (suma de kind=expense − kind=reversal).
   // Vienen del backend ya consolidados en expenses_by_method.
   const cashOut = detail?.expenses_by_method.efectivo ?? 0;
@@ -637,11 +639,12 @@ function CloseDayModal({
   // − egresos efectivo. Los pagos/gastos Bold salen de la cuenta
   // Bold, no de la caja. Coincide con el backend.
   const expected = opening + cashIn + extraIn - cashOut;
-  // Neto Bold del día = cobros Bold - egresos Bold (tarjeta + QR).
-  // Útil para conciliar contra el consolidado Bold al cierre.
+  // Neto Bold del día = cobros Bold + extras Bold − egresos Bold
+  // (tarjeta + QR). Útil para conciliar contra el consolidado Bold.
   const boldIn =
     (detail?.totals_by_method.tarjeta_bold.amount ?? 0) +
-    (detail?.totals_by_method.qr_bold.amount ?? 0);
+    (detail?.totals_by_method.qr_bold.amount ?? 0) +
+    extraBold;
   const boldOut = cardOut + qrOut;
   const boldNet = boldIn - boldOut;
   const declaredNum = Number(declaredStr);
@@ -750,7 +753,11 @@ function CloseDayModal({
                   value={fmtCOP(
                     detail.extra_income_total + detail.luggage_total,
                   )}
-                  hint="baños, ingresos manuales y otros"
+                  hint={
+                    extraBold > 0
+                      ? `${fmtCOP(extraIn)} efectivo · ${fmtCOP(extraBold)} Bold`
+                      : "baños, ingresos manuales y otros"
+                  }
                   dim
                 />
               </>
@@ -827,7 +834,11 @@ function CloseDayModal({
               <TicketRow
                 label="Neto Bold del día"
                 value={`${boldNet >= 0 ? "+" : ""}${fmtCOP(boldNet)}`}
-                hint="cobros Bold − egresos Bold"
+                hint={
+                  extraBold > 0
+                    ? "cobros + extras Bold − egresos Bold"
+                    : "cobros Bold − egresos Bold"
+                }
                 dim
               />
             )}

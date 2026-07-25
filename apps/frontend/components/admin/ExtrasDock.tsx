@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import type { PaymentMethod } from "@coffee-bar/shared";
 import {
   cashRegisterApi,
   extraIncomeApi,
@@ -75,6 +76,13 @@ export function ExtrasDock() {
   const [extras, setExtras] = useState<ExtraIncomeSummary | null>(null);
   const [luggage, setLuggage] = useState<LuggageSummary | null>(null);
   const [busy, setBusy] = useState<null | "male" | "female">(null);
+  // Paso intermedio del cobro de baño: al tocar "Baño H/M" NO se cobra
+  // de una — primero se pregunta el método de pago. Sin default: hubo
+  // cierres reales con baños pagados por Bold que quedaron como
+  // efectivo y descuadraron la caja.
+  const [pendingBath, setPendingBath] = useState<null | "male" | "female">(
+    null,
+  );
   // Cuando el operador abre un drawer/modal (factura, editor producto,
   // etc.), el dock se esconde para no taparlo. Sigue cargando datos en
   // background; solo desaparece visualmente. Toasts se mantienen porque
@@ -144,13 +152,17 @@ export function ExtrasDock() {
     }
   };
 
-  const charge = async (subtype: "male" | "female") => {
+  const charge = async (
+    subtype: "male" | "female",
+    method: PaymentMethod,
+  ) => {
     if (busy) return;
     setBusy(subtype);
+    setPendingBath(null);
     try {
-      const res = await extraIncomeApi.createRestroom(subtype);
+      const res = await extraIncomeApi.createRestroom(subtype, method);
       pushToast(
-        `Cobrado ${subtype === "male" ? "Baño H" : "Baño M"} · ${fmt(res.total_amount)}`,
+        `Cobrado ${subtype === "male" ? "Baño H" : "Baño M"} · ${fmt(res.total_amount)} · ${method === "efectivo" ? "Efectivo" : "Bold"}`,
       );
       void loadSummaries();
       notifyExtrasChanged();
@@ -305,23 +317,110 @@ export function ExtrasDock() {
                 </button>
               </header>
 
-              {/* Cobros rápidos baño */}
-              <div style={{ display: "flex", gap: 8 }}>
-                <QuickChargeButton
-                  label="Baño H"
-                  price={2000}
-                  count={extras?.restroom.male.count ?? 0}
-                  busy={busy === "male"}
-                  onClick={() => void charge("male")}
-                />
-                <QuickChargeButton
-                  label="Baño M"
-                  price={2000}
-                  count={extras?.restroom.female.count ?? 0}
-                  busy={busy === "female"}
-                  onClick={() => void charge("female")}
-                />
-              </div>
+              {/* Cobros rápidos baño. Dos pasos: elegir baño → elegir
+                  método de pago. Sin default de método (ver pendingBath). */}
+              {pendingBath === null ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <QuickChargeButton
+                    label="Baño H"
+                    price={2000}
+                    count={extras?.restroom.male.count ?? 0}
+                    busy={busy === "male"}
+                    onClick={() => setPendingBath("male")}
+                  />
+                  <QuickChargeButton
+                    label="Baño M"
+                    price={2000}
+                    count={extras?.restroom.female.count ?? 0}
+                    busy={busy === "female"}
+                    onClick={() => setPendingBath("female")}
+                  />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    border: `1px solid ${C.cacao}`,
+                    background: C.cream,
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: C.ink,
+                      }}
+                    >
+                      {pendingBath === "male" ? "Baño H" : "Baño M"} ·{" "}
+                      {fmt(2000)} — ¿cómo pagaron?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingBath(null)}
+                      aria-label="Cancelar cobro"
+                      style={{
+                        width: 24,
+                        height: 24,
+                        border: `1px solid ${C.sand}`,
+                        background: "transparent",
+                        color: C.mute,
+                        borderRadius: 999,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        lineHeight: 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {/* "Bold" se persiste como qr_bold — misma convención
+                        de unificación que en gastos. */}
+                    {(
+                      [
+                        { label: "💵 Efectivo", value: "efectivo" },
+                        { label: "📱 Bold", value: "qr_bold" },
+                      ] as const
+                    ).map((m) => (
+                      <button
+                        key={m.value}
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => void charge(pendingBath, m.value)}
+                        style={{
+                          flex: 1,
+                          padding: "10px 8px",
+                          border: `1px solid ${C.cacao}`,
+                          background: C.paper,
+                          borderRadius: 10,
+                          fontFamily: FONT_UI,
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: C.ink,
+                          cursor: busy !== null ? "wait" : "pointer",
+                          opacity: busy !== null ? 0.6 : 1,
+                        }}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Maleta */}
               <button

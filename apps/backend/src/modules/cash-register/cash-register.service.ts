@@ -201,11 +201,14 @@ export class CashRegisterService {
       });
       const cashIn = cashPayments._sum.amount ?? new Prisma.Decimal(0);
 
-      // Ingresos extra activos (no reversados) de esta sesión.
+      // Ingresos extra activos (no reversados) de esta sesión — SOLO
+      // los cobrados en efectivo entran a la caja física. Los pagados
+      // por Bold van al neto Bold, no al esperado en caja.
       const extraIncome = await tx.extraIncome.aggregate({
         where: {
           cash_register_session_id: open.id,
           status: "active",
+          method: PaymentMethod.efectivo,
         },
         _sum: { total_amount: true },
       });
@@ -285,6 +288,8 @@ export class CashRegisterService {
           await tx.extraIncome.create({
             data: {
               type: "manual",
+              // El sobrante es plata FÍSICA contada en la caja.
+              method: PaymentMethod.efectivo,
               amount: difference,
               quantity: 1,
               total_amount: difference,
@@ -336,6 +341,10 @@ export class CashRegisterService {
     totals_by_method: Record<PaymentMethod, { count: number; amount: number }>;
     payments_count: number;
     extra_income_total: number;
+    // Split por método: cash entra al esperado en caja física; bold
+    // entra al neto Bold del día. total = cash + bold.
+    extra_income_cash: number;
+    extra_income_bold: number;
     luggage_total: number;
     expenses_by_method: Record<PaymentMethod, number>;
     expenses_total: number;
@@ -376,14 +385,24 @@ export class CashRegisterService {
       where: { cash_register_session_id: sessionId },
     });
 
-    // Extras (ingresos baño / manual / etc) atribuidos a esta sesión.
-    const extras = await this.prisma.extraIncome.aggregate({
+    // Extras (ingresos baño / manual / etc) atribuidos a esta sesión,
+    // separados por método: efectivo → esperado en caja; Bold (tarjeta
+    // o QR) → neto Bold del día.
+    const extrasByMethod = await this.prisma.extraIncome.groupBy({
+      by: ["method"],
       where: {
         cash_register_session_id: sessionId,
         status: "active",
       },
       _sum: { total_amount: true },
     });
+    let extraCash = 0;
+    let extraBold = 0;
+    for (const row of extrasByMethod) {
+      const amount = Number(row._sum.total_amount ?? 0);
+      if (row.method === PaymentMethod.efectivo) extraCash += amount;
+      else extraBold += amount;
+    }
 
     // Luggage (cobros de guardarropa) atribuidos a esta sesión.
     const luggage = await this.prisma.luggageTicket.aggregate({
@@ -402,7 +421,9 @@ export class CashRegisterService {
       session,
       totals_by_method,
       payments_count: paymentsCount,
-      extra_income_total: Number(extras._sum.total_amount ?? 0),
+      extra_income_total: extraCash + extraBold,
+      extra_income_cash: extraCash,
+      extra_income_bold: extraBold,
       luggage_total: Number(luggage._sum.amount ?? 0),
       expenses_by_method: expensesSummary.by_method,
       expenses_total: expensesSummary.total,

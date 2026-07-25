@@ -696,6 +696,11 @@ model ExtraIncome {
   // Variante dentro del tipo. Para restroom: "male" | "female". Validado
   // en el service según el tipo. Nullable para tipos futuros sin variante.
   subtype       String?
+  // Método de pago del cobro. La UI ofrece Efectivo / Bold (Bold se
+  // persiste como qr_bold, misma convención que Expense — para el
+  // cuadre y el saldo tarjeta y QR netean juntos). Default efectivo
+  // para las filas históricas previas a esta columna.
+  method        PaymentMethod     @default(efectivo)
   // Precio unitario FORZADO por backend. Persistido en la fila para que
   // un cambio futuro de tarifa no altere los reportes históricos: cada
   // cobro mantiene el precio que regía en su momento.

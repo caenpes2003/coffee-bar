@@ -1,4 +1,13 @@
-import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  MinLength,
+} from "class-validator";
 import { Transform } from "class-transformer";
 import { sanitizeText } from "../../../common/sanitize";
 
@@ -22,6 +31,14 @@ export class CreateManualIncomeDto {
   @IsInt()
   @Min(1)
   amount!: number;
+
+  /**
+   * Método de pago. Opcional con default efectivo SOLO por
+   * retrocompatibilidad de deploy — la UI siempre lo pide.
+   */
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  method?: PaymentMethod;
 
   @IsOptional()
   @Transform(({ value }) => sanitizeText(value))

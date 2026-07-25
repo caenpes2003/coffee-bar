@@ -109,15 +109,15 @@ export class BarBalanceService {
       // negocio. El saldo del bar es "cuánta plata hay en total": lo
       // que entró por cobros menos lo que salió por gastos.
       //
-      // Los ingresos extra (baños, manuales) y el guardarropa se
-      // asumen SIEMPRE en efectivo (misma decisión operativa que el
-      // cierre) — suman al efectivo del bar.
+      // Los ingresos extra (baños, manuales) van al bolsillo de su
+      // método: efectivo → cash, Bold → bold. El guardarropa (sin
+      // método propio y sin uso operativo hoy) se asume efectivo.
       const [
         cashPayments,
         cashExpenses,
         boldPayments,
         boldExpenses,
-        extraIncome,
+        extrasByMethod,
         luggageIncome,
       ] = await Promise.all([
         this.prisma.payment.aggregate({
@@ -152,7 +152,8 @@ export class BarBalanceService {
           },
           _sum: { amount: true },
         }),
-        this.prisma.extraIncome.aggregate({
+        this.prisma.extraIncome.groupBy({
+          by: ["method"],
           where: {
             cash_register_session_id: { in: sessionIds },
             status: "active",
@@ -168,13 +169,22 @@ export class BarBalanceService {
         }),
       ]);
 
+      let extraCash = 0;
+      let extraBold = 0;
+      for (const row of extrasByMethod) {
+        const amount = Number(row._sum.total_amount ?? 0);
+        if (row.method === PaymentMethod.efectivo) extraCash += amount;
+        else extraBold += amount;
+      }
+
       cash +=
         Number(cashPayments._sum.amount ?? 0) +
-        Number(extraIncome._sum.total_amount ?? 0) +
+        extraCash +
         Number(luggageIncome._sum.amount ?? 0) -
         Number(cashExpenses._sum.amount ?? 0);
       bold +=
-        Number(boldPayments._sum.amount ?? 0) -
+        Number(boldPayments._sum.amount ?? 0) +
+        extraBold -
         Number(boldExpenses._sum.amount ?? 0);
     }
 

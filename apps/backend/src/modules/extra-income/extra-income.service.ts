@@ -8,6 +8,7 @@ import {
   ExtraIncome,
   ExtraIncomeStatus,
   ExtraIncomeType,
+  PaymentMethod,
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
@@ -61,6 +62,9 @@ export class ExtraIncomeService {
       data: {
         type: ExtraIncomeType.restroom,
         subtype: dto.subtype,
+        // default efectivo solo por retrocompat de deploy — la UI
+        // siempre manda el método explícito.
+        method: dto.method ?? PaymentMethod.efectivo,
         amount: new Prisma.Decimal(amount),
         quantity: 1,
         total_amount: new Prisma.Decimal(amount),
@@ -89,6 +93,7 @@ export class ExtraIncomeService {
       data: {
         type: ExtraIncomeType.manual,
         subtype: null,
+        method: dto.method ?? PaymentMethod.efectivo,
         amount: new Prisma.Decimal(dto.amount),
         quantity: 1,
         total_amount: new Prisma.Decimal(dto.amount),
