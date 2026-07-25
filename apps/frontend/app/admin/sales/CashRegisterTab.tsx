@@ -430,11 +430,11 @@ function DetailTicket({ detail }: { detail: CashRegisterSessionDetail }) {
   const bold = totals_by_method.tarjeta_bold.amount;
   const qr = totals_by_method.qr_bold.amount;
   const extras = detail.extra_income_total + detail.luggage_total;
-  // Split de extras por método: solo los de efectivo (+ guardarropa,
-  // que se asume efectivo) entran al esperado en caja; los de Bold
-  // van al neto Bold del día. Mismo criterio que el backend.
-  const extrasCash = detail.extra_income_cash + detail.luggage_total;
-  const extrasBold = detail.extra_income_bold;
+  // Split de extras y guardarropa por método: solo lo de efectivo
+  // entra al esperado en caja; lo de Bold va al neto Bold del día.
+  // Mismo criterio que el backend.
+  const extrasCash = detail.extra_income_cash + detail.luggage_cash;
+  const extrasBold = detail.extra_income_bold + detail.luggage_bold;
   const cashOut = detail.expenses_by_method.efectivo;
   const cardOut = detail.expenses_by_method.tarjeta_bold;
   const qrOut = detail.expenses_by_method.qr_bold;

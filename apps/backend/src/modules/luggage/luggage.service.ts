@@ -8,6 +8,7 @@ import {
   LuggagePaymentStatus,
   LuggageStatus,
   LuggageTicket,
+  PaymentMethod,
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
@@ -76,6 +77,9 @@ export class LuggageService {
             dto.payment_status === "paid"
               ? LuggagePaymentStatus.paid
               : LuggagePaymentStatus.pending,
+          // default efectivo solo por retrocompat de deploy — la UI
+          // siempre manda el método explícito cuando se cobra.
+          method: dto.method ?? PaymentMethod.efectivo,
           status: LuggageStatus.active,
           cash_register_session_id: cashSession.id,
           notes: dto.notes?.trim() || null,
@@ -282,6 +286,9 @@ export class LuggageService {
           dto.payment_status === "paid"
             ? LuggagePaymentStatus.paid
             : LuggagePaymentStatus.pending,
+        // El método viaja junto con el paso a paid. Si no viene (deploy
+        // viejo), se conserva el que tenga la fila.
+        ...(dto.method !== undefined ? { method: dto.method } : {}),
       },
     });
     return this.serialize(updated);

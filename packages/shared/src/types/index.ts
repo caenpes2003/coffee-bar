@@ -404,6 +404,9 @@ export interface CashRegisterSessionDetail {
   extra_income_cash: number;
   extra_income_bold: number;
   luggage_total: number;
+  // Guardarropa pagado, separado por método (misma lógica que extras).
+  luggage_cash: number;
+  luggage_bold: number;
   // Gastos netos (kind=expense - kind=reversal) por método. Los de
   // efectivo se restan del expected en caja; los de Bold se reflejan
   // en el "neto Bold del día" del ticket.

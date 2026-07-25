@@ -771,6 +771,11 @@ model LuggageTicket {
   customer_phone       String
   amount               Decimal              @db.Decimal(10, 2)
   payment_status       LuggagePaymentStatus @default(pending)
+  // Método con que se pagó. Solo significativo cuando payment_status
+  // = paid. Default efectivo únicamente para filas históricas — la UI
+  // siempre lo pide explícito (sin default) al cobrar. "Bold" se
+  // persiste como qr_bold (misma convención que Expense/ExtraIncome).
+  method               PaymentMethod        @default(efectivo)
   status               LuggageStatus        @default(active)
   notes                String?
   created_by           String?

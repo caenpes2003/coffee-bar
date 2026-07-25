@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { PaymentMethod } from "@coffee-bar/shared";
 import {
   luggageApi,
   type LuggageTicketApi,
@@ -36,6 +37,11 @@ export function LuggageNewModal({
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [paid, setPaid] = useState(true);
+  // Método de pago: obligatorio cuando paid=true y SIN default — el
+  // operador debe elegir con qué pagaron (mismo criterio que baños e
+  // ingresos manuales). Si queda pendiente, el método se pregunta al
+  // marcarla pagada después.
+  const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +82,7 @@ export function LuggageNewModal({
     firstName.trim().length > 0 &&
     lastName.trim().length > 0 &&
     /^\+?\d{7,15}$/.test(phone.replace(/\s+/g, "")) &&
+    (!paid || method !== null) &&
     !submitting;
 
   const submit = async () => {
@@ -89,6 +96,7 @@ export function LuggageNewModal({
         customer_last_name: lastName.trim(),
         customer_phone: phone.replace(/\s+/g, ""),
         payment_status: paid ? "paid" : "pending",
+        method: paid && method !== null ? method : undefined,
         notes: notes.trim() || undefined,
       });
       onCreated(created);
@@ -322,6 +330,60 @@ export function LuggageNewModal({
             </div>
             <PaymentToggle paid={paid} onChange={setPaid} />
           </section>
+
+          {/* Método de pago: solo aplica si se marca "Pagado". Sin
+              default — el operador debe elegir. */}
+          {paid && (
+            <section>
+              <Label>Método de pago</Label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {/* "Bold" se persiste como qr_bold — misma convención
+                    de unificación que en gastos y baños. */}
+                {(
+                  [
+                    { label: "💵 Efectivo", value: "efectivo" },
+                    { label: "📱 Bold", value: "qr_bold" },
+                  ] as const
+                ).map((m) => {
+                  const active = method === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => setMethod(m.value)}
+                      style={{
+                        flex: 1,
+                        padding: "10px 8px",
+                        border: `1px solid ${active ? C.gold : C.sand}`,
+                        background: active ? "#FBF3E4" : C.paper,
+                        borderRadius: 10,
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                        fontWeight: active ? 700 : 600,
+                        color: active ? C.ink : C.cacao,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {method === null && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 0.5,
+                    color: C.mute,
+                  }}
+                >
+                  Obligatorio — elige con qué pagaron
+                </div>
+              )}
+            </section>
+          )}
 
           <section>
             <Label>Notas (opcional)</Label>

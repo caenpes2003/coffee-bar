@@ -1,4 +1,5 @@
 import {
+  IsEnum,
   IsIn,
   IsInt,
   IsOptional,
@@ -9,6 +10,7 @@ import {
   MinLength,
 } from "class-validator";
 import { Transform } from "class-transformer";
+import { PaymentMethod } from "@prisma/client";
 import { sanitizeText } from "../../../common/sanitize";
 
 /**
@@ -49,6 +51,15 @@ export class CreateLuggageDto {
   @IsOptional()
   @IsIn(["pending", "paid"])
   payment_status?: "pending" | "paid";
+
+  /**
+   * Método de pago. Requerido operativamente cuando payment_status =
+   * paid (la UI lo obliga sin default); opcional acá solo por
+   * retrocompatibilidad de deploy. Sin él, cae a efectivo.
+   */
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  method?: PaymentMethod;
 
   @IsOptional()
   @Transform(({ value }) => sanitizeText(value))

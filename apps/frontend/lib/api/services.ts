@@ -1224,6 +1224,9 @@ export type LuggageTicketApi = {
   customer_phone: string;
   amount: number;
   payment_status: "pending" | "paid";
+  /** Método de pago. Significativo solo cuando payment_status=paid.
+   *  "Bold" se persiste como qr_bold (convención Expense/ExtraIncome). */
+  method: PaymentMethod;
   status: "active" | "delivered" | "incident";
   notes: string | null;
   created_by: string | null;
@@ -1253,6 +1256,8 @@ export const luggageApi = {
     customer_last_name: string;
     customer_phone: string;
     payment_status?: "pending" | "paid";
+    /** Obligatorio operativamente cuando payment_status=paid. */
+    method?: PaymentMethod;
     notes?: string;
   }): Promise<LuggageTicketApi> =>
     adminApi
@@ -1308,9 +1313,13 @@ export const luggageApi = {
   updatePayment: (
     id: number,
     payment_status: "pending" | "paid",
+    method?: PaymentMethod,
   ): Promise<LuggageTicketApi> =>
     adminApi
-      .patch<LuggageTicketApi>(`/admin/luggage/${id}/payment`, { payment_status })
+      .patch<LuggageTicketApi>(`/admin/luggage/${id}/payment`, {
+        payment_status,
+        method,
+      })
       .then((r) => r.data),
 };
 

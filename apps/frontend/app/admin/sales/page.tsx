@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { CashRegisterTab } from "./CashRegisterTab";
 import { ExpensesTab } from "./ExpensesTab";
 import { cashRegisterApi } from "@/lib/api/services";
-import type { CashRegisterSession } from "@coffee-bar/shared";
+import type { CashRegisterSession, PaymentMethod } from "@coffee-bar/shared";
 import {
   salesInsightsApi,
   extraIncomeApi,
@@ -3522,11 +3522,11 @@ function ExtrasTab({ range }: { range: DateRange }) {
     }
   };
 
-  const onMarkPaid = async (t: LuggageTicketApi) => {
+  const onMarkPaid = async (t: LuggageTicketApi, method: PaymentMethod) => {
     if (busyId) return;
     setBusyId(t.id);
     try {
-      await luggageApi.updatePayment(t.id, "paid");
+      await luggageApi.updatePayment(t.id, "paid", method);
       void load();
     } catch (e) {
       setError(getErrorMessage(e));
@@ -3708,7 +3708,7 @@ function ExtrasTab({ range }: { range: DateRange }) {
                     ticket={t}
                     busy={busyId === t.id}
                     onDeliver={() => void onDeliver(t)}
-                    onMarkPaid={() => void onMarkPaid(t)}
+                    onMarkPaid={(method) => void onMarkPaid(t, method)}
                     onIncident={() => setIncidentTarget(t)}
                   />
                 ))}
@@ -4080,10 +4080,13 @@ function LuggageActiveRow({
   ticket: LuggageTicketApi;
   busy: boolean;
   onDeliver: () => void;
-  onMarkPaid: () => void;
+  onMarkPaid: (method: PaymentMethod) => void;
   onIncident: () => void;
 }) {
   const paid = ticket.payment_status === "paid";
+  // Paso intermedio de "Marcar pagado": primero se pregunta el método
+  // (sin default) — mismo criterio que baños e ingresos manuales.
+  const [choosingMethod, setChoosingMethod] = useState(false);
   return (
     <tr style={{ borderBottom: `1px solid ${C.sand}` }}>
       <td
@@ -4155,16 +4158,52 @@ function LuggageActiveRow({
             justifyContent: "flex-end",
           }}
         >
-          {!paid && (
-            <button
-              type="button"
-              onClick={onMarkPaid}
-              disabled={busy}
-              style={smallActionBtn(C.olive)}
-            >
-              Marcar pagado
-            </button>
-          )}
+          {!paid &&
+            (choosingMethod ? (
+              <>
+                {/* "Bold" se persiste como qr_bold — convención de
+                    unificación. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChoosingMethod(false);
+                    onMarkPaid("efectivo");
+                  }}
+                  disabled={busy}
+                  style={smallActionBtn(C.olive)}
+                >
+                  💵 Efectivo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChoosingMethod(false);
+                    onMarkPaid("qr_bold");
+                  }}
+                  disabled={busy}
+                  style={smallActionBtn(C.olive)}
+                >
+                  📱 Bold
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChoosingMethod(false)}
+                  disabled={busy}
+                  style={smallActionBtn(C.mute)}
+                >
+                  ×
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setChoosingMethod(true)}
+                disabled={busy}
+                style={smallActionBtn(C.olive)}
+              >
+                Marcar pagado
+              </button>
+            ))}
           {/*
             Entrega bloqueada cuando la maleta está pending: el staff
             tiene que marcarla pagada primero. Esto evita que una maleta

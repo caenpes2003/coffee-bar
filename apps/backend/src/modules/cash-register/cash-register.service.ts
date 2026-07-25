@@ -10,6 +10,7 @@ import {
   CashRegisterStatus,
   ExpenseCategory,
   ExpenseKind,
+  LuggagePaymentStatus,
   PaymentMethod,
   Prisma,
 } from "@prisma/client";
@@ -180,13 +181,13 @@ export class CashRegisterService {
       // Calcular expected:
       //   opening_balance
       //   + cobros en efectivo del día (Payment)
-      //   + ingresos extra del día (baños, manuales, guardarropa)
+      //   + ingresos extra EN EFECTIVO del día (baños, manuales)
+      //   + guardarropa pagado EN EFECTIVO del día
       //   - gastos pagados en efectivo del día (netos: expense - reversal)
       //
-      // Los ingresos extra se asumen SIEMPRE en efectivo (decisión
-      // operativa: los baños y extras chicos se pagan en efectivo;
-      // ExtraIncome no trackea método). Entran a la caja física, así
-      // que suman al esperado.
+      // ExtraIncome y LuggageTicket trackean método: solo lo cobrado
+      // en efectivo entra a la caja física esperada; lo cobrado por
+      // Bold se reporta en el neto Bold del día.
       //
       // Los gastos pagados con tarjeta/QR Bold NO afectan la caja
       // física esperada — ese dinero nunca estuvo en caja, salió de
@@ -214,6 +215,22 @@ export class CashRegisterService {
       });
       const extraIn = extraIncome._sum.total_amount ?? new Prisma.Decimal(0);
 
+      // Guardarropa pagado en efectivo de esta sesión. Antes NO se
+      // sumaba al expected (el comentario lo prometía pero el aggregate
+      // no existía) — el banner del frontend sí lo sumaba, así que un
+      // día con maletas descuadraba contra la vista previa. Igual que
+      // los extras, solo el efectivo entra a la caja física.
+      const luggageIncome = await tx.luggageTicket.aggregate({
+        where: {
+          cash_register_session_id: open.id,
+          payment_status: LuggagePaymentStatus.paid,
+          method: PaymentMethod.efectivo,
+        },
+        _sum: { amount: true },
+      });
+      const luggageIn =
+        luggageIncome._sum.amount ?? new Prisma.Decimal(0);
+
       const cashExpenses = await tx.expense.aggregate({
         where: {
           cash_register_session_id: open.id,
@@ -228,6 +245,7 @@ export class CashRegisterService {
       const expected = new Prisma.Decimal(open.opening_balance)
         .add(cashIn)
         .add(extraIn)
+        .add(luggageIn)
         .sub(cashOut);
       const declared = new Prisma.Decimal(dto.closing_balance_declared);
       const difference = declared.sub(expected);
@@ -346,6 +364,8 @@ export class CashRegisterService {
     extra_income_cash: number;
     extra_income_bold: number;
     luggage_total: number;
+    luggage_cash: number;
+    luggage_bold: number;
     expenses_by_method: Record<PaymentMethod, number>;
     expenses_total: number;
     expenses_count: number;
@@ -404,14 +424,24 @@ export class CashRegisterService {
       else extraBold += amount;
     }
 
-    // Luggage (cobros de guardarropa) atribuidos a esta sesión.
-    const luggage = await this.prisma.luggageTicket.aggregate({
+    // Luggage (cobros de guardarropa) atribuidos a esta sesión,
+    // separados por método: efectivo entra al esperado en caja, Bold
+    // al neto Bold del día.
+    const luggageByMethod = await this.prisma.luggageTicket.groupBy({
+      by: ["method"],
       where: {
         cash_register_session_id: sessionId,
         payment_status: "paid",
       },
       _sum: { amount: true },
     });
+    let luggageCash = 0;
+    let luggageBold = 0;
+    for (const row of luggageByMethod) {
+      const amount = Number(row._sum.amount ?? 0);
+      if (row.method === PaymentMethod.efectivo) luggageCash += amount;
+      else luggageBold += amount;
+    }
 
     // Gastos atribuidos a esta sesión (netos: kind=expense suma,
     // kind=reversal resta). El service de Expenses encapsula la lógica.
@@ -424,7 +454,9 @@ export class CashRegisterService {
       extra_income_total: extraCash + extraBold,
       extra_income_cash: extraCash,
       extra_income_bold: extraBold,
-      luggage_total: Number(luggage._sum.amount ?? 0),
+      luggage_total: luggageCash + luggageBold,
+      luggage_cash: luggageCash,
+      luggage_bold: luggageBold,
       expenses_by_method: expensesSummary.by_method,
       expenses_total: expensesSummary.total,
       expenses_count: expensesSummary.count,
