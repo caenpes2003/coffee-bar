@@ -525,23 +525,28 @@ export class OrderRequestsService {
    *   - Items que SOLO tienen `quantity` (sin units) y mismo product_id
    *     se colapsan sumando cantidades. Esto preserva la vieja semántica
    *     de "2 + 3 cervezas = 5 cervezas en una línea".
-   *   - Items con `units` NO se colapsan: cada unidad puede tener una
-   *     composición distinta y perderíamos esa info.
+   *   - Items con `units` del mismo product_id TAMBIÉN se colapsan,
+   *     concatenando los arrays `units` (cada unidad conserva su
+   *     composición). Invariante que esto protege: UN OrderItem por
+   *     (order_id, product_id) — de ella dependen la clave
+   *     `${order_id}:${product_id}` de sales-insights y el enrich de
+   *     composición del BillView. Antes no se colapsaban y dos items
+   *     del mismo armable colgaban sus componentes del mismo OrderItem
+   *     con unit_index duplicados.
+   *   - Si el mismo product_id llega con units Y con quantity-solo, la
+   *     porción quantity se convierte en unidades `{}` (= composición
+   *     por defecto, que es lo que `resolveCompositionPlan` aplica a
+   *     los slots no especificados) y se concatena.
    *   - Valida que cada item tenga al menos `quantity` o `units`.
    */
   private normalizeItems(items: RequestItemInput[]): RequestItemInput[] {
     const simpleAggregated = new Map<number, number>();
-    const compositeItems: RequestItemInput[] = [];
+    const unitItemsByProduct = new Map<number, RequestItemInput[]>();
 
     for (const item of items) {
       const hasUnits = Array.isArray(item.units) && item.units.length > 0;
       const hasQuantity =
         typeof item.quantity === "number" && Number.isFinite(item.quantity);
-      if (hasUnits && hasQuantity) {
-        // Reglas: si vienen los dos, units.length === quantity. Lo
-        // valida el service en `resolveCompositionPlan` con el contexto
-        // de la receta.
-      }
       if (!hasUnits && !hasQuantity) {
         throw new BadRequestException({
           message: "Item must include `quantity` or `units`",
@@ -549,7 +554,9 @@ export class OrderRequestsService {
         });
       }
       if (hasUnits) {
-        compositeItems.push(item);
+        const list = unitItemsByProduct.get(item.product_id) ?? [];
+        list.push(item);
+        unitItemsByProduct.set(item.product_id, list);
         continue;
       }
       // Sólo quantity → puede agruparse con otros del mismo product_id.
@@ -566,10 +573,27 @@ export class OrderRequestsService {
       );
     }
 
-    const result: RequestItemInput[] = Array.from(
-      simpleAggregated.entries(),
-    ).map(([product_id, quantity]) => ({ product_id, quantity }));
-    result.push(...compositeItems);
+    const result: RequestItemInput[] = [];
+    for (const [productId, list] of unitItemsByProduct) {
+      const extraQty = simpleAggregated.get(productId);
+      if (list.length === 1 && extraQty === undefined) {
+        // Sin nada que fusionar: el item pasa intacto, conservando su
+        // `quantity` si vino (para que `resolveCompositionPlan` valide
+        // el mismatch quantity/units como siempre).
+        result.push(list[0]);
+        continue;
+      }
+      const units: UnitInput[] = list.flatMap((i) => i.units ?? []);
+      if (extraQty !== undefined) {
+        for (let k = 0; k < extraQty; k++) units.push({});
+        simpleAggregated.delete(productId);
+      }
+      // Al fusionar se omite `quantity`: la cantidad ES units.length.
+      result.push({ product_id: productId, units });
+    }
+    for (const [product_id, quantity] of simpleAggregated) {
+      result.push({ product_id, quantity });
+    }
     return result;
   }
 
@@ -821,18 +845,20 @@ export class OrderRequestsService {
   }
 
   /**
-   * Crea los OrderItem rows del plan. Devuelve un mapeo
-   * product_id → order_item_id para que el caller pueda crear
-   * después los OrderItemComponent rows por unidad.
+   * Crea los OrderItem rows del plan. Devuelve los ids creados
+   * ALINEADOS POR ÍNDICE con el plan — no un mapa por product_id:
+   * un mapa colapsaría dos líneas del mismo producto y colgaría los
+   * componentes de la línea equivocada (aunque `normalizeItems` ya
+   * fusiona duplicados, esto elimina la clase de bug de raíz).
    */
   private async createOrderItems(
     tx: Tx,
     orderId: number,
     plan: ResolvedItem[],
-  ): Promise<Map<number, number>> {
+  ): Promise<number[]> {
     // Una fila por línea del plan. Para compuestos, quantity = nro
     // de unidades. Para simples, igual.
-    const idsByProduct = new Map<number, number>();
+    const ids: number[] = [];
     for (const item of plan) {
       const created = await tx.orderItem.create({
         data: {
@@ -843,25 +869,27 @@ export class OrderRequestsService {
         },
         select: { id: true },
       });
-      idsByProduct.set(item.product_id, created.id);
+      ids.push(created.id);
     }
-    return idsByProduct;
+    return ids;
   }
 
   /**
    * Persiste los OrderItemComponent rows usando el plan. Una fila
    * por componente por unidad (unit_index identifica cuál de las N
-   * unidades). Productos simples no generan filas.
+   * unidades). Productos simples no generan filas. `orderItemIds`
+   * viene alineado por índice con `plan` (ver createOrderItems).
    */
   private async persistComponents(
     tx: Tx,
     plan: ResolvedItem[],
-    orderItemIdByProduct: Map<number, number>,
+    orderItemIds: number[],
   ) {
     const creates: Prisma.OrderItemComponentCreateManyInput[] = [];
-    for (const item of plan) {
+    for (let p = 0; p < plan.length; p++) {
+      const item = plan[p];
       if (item.composite_units.length === 0) continue;
-      const orderItemId = orderItemIdByProduct.get(item.product_id);
+      const orderItemId = orderItemIds[p];
       if (!orderItemId) continue;
       for (let i = 0; i < item.composite_units.length; i++) {
         const unit = item.composite_units[i];
