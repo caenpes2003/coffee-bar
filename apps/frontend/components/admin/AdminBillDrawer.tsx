@@ -504,7 +504,15 @@ export function AdminBillDrawer({
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 10 }}>
+            {/* Cluster de acciones compacto (feedback UX 2026-08): antes
+                eran 6 filas de botones apilados que se comían el drawer.
+                Ahora:
+                  fila 1 — agregar productos / descuento
+                  fila 2 — Cobrar y cerrar (LA acción primaria, solo si
+                           total > 0)
+                  fila 3 — secundarias en horizontal: Pago parcial ·
+                           Transferir · Anular (o Cerrar si total = 0) */}
+            <div style={{ display: "flex", gap: 8 }}>
               <button
                 type="button"
                 onClick={() => setActionOpen({ kind: "products" })}
@@ -523,12 +531,6 @@ export function AdminBillDrawer({
               </button>
             </div>
 
-            {/* Payment + close cluster.
-                Contextual rules:
-                  - total = 0 → only "Cerrar" (renamed from
-                    "Cerrar sin cobrar" since there's nothing to charge).
-                  - total > 0 → "Pago parcial" + "Cobrar y cerrar" +
-                    "Cerrar sin cobrar". */}
             <div
               style={{
                 display: "flex",
@@ -539,63 +541,67 @@ export function AdminBillDrawer({
               }}
             >
               {bill.summary.total > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setActionOpen({ kind: "partial_payment" })}
-                    className="crown-btn-primary"
-                    style={primaryActionStyle(false, C.gold)}
-                  >
-                    Registrar pago parcial
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmOpen({ kind: "mark-paid" })}
-                    disabled={paymentBusy != null}
-                    className="crown-btn-primary"
-                    style={primaryActionStyle(
-                      paymentBusy === "mark-paid",
-                      C.olive,
-                    )}
-                  >
-                    {paymentBusy === "mark-paid"
-                      ? "Cobrando..."
-                      : "Cobrar y cerrar cuenta"}
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => setConfirmOpen({ kind: "mark-paid" })}
+                  disabled={paymentBusy != null}
+                  className="crown-btn-primary"
+                  style={primaryActionStyle(
+                    paymentBusy === "mark-paid",
+                    C.olive,
+                  )}
+                >
+                  {paymentBusy === "mark-paid"
+                    ? "Cobrando..."
+                    : "Cobrar y cerrar cuenta"}
+                </button>
               )}
-              <button
-                type="button"
-                onClick={() => setTransferOpen(true)}
-                disabled={paymentBusy != null}
-                className="crown-btn-ghost"
-                style={secondaryActionStyle(false)}
-              >
-                Transferir cuenta
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (bill.summary.total > 0) {
-                    // Anular: requiere razón obligatoria por trazabilidad.
-                    setVoidOpen(true);
-                  } else {
-                    // Cuenta vacía (no se consumió nada): cierre simple sin
-                    // razón. El backend permite /close cuando paid_at != null
-                    // O cuando total = 0 (revisar service si cambia).
-                    setConfirmOpen({ kind: "close" });
-                  }
-                }}
-                disabled={paymentBusy != null}
-                className="crown-btn-ghost"
-                style={secondaryActionStyle(paymentBusy === "close")}
-              >
-                {paymentBusy === "close"
-                  ? "Cerrando..."
-                  : bill.summary.total > 0
-                    ? "Anular sin cobrar"
-                    : "Cerrar cuenta"}
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {bill.summary.total > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActionOpen({ kind: "partial_payment" })
+                    }
+                    className="crown-btn-ghost"
+                    style={secondaryActionStyle(false)}
+                  >
+                    Pago parcial
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setTransferOpen(true)}
+                  disabled={paymentBusy != null}
+                  className="crown-btn-ghost"
+                  style={secondaryActionStyle(false)}
+                >
+                  Transferir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (bill.summary.total > 0) {
+                      // Anular: requiere razón obligatoria por trazabilidad.
+                      setVoidOpen(true);
+                    } else {
+                      // Cuenta vacía (no se consumió nada): cierre simple
+                      // sin razón. El backend permite /close cuando
+                      // paid_at != null O cuando total = 0.
+                      setConfirmOpen({ kind: "close" });
+                    }
+                  }}
+                  disabled={paymentBusy != null}
+                  className="crown-btn-ghost"
+                  style={secondaryActionStyle(paymentBusy === "close")}
+                >
+                  {paymentBusy === "close"
+                    ? "Cerrando..."
+                    : bill.summary.total > 0
+                      ? "Anular"
+                      : "Cerrar cuenta"}
+                </button>
+              </div>
             </div>
           </footer>
         )}
@@ -1934,36 +1940,38 @@ function stepperBtnStyle(disabled: boolean): React.CSSProperties {
   };
 }
 
+// Tipografía de los botones de acción: Manrope (FONT_UI) y no la
+// display condensada — feedback del dueño: "Cobrar y cerrar" en Bebas
+// con letter-spacing 2.5 era menos legible que los botones secundarios.
 function adjustmentButtonStyle(borderColor: string): React.CSSProperties {
   return {
     flex: 1,
-    padding: "12px 0",
+    padding: "10px 0",
     border: `1px solid ${borderColor}`,
     borderRadius: 999,
     background: C.paper,
     color: C.ink,
-    fontFamily: FONT_DISPLAY,
+    fontFamily: FONT_UI,
     fontSize: 13,
-    letterSpacing: 2.5,
+    fontWeight: 700,
+    letterSpacing: 0.3,
     cursor: "pointer",
-    textTransform: "uppercase",
   };
 }
 
 function primaryActionStyle(busy: boolean, accent: string): React.CSSProperties {
   return {
     flex: 1,
-    padding: "12px 14px",
+    padding: "13px 14px",
     border: "none",
     borderRadius: 999,
     background: busy ? C.sand : accent,
     color: busy ? C.mute : C.paper,
-    fontFamily: FONT_DISPLAY,
-    fontSize: 13,
-    letterSpacing: 2.5,
+    fontFamily: FONT_UI,
+    fontSize: 14.5,
+    fontWeight: 800,
+    letterSpacing: 0.4,
     cursor: busy ? "not-allowed" : "pointer",
-    textTransform: "uppercase",
-    fontWeight: 600,
     opacity: busy ? 0.7 : 1,
   };
 }
@@ -1974,18 +1982,18 @@ function secondaryActionStyle(busy: boolean): React.CSSProperties {
   // primary thing here" without screaming danger like burgundy did.
   return {
     flex: 1,
-    padding: "10px 14px",
+    padding: "10px 8px",
     border: `1px solid ${C.sandDark}`,
     borderRadius: 999,
     background: "transparent",
     color: C.cacao,
-    fontFamily: FONT_MONO,
-    fontSize: 11,
-    letterSpacing: 2,
-    cursor: busy ? "not-allowed" : "pointer",
-    textTransform: "uppercase",
+    fontFamily: FONT_UI,
+    fontSize: 12.5,
     fontWeight: 700,
+    letterSpacing: 0.3,
+    cursor: busy ? "not-allowed" : "pointer",
     opacity: busy ? 0.6 : 1,
+    whiteSpace: "nowrap" as const,
   };
 }
 
