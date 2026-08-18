@@ -360,12 +360,23 @@ function PlayerAccessCode() {
 
   useEffect(() => {
     let cancelled = false;
+    // La clave de la TV viaja en la URL (`/player?k=...`), no en el
+    // build: /player sigue siendo público (la música se ve igual en
+    // cualquier dispositivo) pero el CÓDIGO solo aparece en la TV del
+    // bar, cuya URL guardada incluye la clave. Sin clave (o clave
+    // mala) el backend responde 403 y este widget simplemente no se
+    // renderiza.
+    const key =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("k") ?? undefined
+        : undefined;
     const load = async () => {
       try {
-        const data = await accessCodeApi.getForDisplay();
+        const data = await accessCodeApi.getForDisplay(key);
         if (!cancelled) setCode(data.code);
       } catch {
-        // Public endpoint, but don't crash the whole player if it fails.
+        // Sin clave válida (o red caída): el player sigue funcionando,
+        // solo se oculta el código.
         if (!cancelled) setCode(null);
       }
     };

@@ -83,12 +83,12 @@ export const accessCodeApi = {
     adminApi.get("/access-code/current").then((r) => r.data),
   /**
    * Lectura para la TV del bar. Protegido server-side con la clave
-   * de despliegue `PLAYER_DISPLAY_KEY` (F3): antes era público y
-   * cualquiera en internet podía leer el código en claro. La TV
-   * recibe la clave en su build/URL vía NEXT_PUBLIC_PLAYER_DISPLAY_KEY.
+   * `PLAYER_DISPLAY_KEY` (F3). La clave viaja en la URL de la TV
+   * (`/player?k=...`) — NUNCA por env NEXT_PUBLIC: esas variables se
+   * hornean en el bundle público y cualquiera que abriera /player
+   * (o leyera el JS) obtenía el código igual, anulando el candado.
    */
-  getForDisplay: (): Promise<AccessCodePayload> => {
-    const key = process.env.NEXT_PUBLIC_PLAYER_DISPLAY_KEY;
+  getForDisplay: (key?: string): Promise<AccessCodePayload> => {
     const suffix = key ? `?k=${encodeURIComponent(key)}` : "";
     return publicApi
       .get(`/access-code/display${suffix}`)
