@@ -23,6 +23,11 @@ import {
   type ProductRecipeSlotView,
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
+import {
+  compositionUnitsDiffer,
+  describeUnit,
+  summarizeComposition,
+} from "@/lib/composition";
 import type {
   BillView,
   Consumption,
@@ -905,6 +910,45 @@ function LedgerList({
                   >
                     {c.description}
                   </div>
+                  {/* Composición real del compuesto (cubetazos): qué
+                      botellas/latas salieron. Sin esto un "Cubetazo Mix"
+                      4+2 se ve idéntico a uno 3+3. */}
+                  {c.composition && c.composition.length > 0 && (
+                    <div
+                      style={{
+                        fontFamily: FONT_UI,
+                        fontSize: 11.5,
+                        color: C.cacao,
+                        marginTop: 2,
+                      }}
+                    >
+                      {summarizeComposition(c.composition)}
+                      {compositionUnitsDiffer(c.composition) && (
+                        <details style={{ marginTop: 2 }}>
+                          <summary
+                            style={{
+                              cursor: "pointer",
+                              fontFamily: FONT_MONO,
+                              fontSize: 9.5,
+                              letterSpacing: 1,
+                              color: C.mute,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Ver por unidad
+                          </summary>
+                          {c.composition.map((u) => (
+                            <div
+                              key={u.unit_index}
+                              style={{ fontSize: 11, marginTop: 2 }}
+                            >
+                              Unidad {u.unit_index + 1}: {describeUnit(u)}
+                            </div>
+                          ))}
+                        </details>
+                      )}
+                    </div>
+                  )}
                   <div
                     style={{
                       fontFamily: FONT_MONO,

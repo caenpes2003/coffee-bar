@@ -13,6 +13,8 @@
     "db:import-products": "tsx prisma/import-products.ts",
     "// seed:recipes": "Idempotent: assigns SKUs + creates the new aguila/poker armable products + loads recipes for all 29 existing composites. Safe to run on production multiple times.",
     "seed:recipes": "tsx prisma/seed-recipes.ts",
+    "// seed:buckets-v2": "Idempotent: per-brand buckets with botella/lata picker (armables), deactivates the old fixed buckets. Safe to run on production multiple times.",
+    "seed:buckets-v2": "tsx prisma/seed-buckets-v2.ts",
     "// db:ensure-tables": "Idempotent: makes sure all numbered tables exist. Safe in production.",
     "db:ensure-tables": "tsx prisma/ensure-tables.ts",
     "// qr:tokens": "Print tokens + URLs and (optionally) write JSON. Set QR_BASE_URL=https://crown490.com.",

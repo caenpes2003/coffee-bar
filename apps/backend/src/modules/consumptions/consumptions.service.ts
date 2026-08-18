@@ -67,6 +67,20 @@ export type BillView = {
   items: ReturnType<ConsumptionsService["serialize"]>[];
 };
 
+// Composición real de un compuesto vendido (qué salió físicamente),
+// reconstruida desde OrderItemComponent. `product_id` del componente
+// viaja además del nombre porque el admin lo necesita para repetir la
+// línea con la misma composición (armar el payload units del quickAdd).
+export type BillLineComponent = {
+  product_id: number;
+  name: string;
+  quantity: number;
+};
+export type BillLineUnit = {
+  unit_index: number;
+  components: BillLineComponent[];
+};
+
 @Injectable()
 export class ConsumptionsService {
   constructor(
@@ -101,6 +115,8 @@ export class ConsumptionsService {
       orderBy: { created_at: "asc" },
     });
 
+    const compositions = await this.loadCompositionsForConsumptions(items);
+
     return {
       session_id: session.id,
       table_id: session.table_id,
@@ -109,8 +125,70 @@ export class ConsumptionsService {
       closed_at: session.closed_at,
       last_consumption_at: session.last_consumption_at,
       summary: this.summarize(items),
-      items: items.map((c) => this.serialize(c)),
+      items: items.map((c) => this.serialize(c, compositions)),
     };
+  }
+
+  /**
+   * Composición real de las líneas de producto de la cuenta,
+   * reconstruida desde OrderItemComponent — mismo patrón batch que el
+   * ticket de sesiones cerradas (sales-insights): una sola query por
+   * los order_ids presentes, mapeada por `${order_id}:${product_id}`
+   * (clave única gracias a la invariante "un OrderItem por
+   * (order_id, product_id)" que protege normalizeItems).
+   *
+   * El Consumption no guarda la mezcla (description es solo el nombre
+   * del producto); esta es la única fuente de verdad de qué botellas/
+   * latas salieron en cada cubetazo, y la cuenta viva la necesita para
+   * que "Cubetazo Mix" no se vea idéntico con 4+2 que con 3+3.
+   */
+  private async loadCompositionsForConsumptions(
+    items: Array<Pick<Consumption, "order_id" | "type">>,
+  ): Promise<Map<string, BillLineUnit[]>> {
+    const orderIds = new Set<number>();
+    for (const c of items) {
+      if (c.type === ConsumptionType.product && c.order_id != null) {
+        orderIds.add(c.order_id);
+      }
+    }
+    const map = new Map<string, BillLineUnit[]>();
+    if (orderIds.size === 0) return map;
+
+    const orderItems = await this.prisma.orderItem.findMany({
+      where: { order_id: { in: Array.from(orderIds) } },
+      select: {
+        order_id: true,
+        product_id: true,
+        components: {
+          select: {
+            unit_index: true,
+            quantity: true,
+            component_product_id: true,
+            component_product: { select: { name: true } },
+          },
+          orderBy: { unit_index: "asc" },
+        },
+      },
+    });
+
+    for (const oi of orderItems) {
+      if (oi.components.length === 0) continue;
+      const byUnit = new Map<number, BillLineComponent[]>();
+      for (const c of oi.components) {
+        const arr = byUnit.get(c.unit_index) ?? [];
+        arr.push({
+          product_id: c.component_product_id,
+          name: c.component_product.name,
+          quantity: c.quantity,
+        });
+        byUnit.set(c.unit_index, arr);
+      }
+      const units: BillLineUnit[] = Array.from(byUnit.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([unit_index, components]) => ({ unit_index, components }));
+      map.set(`${oi.order_id}:${oi.product_id}`, units);
+    }
+    return map;
   }
 
   async createAdjustment(
@@ -583,7 +661,22 @@ export class ConsumptionsService {
     await this.emitBillSnapshot(sessionId, tableId);
   }
 
-  serialize(consumption: ConsumptionFull) {
+  serialize(
+    consumption: ConsumptionFull,
+    compositions?: Map<string, BillLineUnit[]>,
+  ) {
+    // La composición solo aplica a líneas de producto con orden; para
+    // el resto (y para call sites que no la cargan) queda undefined —
+    // el campo es aditivo/opcional en el shape del BillView.
+    const composition =
+      compositions !== undefined &&
+      consumption.type === ConsumptionType.product &&
+      consumption.order_id != null &&
+      consumption.product_id != null
+        ? compositions.get(
+            `${consumption.order_id}:${consumption.product_id}`,
+          )
+        : undefined;
     return {
       ...consumption,
       unit_amount: Number(consumption.unit_amount),
@@ -591,6 +684,9 @@ export class ConsumptionsService {
       reverses: consumption.reverses
         ? { ...consumption.reverses, amount: Number(consumption.reverses.amount) }
         : null,
+      // undefined se omite en el JSON — el campo solo viaja cuando hay
+      // composición real que mostrar.
+      composition,
     };
   }
 }

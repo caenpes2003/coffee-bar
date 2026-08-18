@@ -15,7 +15,13 @@
 import { useMemo, useState } from "react";
 import { tableSessionsApi } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
-import type { BillView, Consumption, TableSession } from "@coffee-bar/shared";
+import { summarizeComposition } from "@/lib/composition";
+import type {
+  BillLineUnit,
+  BillView,
+  Consumption,
+  TableSession,
+} from "@coffee-bar/shared";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -53,6 +59,9 @@ type Line = {
   amount: number;
   type: Consumption["type"];
   reason: string | null;
+  // Composición real por unidad (cubetazos armables). Al consolidar
+  // varias filas en una línea se concatenan las unidades de todas.
+  composition?: BillLineUnit[];
 };
 
 interface Props {
@@ -87,6 +96,12 @@ export function CustomerBillModal({
       if (existing) {
         existing.quantity += c.quantity;
         existing.amount += Number(c.amount);
+        if (c.composition && c.composition.length > 0) {
+          existing.composition = [
+            ...(existing.composition ?? []),
+            ...c.composition,
+          ];
+        }
       } else {
         byKey.set(key, {
           key,
@@ -96,6 +111,7 @@ export function CustomerBillModal({
           amount: Number(c.amount),
           type: c.type,
           reason: c.reason,
+          composition: c.composition,
         });
       }
     }
@@ -325,15 +341,31 @@ export function CustomerBillModal({
                       fontSize: 14,
                     }}
                   >
-                    <span
-                      style={{
-                        color: C.ink,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {l.description}
+                    <span style={{ minWidth: 0 }}>
+                      <span
+                        style={{
+                          display: "block",
+                          color: C.ink,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {l.description}
+                      </span>
+                      {/* Qué salió en el cubetazo (botella/lata). */}
+                      {l.composition && l.composition.length > 0 && (
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: 11,
+                            color: C.cacao,
+                            marginTop: 1,
+                          }}
+                        >
+                          {summarizeComposition(l.composition)}
+                        </span>
+                      )}
                     </span>
                     <span
                       style={{

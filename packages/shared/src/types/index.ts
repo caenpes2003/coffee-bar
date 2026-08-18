@@ -282,6 +282,22 @@ export interface Order {
   };
 }
 
+/**
+ * Componente físico servido dentro de una unidad de un producto
+ * compuesto (ej. una botella de Águila dentro de un cubetazo).
+ * Reconstruido server-side desde OrderItemComponent.
+ */
+export interface BillLineComponent {
+  product_id: number;
+  name: string;
+  quantity: number;
+}
+
+export interface BillLineUnit {
+  unit_index: number;
+  components: BillLineComponent[];
+}
+
 export interface Consumption {
   id: number;
   table_session_id: number;
@@ -292,6 +308,13 @@ export interface Consumption {
   unit_amount: number;
   amount: number;
   type: ConsumptionType;
+  /**
+   * Composición real por unidad para líneas de producto compuesto
+   * (qué botellas/latas salieron en cada cubetazo). Solo presente en
+   * type=product de compuestos dentro del BillView; ausente en
+   * simples y en los demás tipos.
+   */
+  composition?: BillLineUnit[];
   reversed_at: string | null;
   reverses_id: number | null;
   reason: string | null;
