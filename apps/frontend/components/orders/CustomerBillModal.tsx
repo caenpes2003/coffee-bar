@@ -62,6 +62,9 @@ type Line = {
   // Composición real por unidad (cubetazos armables). Al consolidar
   // varias filas en una línea se concatenan las unidades de todas.
   composition?: BillLineUnit[];
+  // Unidades ya cubiertas por pagos parciales (suma de las filas
+  // consolidadas). Solo líneas de producto.
+  paid_quantity?: number;
 };
 
 interface Props {
@@ -96,6 +99,8 @@ export function CustomerBillModal({
       if (existing) {
         existing.quantity += c.quantity;
         existing.amount += Number(c.amount);
+        existing.paid_quantity =
+          (existing.paid_quantity ?? 0) + (c.paid_quantity ?? 0);
         if (c.composition && c.composition.length > 0) {
           existing.composition = [
             ...(existing.composition ?? []),
@@ -112,21 +117,49 @@ export function CustomerBillModal({
           type: c.type,
           reason: c.reason,
           composition: c.composition,
+          paid_quantity: c.paid_quantity ?? 0,
         });
       }
     }
     return Array.from(byKey.values());
   }, [bill]);
 
+  // Los pagos parciales tienen su propia sección — un pago NO es un
+  // "ajuste" y mostrarlo ahí confundía al cliente.
   const adjustmentLines = useMemo<Line[]>(() => {
     if (!bill) return [];
     return bill.items
       .filter(
-        (c) => c.type !== "product" && c.reversed_at == null,
+        (c) =>
+          c.type !== "product" &&
+          c.type !== "partial_payment" &&
+          c.reversed_at == null,
       )
       .map((c) => ({
         key: `adj-${c.id}`,
         description: c.description,
+        quantity: c.quantity,
+        unit_amount: Number(c.unit_amount),
+        amount: Number(c.amount),
+        type: c.type,
+        reason: c.reason,
+      }));
+  }, [bill]);
+
+  const paymentLines = useMemo<Line[]>(() => {
+    if (!bill) return [];
+    return bill.items
+      .filter(
+        (c) => c.type === "partial_payment" && c.reversed_at == null,
+      )
+      .map((c) => ({
+        key: `pay-${c.id}`,
+        description:
+          c.allocations && c.allocations.length > 0
+            ? `Pago parcial · ${c.allocations
+                .map((a) => `${a.quantity}× ${a.description}`)
+                .join(" · ")}`
+            : c.description,
         quantity: c.quantity,
         unit_amount: Number(c.unit_amount),
         amount: Number(c.amount),
@@ -288,7 +321,10 @@ export function CustomerBillModal({
             </p>
           )}
 
-          {bill != null && productLines.length === 0 && adjustmentLines.length === 0 && (
+          {bill != null &&
+            productLines.length === 0 &&
+            adjustmentLines.length === 0 &&
+            paymentLines.length === 0 && (
             <p
               style={{
                 padding: "40px 20px",
@@ -364,6 +400,29 @@ export function CustomerBillModal({
                           }}
                         >
                           {summarizeComposition(l.composition)}
+                        </span>
+                      )}
+                      {/* Estado de pago por línea: qué tanto de esta
+                          línea ya cubrieron los pagos parciales. */}
+                      {(l.paid_quantity ?? 0) > 0 && (
+                        <span
+                          style={{
+                            display: "inline-block",
+                            marginTop: 3,
+                            padding: "1px 8px",
+                            background: C.oliveSoft,
+                            color: C.olive,
+                            borderRadius: 999,
+                            fontFamily: FONT_MONO,
+                            fontSize: 9,
+                            letterSpacing: 1,
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {(l.paid_quantity ?? 0) >= l.quantity
+                            ? "Pagado"
+                            : `${l.paid_quantity}/${l.quantity} pagados`}
                         </span>
                       )}
                     </span>
@@ -459,6 +518,61 @@ export function CustomerBillModal({
                         fontFamily: FONT_DISPLAY,
                         fontSize: 16,
                         color: l.amount < 0 ? C.olive : C.ink,
+                      }}
+                    >
+                      {fmt(l.amount)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {bill != null && paymentLines.length > 0 && (
+            <section style={{ marginBottom: 16 }}>
+              <h3
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9,
+                  letterSpacing: 2,
+                  color: C.mute,
+                  textTransform: "uppercase",
+                  fontWeight: 700,
+                  margin: "0 0 6px",
+                }}
+              >
+                — Pagos realizados
+              </h3>
+              <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                {paymentLines.map((l) => (
+                  <li
+                    key={l.key}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: 10,
+                      padding: "8px 0",
+                      borderBottom: `1px solid ${C.sand}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        minWidth: 0,
+                        flex: 1,
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                        color: C.ink,
+                      }}
+                    >
+                      {l.description}
+                    </div>
+                    <span
+                      style={{
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: 16,
+                        color: C.olive,
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {fmt(l.amount)}

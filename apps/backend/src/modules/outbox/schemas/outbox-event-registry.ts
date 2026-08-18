@@ -107,6 +107,33 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     return errors;
   },
 
+  // Asignación de un pago parcial a líneas de producto específicas
+  // ("cada quien paga lo suyo"). Se emite junto al consumption.created
+  // del partial_payment, en la misma tx. Las asignaciones referencian
+  // Consumptions por external_id (estable cross-nodo).
+  "partial_payment.allocated": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "payment_consumption_external_id", errors);
+    requireNumber(payload, "table_session_id", errors);
+    const allocations = payload["allocations"];
+    if (!Array.isArray(allocations) || allocations.length === 0) {
+      errors.push("allocations must be a non-empty array");
+      return errors;
+    }
+    for (const [i, a] of allocations.entries()) {
+      if (!isObject(a)) {
+        errors.push(`allocations[${i}] must be an object`);
+        continue;
+      }
+      requireExternalId(a, "external_id", errors);
+      requireExternalId(a, "product_consumption_external_id", errors);
+      requireNumber(a, "quantity", errors);
+      requireNumber(a, "amount", errors);
+    }
+    return errors;
+  },
+
   // ─── TableSession ────────────────────────────────────────────────────
   // session.opened: apertura inicial. payload es la TableSession recién
   // creada.

@@ -603,10 +603,49 @@ model Consumption {
   reversal          Consumption?    @relation("ConsumptionReversal")
   // Inversa: el Payment(kind=partial) que enlaza con este Consumption.
   payment           Payment?        @relation("PaymentConsumption")
+  // Asignaciones de pagos parciales: como pago (este Consumption es el
+  // partial_payment que cubre líneas) o como producto cubierto.
+  allocations_as_payment PartialPaymentAllocation[] @relation("AllocationPayment")
+  allocations_as_product PartialPaymentAllocation[] @relation("AllocationProduct")
 
   @@index([table_session_id, created_at])
   @@index([cash_register_session_id, created_at])
   @@index([order_id])
+}
+
+// ─── Asignación de pagos parciales a líneas de producto ──────────────────
+//
+// "Cada quien paga lo suyo": un pago parcial puede declarar QUÉ líneas
+// de la cuenta cubre y cuántas unidades de cada una. Sin asignaciones,
+// el parcial sigue siendo un monto libre (modo clásico).
+//
+// Regla de vida: una asignación CUENTA solo si su payment_consumption
+// no está reversado (payment_consumption.reversed_at IS NULL). Nunca
+// se borra:
+//   - Reversar el pago parcial → sus asignaciones dejan de contar y
+//     las líneas vuelven a "pendiente" automáticamente.
+//   - Devolver un producto con asignaciones vivas está BLOQUEADO
+//     (409 PRODUCT_HAS_LIVE_ALLOCATIONS): primero se reversa el pago
+//     que lo cubre — mantiene la contabilidad consistente.
+//
+// `amount` se calcula server-side (unit_amount × quantity del producto)
+// y la suma de asignaciones debe cuadrar con el monto del pago.
+model PartialPaymentAllocation {
+  id                     Int         @id @default(autoincrement())
+  // external_id para sync cross-nodo. Ver ARQUITECTURA.md §3.
+  external_id            String      @unique @default(uuid())
+  // Consumption(type=partial_payment) que paga.
+  payment_consumption_id Int
+  // Consumption(type=product) que se paga.
+  product_consumption_id Int
+  quantity               Int
+  amount                 Decimal     @db.Decimal(10, 2)
+  created_at             DateTime    @default(now())
+  payment_consumption    Consumption @relation("AllocationPayment", fields: [payment_consumption_id], references: [id], onDelete: Cascade)
+  product_consumption    Consumption @relation("AllocationProduct", fields: [product_consumption_id], references: [id], onDelete: Cascade)
+
+  @@index([payment_consumption_id])
+  @@index([product_consumption_id])
 }
 
 model PlaybackState {

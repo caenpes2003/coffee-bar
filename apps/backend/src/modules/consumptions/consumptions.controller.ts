@@ -86,6 +86,7 @@ export class ConsumptionsController {
       dto.amount,
       toActor(auth),
       dto.payment_method,
+      dto.allocations,
     );
     if (auth && auth.kind === "admin") {
       void this.audit.record({

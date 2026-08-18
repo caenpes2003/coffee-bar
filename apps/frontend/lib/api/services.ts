@@ -373,11 +373,15 @@ export const billApi = {
     sessionId: number,
     amount: number,
     payment_method: PaymentMethod,
+    /** Modo "por productos": qué líneas cubre este pago. El monto por
+     *  línea lo calcula el server; `amount` debe cuadrar con la suma. */
+    allocations?: Array<{ consumption_id: number; quantity: number }>,
   ): Promise<Consumption> =>
     adminApi
       .post<Consumption>(`/bill/${sessionId}/partial-payment`, {
         amount,
         payment_method,
+        allocations,
       })
       .then((r) => r.data),
 };

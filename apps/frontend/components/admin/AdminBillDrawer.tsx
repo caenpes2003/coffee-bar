@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSocket } from "@/lib/socket/useSocket";
 import {
+  adminProductsApi,
   billApi,
   orderRequestsApi,
   paymentsApi,
@@ -24,6 +25,7 @@ import {
 } from "@/lib/api/services";
 import { getErrorMessage } from "@/lib/errors";
 import {
+  buildUnitsFromComposition,
   compositionUnitsDiffer,
   describeUnit,
   summarizeComposition,
@@ -132,6 +134,15 @@ export function AdminBillDrawer({
   // Transferencia de cuenta a otra mesa/barra (los clientes se
   // cambiaron de sitio). Modal con destinos libres + "barra nueva".
   const [transferOpen, setTransferOpen] = useState(false);
+  // Botón "+ Repetir" de una línea: id del Consumption en vuelo, y
+  // picker manual de composición cuando la receta cambió desde la
+  // venta y la composición vieja ya no se puede replicar.
+  const [repeatBusyId, setRepeatBusyId] = useState<number | null>(null);
+  const [repeatPicker, setRepeatPicker] = useState<null | {
+    productId: number;
+    productName: string;
+    slots: ProductRecipeSlotView[];
+  }>(null);
 
   const load = useCallback(() => {
     if (sessionId == null) return;
@@ -185,6 +196,51 @@ export function AdminBillDrawer({
       }
     },
   });
+
+  /**
+   * "+ Repetir": agrega 1 unidad igual a la línea. Para compuestos
+   * replica la composición REAL de esta venta (primera unidad de la
+   * línea) vía quickAdd con `units`; si la receta cambió y ya no
+   * encaja, cae al CompositionPicker manual. La cuenta se actualiza
+   * cuando la orden resultante se marque entregada (mismo flujo que
+   * "+ Productos").
+   */
+  async function handleRepeatLine(c: Consumption) {
+    if (sessionId == null || c.product_id == null) return;
+    setRepeatBusyId(c.id);
+    setPaymentError(null);
+    try {
+      if (!c.composition || c.composition.length === 0) {
+        // Producto simple: repetir es solo quantity 1.
+        await orderRequestsApi.quickAdd({
+          table_session_id: sessionId,
+          items: [{ product_id: c.product_id, quantity: 1 }],
+        });
+        return;
+      }
+      const slots = await adminProductsApi.getRecipe(c.product_id);
+      const units = buildUnitsFromComposition(slots, [c.composition[0]]);
+      if (units == null) {
+        setRepeatPicker({
+          productId: c.product_id,
+          productName: c.description,
+          slots,
+        });
+        setPaymentError(
+          "La receta del producto cambió — arma la composición de nuevo.",
+        );
+        return;
+      }
+      await orderRequestsApi.quickAdd({
+        table_session_id: sessionId,
+        items: [{ product_id: c.product_id, units }],
+      });
+    } catch (err) {
+      setPaymentError(getErrorMessage(err));
+    } finally {
+      setRepeatBusyId(null);
+    }
+  }
 
   async function runPaymentAction(kind: "mark-paid" | "close") {
     if (sessionId == null) return;
@@ -380,6 +436,8 @@ export function AdminBillDrawer({
                     defaultDescription: c.description,
                   })
                 }
+                onRepeat={(c) => void handleRepeatLine(c)}
+                repeatBusyId={repeatBusyId}
               />
               {payments.length > 0 && (
                 <PaymentsList
@@ -567,9 +625,29 @@ export function AdminBillDrawer({
           sessionId={sessionId}
           consumptionId={actionOpen.consumptionId}
           defaultDescription={actionOpen.defaultDescription}
+          billItems={bill?.items}
           onClose={() => setActionOpen(null)}
           onDone={() => {
             setActionOpen(null);
+          }}
+        />
+      )}
+
+      {repeatPicker && sessionId != null && (
+        <CompositionPicker
+          productName={repeatPicker.productName}
+          slots={repeatPicker.slots}
+          showStock
+          onCancel={() => setRepeatPicker(null)}
+          onPick={(composition) => {
+            const productId = repeatPicker.productId;
+            setRepeatPicker(null);
+            void orderRequestsApi
+              .quickAdd({
+                table_session_id: sessionId,
+                items: [{ product_id: productId, units: [{ composition }] }],
+              })
+              .catch((e: unknown) => setPaymentError(getErrorMessage(e)));
           }}
         />
       )}
@@ -762,11 +840,30 @@ function BillHeader({
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 function SummaryGrid({ summary }: { summary: BillView["summary"] }) {
+  // Con pagos parciales, el "total" del summary ya es el PENDIENTE
+  // (los parciales son negativos en la suma). Mostrarlos como fila y
+  // renombrar la última línea evita que el staff lea el pendiente
+  // como si fuera el consumo total.
+  const hasPartials = summary.partial_payments_total !== 0;
   const rows: { label: string; value: number; color: string; bold?: boolean }[] = [
     { label: "Subtotal", value: summary.subtotal, color: C.ink },
     { label: "Descuentos", value: summary.discounts_total, color: C.cacao },
     { label: "Ajustes", value: summary.adjustments_total, color: C.cacao },
-    { label: "Total", value: summary.total, color: C.gold, bold: true },
+    ...(hasPartials
+      ? [
+          {
+            label: "Pagos parciales",
+            value: summary.partial_payments_total,
+            color: C.olive,
+          },
+        ]
+      : []),
+    {
+      label: hasPartials ? "Pendiente" : "Total",
+      value: summary.total,
+      color: C.gold,
+      bold: true,
+    },
   ];
   return (
     <div
@@ -824,10 +921,15 @@ function LedgerList({
   items,
   readOnly,
   onRefund,
+  onRepeat,
+  repeatBusyId,
 }: {
   items: Consumption[];
   readOnly: boolean;
   onRefund: (c: Consumption) => void;
+  /** Repetir la línea: agrega 1 unidad igual (misma composición). */
+  onRepeat: (c: Consumption) => void;
+  repeatBusyId: number | null;
 }) {
   const typeMeta: Record<
     string,
@@ -837,10 +939,97 @@ function LedgerList({
     adjustment: { label: "Ajuste", bg: C.sandDark, fg: C.ink },
     discount: { label: "Descuento", bg: C.oliveSoft, fg: C.olive },
     refund: { label: "Reembolso", bg: C.burgundySoft, fg: C.burgundy },
+    partial_payment: { label: "Pago parcial", bg: C.oliveSoft, fg: C.olive },
   };
+
+  // "Qué falta por pagar": derivado en cliente desde paid_quantity.
+  // Solo se muestra cuando YA hay algo pagado por producto — antes de
+  // eso sería un duplicado exacto del detalle completo.
+  const pendingLines = items.filter(
+    (c) =>
+      c.type === "product" &&
+      c.reversed_at == null &&
+      (c.paid_quantity ?? 0) < c.quantity,
+  );
+  const anyLinePaid = items.some(
+    (c) =>
+      c.type === "product" &&
+      c.reversed_at == null &&
+      (c.paid_quantity ?? 0) > 0,
+  );
 
   return (
     <div>
+      {anyLinePaid && (
+        <div
+          style={{
+            border: `1px solid ${C.sandDark}`,
+            borderRadius: 12,
+            background: C.parchment,
+            padding: "10px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 3,
+              color: C.cacao,
+              textTransform: "uppercase",
+              fontWeight: 700,
+              marginBottom: 6,
+            }}
+          >
+            — Falta por pagar
+          </div>
+          {pendingLines.length === 0 ? (
+            <div
+              style={{
+                fontFamily: FONT_UI,
+                fontSize: 13,
+                color: C.olive,
+                fontWeight: 700,
+              }}
+            >
+              ✓ Todos los productos están pagados
+            </div>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {pendingLines.map((c) => {
+                const remaining = c.quantity - (c.paid_quantity ?? 0);
+                return (
+                  <li
+                    key={c.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      padding: "3px 0",
+                      fontFamily: FONT_UI,
+                      fontSize: 13,
+                      color: C.ink,
+                    }}
+                  >
+                    <span style={{ minWidth: 0 }}>
+                      {remaining}× {c.description}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: FONT_DISPLAY,
+                        color: C.gold,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {fmt(remaining * Number(c.unit_amount))}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
       <div
         style={{
           fontFamily: FONT_MONO,
@@ -949,6 +1138,25 @@ function LedgerList({
                       )}
                     </div>
                   )}
+                  {/* Qué productos cubre este pago parcial (modo "por
+                      productos"). Sin allocations = monto libre. */}
+                  {c.type === "partial_payment" &&
+                    c.allocations &&
+                    c.allocations.length > 0 && (
+                      <div
+                        style={{
+                          fontFamily: FONT_UI,
+                          fontSize: 11.5,
+                          color: C.olive,
+                          marginTop: 2,
+                        }}
+                      >
+                        Cubre:{" "}
+                        {c.allocations
+                          .map((a) => `${a.quantity}× ${a.description}`)
+                          .join(" · ")}
+                      </div>
+                    )}
                   <div
                     style={{
                       fontFamily: FONT_MONO,
@@ -975,6 +1183,27 @@ function LedgerList({
                       {meta.label}
                     </span>
                     {c.quantity !== 1 && <span>{c.quantity}×</span>}
+                    {/* Estado de pago por línea (asignaciones vivas de
+                        pagos parciales). */}
+                    {c.type === "product" &&
+                      !reversed &&
+                      (c.paid_quantity ?? 0) > 0 && (
+                        <span
+                          style={{
+                            padding: "1px 7px",
+                            background: C.oliveSoft,
+                            color: C.olive,
+                            borderRadius: 999,
+                            letterSpacing: 1,
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {(c.paid_quantity ?? 0) >= c.quantity
+                            ? "Pagado"
+                            : `${c.paid_quantity}/${c.quantity} pagados`}
+                        </span>
+                      )}
                     <span>
                       {new Date(c.created_at).toLocaleTimeString([], {
                         hour: "2-digit",
@@ -1028,27 +1257,68 @@ function LedgerList({
                   {fmt(Number(c.amount))}
                 </div>
               </div>
-              {canRefund && (
-                <button
-                  type="button"
-                  onClick={() => onRefund(c)}
-                  style={{
-                    marginTop: 8,
-                    padding: "4px 10px",
-                    border: `1px solid ${C.burgundy}`,
-                    background: "transparent",
-                    color: C.burgundy,
-                    borderRadius: 999,
-                    fontFamily: FONT_MONO,
-                    fontSize: 10,
-                    letterSpacing: 1.5,
-                    cursor: "pointer",
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  Devolver
-                </button>
+              {(canRefund ||
+                (!readOnly &&
+                  !reversed &&
+                  c.type === "product" &&
+                  c.product_id != null)) && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  {/* Repetir línea: "pidieron uno igual". Para armables
+                      replica la composición exacta de esta línea. */}
+                  {!readOnly &&
+                    !reversed &&
+                    c.type === "product" &&
+                    c.product_id != null && (
+                      <button
+                        type="button"
+                        onClick={() => onRepeat(c)}
+                        disabled={repeatBusyId != null}
+                        style={{
+                          padding: "4px 10px",
+                          border: `1px solid ${C.olive}`,
+                          background: "transparent",
+                          color: C.olive,
+                          borderRadius: 999,
+                          fontFamily: FONT_MONO,
+                          fontSize: 10,
+                          letterSpacing: 1.5,
+                          cursor:
+                            repeatBusyId != null ? "wait" : "pointer",
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          opacity:
+                            repeatBusyId != null && repeatBusyId !== c.id
+                              ? 0.5
+                              : 1,
+                        }}
+                      >
+                        {repeatBusyId === c.id
+                          ? "Agregando..."
+                          : "+ Repetir"}
+                      </button>
+                    )}
+                  {canRefund && (
+                    <button
+                      type="button"
+                      onClick={() => onRefund(c)}
+                      style={{
+                        padding: "4px 10px",
+                        border: `1px solid ${C.burgundy}`,
+                        background: "transparent",
+                        color: C.burgundy,
+                        borderRadius: 999,
+                        fontFamily: FONT_MONO,
+                        fontSize: 10,
+                        letterSpacing: 1.5,
+                        cursor: "pointer",
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Devolver
+                    </button>
+                  )}
+                </div>
               )}
             </li>
           );
@@ -1066,6 +1336,7 @@ function ActionModal({
   sessionId,
   consumptionId,
   defaultDescription,
+  billItems,
   onClose,
   onDone,
 }: {
@@ -1073,12 +1344,32 @@ function ActionModal({
   sessionId: number;
   consumptionId?: number;
   defaultDescription?: string;
+  /** Líneas de la cuenta — el modo "por productos" del pago parcial
+   *  las usa para los steppers de selección. */
+  billItems?: Consumption[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const [amountStr, setAmountStr] = useState("");
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
+  // Modo del pago parcial: "productos" = seleccionar qué líneas se
+  // pagan (monto calculado por el server-side price, no editable);
+  // "libre" = el monto suelto de siempre. Default productos si hay
+  // líneas con saldo — es el caso "cada quien paga lo suyo".
+  const unpaidLines = (billItems ?? []).filter(
+    (c) =>
+      c.type === "product" &&
+      c.reversed_at == null &&
+      (c.paid_quantity ?? 0) < c.quantity,
+  );
+  const [partialMode, setPartialMode] = useState<"productos" | "libre">(
+    unpaidLines.length > 0 ? "productos" : "libre",
+  );
+  // consumption_id → unidades seleccionadas (0..disponibles).
+  const [selectedQty, setSelectedQty] = useState<Map<number, number>>(
+    () => new Map(),
+  );
   // Aplica solo a refunds. Por default ON: la mayoría de las
   // devoluciones son "error de cargo" o "cliente no consumió" y el
   // producto vuelve al stock. Si el producto se rompió/derramó se
@@ -1103,13 +1394,35 @@ function ActionModal({
           ? "Pago parcial"
           : "Devolver consumo";
 
-  const amountNum = Number(amountStr);
+  const usingAllocations =
+    kind === "partial_payment" && partialMode === "productos";
+  // En modo productos el monto lo dicta la selección (unit_amount ×
+  // unidades) — el input libre se esconde y el server revalida.
+  const allocationsPayload = usingAllocations
+    ? unpaidLines
+        .map((c) => ({
+          consumption_id: c.id,
+          quantity: selectedQty.get(c.id) ?? 0,
+        }))
+        .filter((a) => a.quantity > 0)
+    : [];
+  const computedAmount = usingAllocations
+    ? unpaidLines.reduce(
+        (sum, c) =>
+          sum + (selectedQty.get(c.id) ?? 0) * Number(c.unit_amount),
+        0,
+      )
+    : 0;
+
+  const amountNum = usingAllocations ? computedAmount : Number(amountStr);
   const amountValid =
     kind === "refund"
       ? true
-      : kind === "partial_payment"
-        ? amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum > 0
-        : amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum !== 0;
+      : usingAllocations
+        ? computedAmount > 0
+        : kind === "partial_payment"
+          ? amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum > 0
+          : amountStr.trim().length > 0 && Number.isFinite(amountNum) && amountNum !== 0;
 
   // Partial payments don't ask for a reason — the receipt label is auto.
   const reasonValid =
@@ -1142,6 +1455,7 @@ function ActionModal({
           sessionId,
           amountNum,
           paymentMethod,
+          usingAllocations ? allocationsPayload : undefined,
         );
       } else {
         // Narrows to "adjustment" | "discount" — the only two kinds
@@ -1234,7 +1548,175 @@ function ActionModal({
           )}
         </div>
 
-        {kind !== "refund" && (
+        {/* Toggle de modo del pago parcial. Solo aparece si hay líneas
+            con saldo; sin líneas queda el monto libre clásico. */}
+        {kind === "partial_payment" && unpaidLines.length > 0 && (
+          <div style={{ display: "flex", gap: 8 }}>
+            {(
+              [
+                { value: "productos", label: "Por productos" },
+                { value: "libre", label: "Monto libre" },
+              ] as const
+            ).map((m) => {
+              const active = partialMode === m.value;
+              return (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setPartialMode(m.value)}
+                  disabled={submitting}
+                  style={{
+                    flex: 1,
+                    padding: "8px 10px",
+                    border: `1px solid ${active ? C.gold : C.sand}`,
+                    background: active ? C.goldSoft : C.paper,
+                    borderRadius: 10,
+                    fontFamily: FONT_MONO,
+                    fontSize: 10,
+                    letterSpacing: 1.5,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    color: active ? C.cacao : C.mute,
+                    cursor: "pointer",
+                  }}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Modo productos: steppers sobre lo no pagado. El monto es
+            derivado y NO editable — el precio lo fija el server y un
+            monto suelto con asignaciones invitaría descuadres (para
+            eso está el modo libre). */}
+        {usingAllocations && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              maxHeight: "38dvh",
+              overflowY: "auto",
+            }}
+          >
+            {unpaidLines.map((c) => {
+              const available = c.quantity - (c.paid_quantity ?? 0);
+              const qty = selectedQty.get(c.id) ?? 0;
+              const bump = (delta: number) => {
+                const next = Math.max(0, Math.min(available, qty + delta));
+                setSelectedQty((prev) => {
+                  const map = new Map(prev);
+                  map.set(c.id, next);
+                  return map;
+                });
+              };
+              return (
+                <div
+                  key={c.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 10px",
+                    border: `1px solid ${qty > 0 ? C.gold : C.sand}`,
+                    borderRadius: 10,
+                    background: qty > 0 ? C.cream : C.paper,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                        color: C.ink,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {c.description}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: FONT_MONO,
+                        fontSize: 10,
+                        color: C.mute,
+                      }}
+                    >
+                      {fmt(Number(c.unit_amount))} c/u · {available} sin pagar
+                    </div>
+                  </div>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => bump(-1)}
+                      disabled={qty === 0 || submitting}
+                      style={stepperBtnStyle(qty === 0)}
+                    >
+                      −
+                    </button>
+                    <span
+                      style={{
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: 18,
+                        color: qty > 0 ? C.gold : C.mute,
+                        minWidth: 20,
+                        textAlign: "center",
+                      }}
+                    >
+                      {qty}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => bump(1)}
+                      disabled={qty >= available || submitting}
+                      style={stepperBtnStyle(qty >= available)}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                padding: "8px 10px 0",
+                borderTop: `1px solid ${C.sand}`,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  letterSpacing: 2,
+                  color: C.mute,
+                  textTransform: "uppercase",
+                  fontWeight: 700,
+                }}
+              >
+                Total a cobrar
+              </span>
+              <span
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 24,
+                  color: C.gold,
+                }}
+              >
+                {fmt(computedAmount)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {kind !== "refund" && !usingAllocations && (
           <label style={labelStyle}>
             <span style={labelTextStyle}>
               Monto (COP)
@@ -1426,6 +1908,21 @@ const inputStyle: React.CSSProperties = {
   fontSize: 14,
   outline: "none",
 };
+
+function stepperBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    width: 28,
+    height: 28,
+    border: `1px solid ${disabled ? C.sand : C.cacao}`,
+    background: C.paper,
+    color: disabled ? C.mute : C.ink,
+    borderRadius: 999,
+    fontSize: 16,
+    lineHeight: 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
+  };
+}
 
 function adjustmentButtonStyle(borderColor: string): React.CSSProperties {
   return {

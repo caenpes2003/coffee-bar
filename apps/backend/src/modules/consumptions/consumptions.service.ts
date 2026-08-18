@@ -81,6 +81,26 @@ export type BillLineUnit = {
   components: BillLineComponent[];
 };
 
+// Vista de una asignación viva colgada de una línea partial_payment:
+// qué producto cubre, cuántas unidades y por cuánto.
+export type BillAllocationView = {
+  product_consumption_id: number;
+  description: string;
+  quantity: number;
+  amount: number;
+};
+
+// Datos batch opcionales para enriquecer la serialización de las
+// líneas del BillView. Cada mapa se calcula UNA vez por cuenta.
+type BillSerializeExtras = {
+  compositions?: Map<string, BillLineUnit[]>;
+  // Consumption(type=product).id → unidades cubiertas por pagos
+  // parciales vivos.
+  paidByProduct?: Map<number, number>;
+  // Consumption(type=partial_payment).id → sus asignaciones.
+  allocationsByPayment?: Map<number, BillAllocationView[]>;
+};
+
 @Injectable()
 export class ConsumptionsService {
   constructor(
@@ -115,7 +135,14 @@ export class ConsumptionsService {
       orderBy: { created_at: "asc" },
     });
 
-    const compositions = await this.loadCompositionsForConsumptions(items);
+    const [compositions, allocationMaps] = await Promise.all([
+      this.loadCompositionsForConsumptions(items),
+      this.loadAllocationsForSession(sessionId),
+    ]);
+    const extras: BillSerializeExtras = {
+      compositions,
+      ...allocationMaps,
+    };
 
     return {
       session_id: session.id,
@@ -125,8 +152,55 @@ export class ConsumptionsService {
       closed_at: session.closed_at,
       last_consumption_at: session.last_consumption_at,
       summary: this.summarize(items),
-      items: items.map((c) => this.serialize(c, compositions)),
+      items: items.map((c) => this.serialize(c, extras)),
     };
+  }
+
+  /**
+   * Asignaciones VIVAS de pagos parciales de la sesión (las de pagos
+   * reversados no cuentan — regla de vida del modelo). Una sola query;
+   * de ella salen los dos mapas que consume la serialización:
+   * "cuánto de cada línea de producto ya está pagado" y "qué cubre
+   * cada pago parcial".
+   */
+  private async loadAllocationsForSession(sessionId: number): Promise<{
+    paidByProduct: Map<number, number>;
+    allocationsByPayment: Map<number, BillAllocationView[]>;
+  }> {
+    const rows = await this.prisma.partialPaymentAllocation.findMany({
+      where: {
+        payment_consumption: {
+          table_session_id: sessionId,
+          reversed_at: null,
+        },
+      },
+      select: {
+        payment_consumption_id: true,
+        product_consumption_id: true,
+        quantity: true,
+        amount: true,
+        product_consumption: { select: { description: true } },
+      },
+      orderBy: { id: "asc" },
+    });
+
+    const paidByProduct = new Map<number, number>();
+    const allocationsByPayment = new Map<number, BillAllocationView[]>();
+    for (const r of rows) {
+      paidByProduct.set(
+        r.product_consumption_id,
+        (paidByProduct.get(r.product_consumption_id) ?? 0) + r.quantity,
+      );
+      const list = allocationsByPayment.get(r.payment_consumption_id) ?? [];
+      list.push({
+        product_consumption_id: r.product_consumption_id,
+        description: r.product_consumption.description,
+        quantity: r.quantity,
+        amount: Number(r.amount),
+      });
+      allocationsByPayment.set(r.payment_consumption_id, list);
+    }
+    return { paidByProduct, allocationsByPayment };
   }
 
   /**
@@ -301,6 +375,9 @@ export class ConsumptionsService {
     rawAmount: number,
     actor: AuditActor = null,
     paymentMethod: PaymentMethod = PaymentMethod.efectivo,
+    // "Cada quien paga lo suyo": líneas de producto que este pago
+    // cubre. Opcional — sin él, el parcial es un monto libre.
+    allocations?: Array<{ consumption_id: number; quantity: number }>,
   ): Promise<ConsumptionFull> {
     const amount = Number(rawAmount);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -367,6 +444,17 @@ export class ConsumptionsService {
         aggregate_id: created.external_id,
         payload: serializeConsumptionForOutbox(created),
       });
+      // Asignaciones a líneas específicas ("cada quien paga lo suyo"),
+      // validadas y calculadas server-side dentro de la misma tx.
+      if (allocations && allocations.length > 0) {
+        await this.allocatePartialPayment(
+          tx,
+          sessionId,
+          created,
+          allocations,
+          this.round(amount),
+        );
+      }
       // Registramos el Payment(kind=partial) en la misma tx. Es la
       // fuente de verdad para conciliación de caja: el consumption
       // negativo afecta el saldo, pero la caja se reconcilia contra
@@ -399,6 +487,145 @@ export class ConsumptionsService {
 
     this.emitBillUpdates(sessionId, session.table_id);
     return result;
+  }
+
+  /**
+   * Valida y persiste las asignaciones de un pago parcial a líneas de
+   * producto. Corre DENTRO de la tx del pago:
+   *
+   *   1. SELECT ... FOR UPDATE sobre las líneas target — dos cajeros
+   *      asignando la misma unidad en paralelo se serializan acá (el
+   *      segundo ve el agregado actualizado y falla limpio).
+   *   2. Cada target debe ser type=product de ESTA sesión, no
+   *      reversado, y con unidades disponibles (quantity − ya asignado
+   *      vivo). "Vivo" = asignaciones cuyo pago no está reversado.
+   *   3. El monto por línea lo fija el server (unit_amount × quantity)
+   *      y la suma debe cuadrar con el monto del pago — el cliente
+   *      jamás manda montos por línea.
+   */
+  private async allocatePartialPayment(
+    tx: Prisma.TransactionClient,
+    sessionId: number,
+    paymentConsumption: ConsumptionFull,
+    allocations: Array<{ consumption_id: number; quantity: number }>,
+    paymentAmount: number,
+  ): Promise<void> {
+    const ids = allocations.map((a) => a.consumption_id);
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException({
+        message: "Hay líneas repetidas en la asignación",
+        code: "PARTIAL_ALLOCATION_DUPLICATE",
+      });
+    }
+
+    // Lock pesimista de las líneas target. El agregado de "ya
+    // asignado" de abajo solo es confiable si nadie más puede insertar
+    // asignaciones sobre estas mismas líneas hasta que commiteemos.
+    await tx.$queryRaw`
+      SELECT id FROM "Consumption"
+      WHERE id IN (${Prisma.join(ids)})
+      FOR UPDATE
+    `;
+
+    const rows = await tx.consumption.findMany({
+      where: { id: { in: ids } },
+    });
+    const rowById = new Map(rows.map((r) => [r.id, r]));
+
+    const alreadyAllocated = await tx.partialPaymentAllocation.groupBy({
+      by: ["product_consumption_id"],
+      where: {
+        product_consumption_id: { in: ids },
+        payment_consumption: { reversed_at: null },
+      },
+      _sum: { quantity: true },
+    });
+    const allocatedById = new Map(
+      alreadyAllocated.map((a) => [
+        a.product_consumption_id,
+        a._sum.quantity ?? 0,
+      ]),
+    );
+
+    let computedTotal = 0;
+    const creates: Array<{
+      product_consumption_id: number;
+      quantity: number;
+      amount: Prisma.Decimal;
+    }> = [];
+    for (const alloc of allocations) {
+      const row = rowById.get(alloc.consumption_id);
+      if (!row) {
+        throw new BadRequestException({
+          message: `Línea ${alloc.consumption_id} no existe`,
+          code: "PARTIAL_ALLOCATION_NOT_FOUND",
+        });
+      }
+      if (
+        row.type !== ConsumptionType.product ||
+        row.table_session_id !== sessionId ||
+        row.reversed_at !== null
+      ) {
+        throw new BadRequestException({
+          message: `Línea ${alloc.consumption_id} no es un producto activo de esta cuenta`,
+          code: "PARTIAL_ALLOCATION_INVALID_TARGET",
+        });
+      }
+      const available =
+        row.quantity - (allocatedById.get(row.id) ?? 0);
+      if (alloc.quantity > available) {
+        throw new BadRequestException({
+          message: `"${row.description}": solo quedan ${available} unidad(es) sin pagar`,
+          code: "PARTIAL_ALLOCATION_EXCEEDS_AVAILABLE",
+        });
+      }
+      const lineAmount = this.round(
+        Number(row.unit_amount) * alloc.quantity,
+      );
+      computedTotal += lineAmount;
+      creates.push({
+        product_consumption_id: row.id,
+        quantity: alloc.quantity,
+        amount: new Prisma.Decimal(lineAmount),
+      });
+    }
+
+    computedTotal = this.round(computedTotal);
+    if (Math.abs(computedTotal - paymentAmount) > 0.01) {
+      throw new BadRequestException({
+        message: `El monto no cuadra con los productos seleccionados (esperado $${computedTotal})`,
+        code: "PARTIAL_ALLOCATION_AMOUNT_MISMATCH",
+      });
+    }
+
+    // createManyAndReturn para tener los external_id de vuelta sin una
+    // segunda query — van al payload del outbox.
+    const createdAllocs = await tx.partialPaymentAllocation.createManyAndReturn({
+      data: creates.map((c) => ({
+        payment_consumption_id: paymentConsumption.id,
+        ...c,
+      })),
+    });
+
+    const externalIdByRowId = new Map(
+      rows.map((r) => [r.id, r.external_id]),
+    );
+    await this.outbox.enqueue(tx, {
+      event_type: "partial_payment.allocated",
+      aggregate_type: "PartialPaymentAllocation",
+      aggregate_id: paymentConsumption.external_id,
+      payload: {
+        payment_consumption_external_id: paymentConsumption.external_id,
+        table_session_id: sessionId,
+        allocations: createdAllocs.map((a) => ({
+          external_id: a.external_id,
+          product_consumption_external_id:
+            externalIdByRowId.get(a.product_consumption_id) ?? "",
+          quantity: a.quantity,
+          amount: Number(a.amount),
+        })),
+      },
+    });
   }
 
   private formatCurrency(n: number): string {
@@ -457,6 +684,27 @@ export class ConsumptionsService {
     const restoreStock = dto.restore_stock !== false;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Un producto con asignaciones VIVAS de pago parcial no se puede
+      // devolver: la contabilidad diría "pagado" sobre una línea que ya
+      // no existe. El camino es reversar primero el pago parcial que lo
+      // cubre (eso "apaga" sus asignaciones) y ahí sí devolver.
+      if (original.type === ConsumptionType.product) {
+        const live = await tx.partialPaymentAllocation.aggregate({
+          where: {
+            product_consumption_id: consumptionId,
+            payment_consumption: { reversed_at: null },
+          },
+          _sum: { quantity: true },
+        });
+        if ((live._sum.quantity ?? 0) > 0) {
+          throw new ConflictException({
+            message:
+              "Esta línea tiene un pago parcial asignado. Reversa primero ese pago parcial y luego devuélvela.",
+            code: "PRODUCT_HAS_LIVE_ALLOCATIONS",
+          });
+        }
+      }
+
       const marked = await tx.consumption.updateMany({
         where: { id: consumptionId, reversed_at: null },
         data: { reversed_at: new Date() },
@@ -661,21 +909,30 @@ export class ConsumptionsService {
     await this.emitBillSnapshot(sessionId, tableId);
   }
 
-  serialize(
-    consumption: ConsumptionFull,
-    compositions?: Map<string, BillLineUnit[]>,
-  ) {
-    // La composición solo aplica a líneas de producto con orden; para
-    // el resto (y para call sites que no la cargan) queda undefined —
-    // el campo es aditivo/opcional en el shape del BillView.
+  serialize(consumption: ConsumptionFull, extras?: BillSerializeExtras) {
+    // Los enriquecimientos solo aplican dentro del BillView (getBill
+    // pasa `extras`); para call sites sueltos quedan undefined y se
+    // omiten del JSON — campos aditivos/opcionales.
     const composition =
-      compositions !== undefined &&
+      extras?.compositions !== undefined &&
       consumption.type === ConsumptionType.product &&
       consumption.order_id != null &&
       consumption.product_id != null
-        ? compositions.get(
+        ? extras.compositions.get(
             `${consumption.order_id}:${consumption.product_id}`,
           )
+        : undefined;
+    // Unidades ya cubiertas por pagos parciales vivos. 0 explícito para
+    // líneas de producto (la UI distingue "sin pagar" de "no sé").
+    const paid_quantity =
+      extras?.paidByProduct !== undefined &&
+      consumption.type === ConsumptionType.product
+        ? (extras.paidByProduct.get(consumption.id) ?? 0)
+        : undefined;
+    const allocations =
+      extras?.allocationsByPayment !== undefined &&
+      consumption.type === ConsumptionType.partial_payment
+        ? extras.allocationsByPayment.get(consumption.id)
         : undefined;
     return {
       ...consumption,
@@ -684,9 +941,9 @@ export class ConsumptionsService {
       reverses: consumption.reverses
         ? { ...consumption.reverses, amount: Number(consumption.reverses.amount) }
         : null,
-      // undefined se omite en el JSON — el campo solo viaja cuando hay
-      // composición real que mostrar.
       composition,
+      paid_quantity,
+      allocations,
     };
   }
 }

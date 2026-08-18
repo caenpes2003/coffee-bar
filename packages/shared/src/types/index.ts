@@ -298,6 +298,17 @@ export interface BillLineUnit {
   components: BillLineComponent[];
 }
 
+/**
+ * Asignación viva de un pago parcial a una línea de producto:
+ * qué línea cubre, cuántas unidades y por cuánto.
+ */
+export interface BillAllocation {
+  product_consumption_id: number;
+  description: string;
+  quantity: number;
+  amount: number;
+}
+
 export interface Consumption {
   id: number;
   table_session_id: number;
@@ -315,6 +326,18 @@ export interface Consumption {
    * simples y en los demás tipos.
    */
   composition?: BillLineUnit[];
+  /**
+   * Unidades de esta línea ya cubiertas por pagos parciales VIVOS
+   * (asignaciones cuyo pago no fue reversado). Solo en type=product
+   * dentro del BillView. 0 = nada pagado; == quantity = línea pagada.
+   */
+  paid_quantity?: number;
+  /**
+   * Qué líneas de producto cubre este pago parcial. Solo en
+   * type=partial_payment dentro del BillView, y solo si el pago se
+   * registró en modo "por productos".
+   */
+  allocations?: BillAllocation[];
   reversed_at: string | null;
   reverses_id: number | null;
   reason: string | null;
