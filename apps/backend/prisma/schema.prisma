@@ -141,6 +141,10 @@ enum AuditEventKind {
   payment_reversed
   // Transferencia de cuenta entre mesas/barras
   session_transferred
+  // Apertura de mesa vía QR con aprobación del admin
+  table_open_requested
+  session_open_approved
+  session_open_rejected
 }
 
 model User {
@@ -186,6 +190,7 @@ model Table {
   queue_items            QueueItem[]
   sessions               TableSession[] @relation("TableSessions")
   current_session        TableSession?  @relation("TableCurrentSession", fields: [current_session_id], references: [id], onDelete: SetNull)
+  open_requests          TableOpenRequest[]
 
   @@index([kind])
 }
@@ -370,8 +375,56 @@ model BarAccessCode {
   // The user/email of the admin who triggered a manual regeneration, or
   // null for system-generated rotations.
   rotated_by String?
+  // Generación de revocación de sesiones de cliente. Los session
+  // tokens llevan este valor como claim `acg` y el guard lo compara
+  // contra el epoch activo. SOLO la rotación MANUAL del admin lo
+  // incrementa — la rotación automática de 24h conserva el epoch para
+  // no tumbar sesiones vivas a mitad de noche (regla del dueño: una
+  // sesión solo muere por cierre de mesa o cambio manual del código).
+  epoch      Int      @default(0)
 
   @@index([is_active, created_at])
+}
+
+// ─── Solicitudes de apertura de mesa (aprobación del admin) ──────────────
+//
+// El cliente escanea el QR de una mesa CERRADA, ingresa el código del
+// bar (validado server-side) y queda en `pending` hasta que el admin
+// apruebe o rechace desde el dashboard. Solo al aprobar se crea la
+// TableSession y se emite el session_token.
+//
+// `claim_token` es la credencial de retiro: el dispositivo (aún
+// anónimo — no tiene session token) lo guarda y hace polling del
+// resultado por HTTP. El session_token JAMÁS viaja por socket; el
+// socket solo avisa "resuelto" y el dispositivo reclama por HTTP, una
+// única vez (claimed_at).
+
+enum TableOpenRequestStatus {
+  pending
+  approved
+  rejected
+  expired
+  cancelled
+}
+
+model TableOpenRequest {
+  id          Int                    @id @default(autoincrement())
+  external_id String                 @unique @default(uuid())
+  table_id    Int
+  status      TableOpenRequestStatus @default(pending)
+  claim_token String                 @unique @default(uuid())
+  // Sesión creada al aprobar. Null en pending/rejected/expired.
+  session_id  Int?
+  // Nombre del admin que resolvió (approve/reject).
+  resolved_by String?
+  expires_at  DateTime
+  claimed_at  DateTime?
+  created_at  DateTime               @default(now())
+  resolved_at DateTime?
+  table       Table                  @relation(fields: [table_id], references: [id], onDelete: Cascade)
+
+  @@index([table_id, status])
+  @@index([status, expires_at])
 }
 
 model Product {

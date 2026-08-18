@@ -12,6 +12,7 @@ import { QueueModule } from "./modules/queue/queue.module";
 import { RealtimeModule } from "./modules/realtime/realtime.module";
 import { SalesInsightsModule } from "./modules/sales-insights/sales-insights.module";
 import { TableProjectionModule } from "./modules/table-projection/table-projection.module";
+import { TableOpenRequestsModule } from "./modules/table-open-requests/table-open-requests.module";
 import { TableSessionsModule } from "./modules/table-sessions/table-sessions.module";
 import { TablesModule } from "./modules/tables/tables.module";
 import { MusicModule } from "./modules/music/music.module";
@@ -47,6 +48,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     PlaybackModule,
     SalesInsightsModule,
     TableProjectionModule,
+    TableOpenRequestsModule,
     TableSessionsModule,
     TablesModule,
     ExtraIncomeModule,

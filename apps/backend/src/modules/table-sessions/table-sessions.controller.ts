@@ -20,6 +20,7 @@ import { SessionAccessGuard } from "../auth/guards/session-access.guard";
 import { CurrentAuth } from "../auth/guards/current-auth.decorator";
 import { TokenService } from "../auth/token.service";
 import type { AuthPayload } from "../auth/types";
+import { AccessCodeService } from "../access-code/access-code.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { RequireOpenCashRegisterGuard } from "../cash-register/require-open-cash-register.guard";
 
@@ -29,7 +30,26 @@ export class TableSessionsController {
     private readonly sessions: TableSessionsService,
     private readonly tokens: TokenService,
     private readonly audit: AuditLogService,
+    private readonly accessCodes: AccessCodeService,
   ) {}
+
+  /**
+   * Firma un session token de CLIENTE estampando el epoch vigente del
+   * código del bar (`acg`) — la rotación manual del código lo revoca
+   * vía SessionAccessGuard. Los tokens firmados para admin flows no
+   * pasan por acá.
+   */
+  private async signCustomerSessionToken(
+    sessionId: number,
+    tableId: number,
+  ): Promise<string> {
+    const acg = await this.accessCodes.getCurrentEpoch();
+    return this.tokens.signSession({
+      session_id: sessionId,
+      table_id: tableId,
+      acg,
+    });
+  }
 
   /**
    * Customer opens a session with the table token from the QR.
@@ -50,11 +70,29 @@ export class TableSessionsController {
         code: "AUTH_TABLE_MISMATCH",
       });
     }
+    // F3: el flujo nuevo del cliente pasa por /table-open-requests
+    // (código + aprobación). Este endpoint valida el código cuando
+    // viene; exigirlo siempre romperia el frontend viejo durante la
+    // ventana de deploy — se endurece con ACCESS_CODE_REQUIRED=true.
+    if (dto.access_code !== undefined) {
+      const ok = await this.accessCodes.validate(dto.access_code);
+      if (!ok) {
+        throw new ForbiddenException({
+          message: "Código incorrecto",
+          code: "ACCESS_CODE_INVALID",
+        });
+      }
+    } else if (process.env.ACCESS_CODE_REQUIRED === "true") {
+      throw new ForbiddenException({
+        message: "Código del bar requerido",
+        code: "ACCESS_CODE_REQUIRED",
+      });
+    }
     const session = await this.sessions.open(dto.table_id);
-    const session_token = this.tokens.signSession({
-      session_id: session.id,
-      table_id: session.table_id,
-    });
+    const session_token = await this.signCustomerSessionToken(
+      session.id,
+      session.table_id,
+    );
     return {
       ...this.sessions.serialize(session),
       session_token,
@@ -92,10 +130,10 @@ export class TableSessionsController {
         code: "TABLE_SESSION_NOT_OPEN",
       });
     }
-    const session_token = this.tokens.signSession({
-      session_id: session.id,
-      table_id: session.table_id,
-    });
+    const session_token = await this.signCustomerSessionToken(
+      session.id,
+      session.table_id,
+    );
     return {
       ...this.sessions.serialize(session),
       session_token,

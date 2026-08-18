@@ -68,6 +68,21 @@ export class AccessCodeService {
     code: string;
     expires_at: Date;
   }> {
+    // Epoch de revocación de sesiones: los session tokens llevan el
+    // epoch vigente como claim `acg` y el guard rechaza tokens de
+    // epochs viejos. SOLO la rotación MANUAL (admin) lo incrementa —
+    // la perezosa de 24h ("system") lo conserva, para que el cambio
+    // automático de medianoche no tumbe sesiones vivas a mitad de
+    // servicio (regla del dueño: una sesión solo muere por cierre de
+    // mesa o cambio manual del código).
+    const latest = await this.prisma.barAccessCode.findFirst({
+      orderBy: { created_at: "desc" },
+      select: { epoch: true },
+    });
+    const currentEpoch = latest?.epoch ?? 0;
+    const isManual = rotatedBy !== null && rotatedBy !== "system";
+    const nextEpoch = isManual ? currentEpoch + 1 : currentEpoch;
+
     // Mark all previous active codes as inactive in one shot. A stale
     // active row hanging around means rotating manually wouldn't take
     // effect immediately if `getCurrent` always picks the most recent.
@@ -84,16 +99,29 @@ export class AccessCodeService {
         is_active: true,
         expires_at: expiresAt,
         rotated_by: rotatedBy,
+        epoch: nextEpoch,
       },
     });
     this.logger.log(
-      `Bar access code rotated by ${rotatedBy ?? "system"}; expires ${expiresAt.toISOString()}`,
+      `Bar access code rotated by ${rotatedBy ?? "system"} (epoch ${nextEpoch}); expires ${expiresAt.toISOString()}`,
     );
     return {
       id: created.id,
       code: created.code,
       expires_at: created.expires_at,
     };
+  }
+
+  /**
+   * Epoch vigente para estampar/validar el claim `acg` de los session
+   * tokens. 0 si nunca se ha creado un código.
+   */
+  async getCurrentEpoch(): Promise<number> {
+    const latest = await this.prisma.barAccessCode.findFirst({
+      orderBy: { created_at: "desc" },
+      select: { epoch: true },
+    });
+    return latest?.epoch ?? 0;
   }
 
   /**

@@ -24,6 +24,11 @@ type EventPayload = {
 
 const STAFF_ROOM = "staff";
 const sessionRoom = (sessionId: number) => `tableSession:${sessionId}`;
+// Room por mesa para dispositivos con TABLE token (aún sin sesión):
+// canal de "nudge" del flujo de aprobación de apertura. Los payloads
+// que viajan acá NUNCA llevan tokens — solo avisan "tu solicitud se
+// resolvió" para que el dispositivo reclame por HTTP.
+const tableRoom = (tableId: number) => `table:${tableId}`;
 
 /**
  * Socket authorization model (Phase G5):
@@ -101,6 +106,16 @@ export class RealtimeGateway
       void client.join(sessionRoom(auth.session_id));
       this.logger.log(
         `Client ${client.id} connected as session ${auth.session_id}`,
+      );
+      return;
+    }
+    if (auth?.kind === "table") {
+      // Antes los table tokens no se unían a nada. Ahora reciben los
+      // avisos de resolución de su solicitud de apertura (F3) por su
+      // room de mesa — solo "nudges", nunca tokens.
+      void client.join(tableRoom(auth.table_id));
+      this.logger.log(
+        `Client ${client.id} connected as table ${auth.table_id}`,
       );
       return;
     }
@@ -248,6 +263,21 @@ export class RealtimeGateway
   emitTableSessionClosed(sessionId: number, payload: unknown) {
     this.emitToSession(sessionId, "table-session:closed", payload);
     this.emitToStaff("table-session:closed", payload);
+  }
+
+  /** Solicitud de apertura de mesa creada → modal de aprobación admin. */
+  emitTableOpenRequestCreated(payload: unknown) {
+    this.emitToStaff("table-open-request:created", payload);
+  }
+
+  /**
+   * Solicitud resuelta (approved/rejected/expired). Va al room de la
+   * mesa (nudge para que el dispositivo reclame por HTTP — el payload
+   * NO lleva token) y al staff (quitar el modal en otras pestañas).
+   */
+  emitTableOpenRequestResolved(tableId: number, payload: unknown) {
+    this.server.to(tableRoom(tableId)).emit("table-open-request:resolved", payload);
+    this.emitToStaff("table-open-request:resolved", payload);
   }
 
   emitTableUpdated(payload: unknown) {

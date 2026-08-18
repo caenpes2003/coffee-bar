@@ -2,8 +2,11 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
+  Logger,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { AccessCodeService } from "./access-code.service";
@@ -56,15 +59,36 @@ export class AccessCodeController {
     return this.service.getOrRotate();
   }
 
+  private readonly logger = new Logger(AccessCodeController.name);
+
   /**
-   * Public-display surface for the bar's TV/player screen. Returns the
-   * same payload as `/current` but without auth. Safe because the code
-   * is meant to be visible on a screen anyone in the bar can see — the
-   * security model never relied on it being secret online, only on the
-   * customer being physically present to read it.
+   * Display surface for the bar's TV/player screen.
+   *
+   * ANTES era público sin auth — con el backend expuesto a internet eso
+   * significaba que cualquiera, desde cualquier lugar, podía leer el
+   * código en claro (rotarlo no servía de nada: el atacante lo volvía a
+   * leer). Ahora exige la clave de despliegue `PLAYER_DISPLAY_KEY`
+   * (env), que viaja en la URL de la TV del bar (`?k=...`).
+   *
+   * Compat de deploy: si la env NO está seteada aún, se mantiene
+   * público con warning en logs — así el deploy del backend no rompe la
+   * TV antes de configurar la variable en Railway.
    */
   @Get("display")
-  async display() {
+  async display(@Query("k") key?: string) {
+    const required = process.env.PLAYER_DISPLAY_KEY;
+    if (!required) {
+      this.logger.warn(
+        "PLAYER_DISPLAY_KEY no configurada — /access-code/display sigue público. Configúrala y actualiza la URL de la TV.",
+      );
+      return this.service.getOrRotate();
+    }
+    if (key !== required) {
+      throw new ForbiddenException({
+        message: "Invalid display key",
+        code: "DISPLAY_KEY_INVALID",
+      });
+    }
     return this.service.getOrRotate();
   }
 

@@ -59,9 +59,17 @@ export class TokenService {
     return this.sign(claims, expiresIn);
   }
 
+  /**
+   * Default 24h (antes 6h): la revocación ya no depende del `exp` sino
+   * del SessionAccessGuard, que consulta en BD que la sesión siga
+   * abierta y que el claim `acg` coincida con el epoch vigente del
+   * código del bar. El exp largo evita que a un cliente legítimo se le
+   * caiga la sesión a mitad de noche (regla del dueño); el guard corta
+   * de inmediato al cerrar la mesa o rotar el código manualmente.
+   */
   signSession(payload: Omit<SessionTokenPayload, "kind">): string {
     const claims: SessionTokenPayload = { ...payload, kind: "session" };
-    return this.sign(claims, process.env.JWT_SESSION_EXPIRES_IN ?? "6h");
+    return this.sign(claims, process.env.JWT_SESSION_EXPIRES_IN ?? "24h");
   }
 
   verify(token: string): AuthPayload {

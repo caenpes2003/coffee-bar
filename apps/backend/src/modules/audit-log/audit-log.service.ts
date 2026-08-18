@@ -186,6 +186,31 @@ type RecordInput =
       to_table_id: number;
       from_label: string;
       to_label: string;
+    }
+  | {
+      // El cliente (anónimo — sin actor) pidió abrir una mesa cerrada
+      // desde el QR, con código válido. Queda pending para el admin.
+      kind: "table_open_requested";
+      table_id: number;
+      table_number: number;
+      request_id: number;
+    }
+  | {
+      kind: "session_open_approved";
+      actor_id: number;
+      actor_label: string;
+      table_id: number;
+      table_number: number;
+      session_id: number;
+      request_id: number;
+    }
+  | {
+      kind: "session_open_rejected";
+      actor_id: number;
+      actor_label: string;
+      table_id: number;
+      table_number: number;
+      request_id: number;
     };
 
 @Injectable()
@@ -445,6 +470,34 @@ export class AuditLogService {
             to_table_id: input.to_table_id,
             from_label: input.from_label,
             to_label: input.to_label,
+          },
+        };
+      case "table_open_requested":
+        return {
+          summary: `Cliente pidió abrir mesa ${input.table_number} desde el QR`,
+          metadata: {
+            table_id: input.table_id,
+            table_number: input.table_number,
+            request_id: input.request_id,
+          },
+        };
+      case "session_open_approved":
+        return {
+          summary: `Apertura de mesa ${input.table_number} aprobada (sesión #${input.session_id})`,
+          metadata: {
+            table_id: input.table_id,
+            table_number: input.table_number,
+            session_id: input.session_id,
+            request_id: input.request_id,
+          },
+        };
+      case "session_open_rejected":
+        return {
+          summary: `Apertura de mesa ${input.table_number} rechazada`,
+          metadata: {
+            table_id: input.table_id,
+            table_number: input.table_number,
+            request_id: input.request_id,
           },
         };
     }

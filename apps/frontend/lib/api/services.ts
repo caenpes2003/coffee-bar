@@ -82,11 +82,18 @@ export const accessCodeApi = {
   getCurrent: (): Promise<AccessCodePayload> =>
     adminApi.get("/access-code/current").then((r) => r.data),
   /**
-   * Public read for the player TV. No admin token needed — the code is
-   * meant to be visible on a public screen anyway.
+   * Lectura para la TV del bar. Protegido server-side con la clave
+   * de despliegue `PLAYER_DISPLAY_KEY` (F3): antes era público y
+   * cualquiera en internet podía leer el código en claro. La TV
+   * recibe la clave en su build/URL vía NEXT_PUBLIC_PLAYER_DISPLAY_KEY.
    */
-  getForDisplay: (): Promise<AccessCodePayload> =>
-    publicApi.get("/access-code/display").then((r) => r.data),
+  getForDisplay: (): Promise<AccessCodePayload> => {
+    const key = process.env.NEXT_PUBLIC_PLAYER_DISPLAY_KEY;
+    const suffix = key ? `?k=${encodeURIComponent(key)}` : "";
+    return publicApi
+      .get(`/access-code/display${suffix}`)
+      .then((r) => r.data);
+  },
   rotate: (): Promise<AccessCodePayload> =>
     adminApi.post("/access-code/rotate").then((r) => r.data),
 };
@@ -112,11 +119,14 @@ export const authApi = {
 // admin (bill drawer).
 export const tableSessionsApi = {
   /** Customer → server: returns session + `session_token` for next calls. */
-  open: (tableId: number): Promise<TableSession & { session_token: string }> =>
+  open: (
+    tableId: number,
+    accessCode?: string,
+  ): Promise<TableSession & { session_token: string }> =>
     tableApi
       .post<TableSession & { session_token: string }>(
         "/table-sessions/open",
-        { table_id: tableId },
+        { table_id: tableId, access_code: accessCode },
       )
       .then((r) => r.data),
   /** Admin-only: manual close from the backoffice. */
@@ -383,6 +393,72 @@ export const billApi = {
         payment_method,
         allocations,
       })
+      .then((r) => r.data),
+};
+
+// ─── Table open requests (F3 — apertura con código + aprobación) ─────────────
+// El cliente (TABLE token del QR) pide acceso con el código del bar
+// validado server-side. Mesa abierta → entra directo; mesa cerrada →
+// pending hasta que el admin apruebe. El session_token de una
+// aprobación se reclama por HTTP con el claim_token, una sola vez.
+
+export type TableOpenCreateResult =
+  | { mode: "joined"; session: TableSession; session_token: string }
+  | {
+      mode: "pending";
+      request_id: number;
+      claim_token: string;
+      expires_at: string;
+    };
+
+export type TableOpenClaimResult =
+  | { status: "pending" }
+  | { status: "rejected" | "expired" | "cancelled" }
+  | { status: "approved"; session: TableSession; session_token: string };
+
+export type TableOpenRequestPending = {
+  id: number;
+  table_id: number;
+  table_number: number;
+  created_at: string;
+  expires_at: string;
+};
+
+export const tableOpenRequestsApi = {
+  create: (
+    tableId: number,
+    accessCode: string,
+  ): Promise<TableOpenCreateResult> =>
+    tableApi
+      .post<TableOpenCreateResult>("/table-open-requests", {
+        table_id: tableId,
+        access_code: accessCode,
+      })
+      .then((r) => r.data),
+
+  /** Público — el claim_token es la credencial. Entrega única. */
+  claim: (claimToken: string): Promise<TableOpenClaimResult> =>
+    publicApi
+      .get<TableOpenClaimResult>(
+        `/table-open-requests/claim?token=${encodeURIComponent(claimToken)}`,
+      )
+      .then((r) => r.data),
+
+  listPending: (): Promise<TableOpenRequestPending[]> =>
+    adminApi
+      .get<TableOpenRequestPending[]>("/admin/table-open-requests")
+      .then((r) => r.data),
+
+  approve: (id: number): Promise<{ ok: true; session_id: number }> =>
+    adminApi
+      .post<{ ok: true; session_id: number }>(
+        `/admin/table-open-requests/${id}/approve`,
+      )
+      .then((r) => r.data),
+
+  reject: (id: number): Promise<{ ok: true }> =>
+    adminApi
+      .post<{ ok: true }>(`/admin/table-open-requests/${id}/reject`)
       .then((r) => r.data),
 };
 

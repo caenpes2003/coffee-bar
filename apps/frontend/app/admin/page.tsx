@@ -23,6 +23,7 @@ import { KpiStrip, type Kpi } from "@/components/admin/KpiStrip";
 import { TablesMap } from "@/components/admin/TablesMap";
 import { MusicPanel } from "@/components/admin/MusicPanel";
 import { ExtrasDock } from "@/components/admin/ExtrasDock";
+import { TableOpenApprovalModal } from "@/components/admin/TableOpenApprovalModal";
 import type {
   Order,
   OrderRequest,
@@ -1712,6 +1713,10 @@ export default function AdminPage() {
 
       <ToastStack toasts={toasts} />
       <ExtrasDock />
+      {/* Solicitudes de apertura de mesa vía QR (F3): modal de
+          autorización que aparece cuando un cliente pide abrir una
+          mesa cerrada con el código correcto. */}
+      <TableOpenApprovalModal />
     </>
   );
 }

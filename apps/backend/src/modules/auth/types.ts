@@ -28,6 +28,14 @@ export type SessionTokenPayload = {
   kind: "session";
   session_id: number;
   table_id: number;
+  /**
+   * Access-code generation: epoch del BarAccessCode al momento de
+   * emitir el token. El SessionAccessGuard lo compara contra el epoch
+   * vigente — la rotación MANUAL del código lo incrementa y revoca
+   * todos los tokens de epochs anteriores. Opcional por retrocompat:
+   * tokens pre-deploy sin el claim se aceptan hasta que expiren solos.
+   */
+  acg?: number;
 };
 
 export type AuthPayload =

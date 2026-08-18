@@ -9,7 +9,7 @@ import {
 } from "@/store";
 import { useSocket, reconnectSocketWithFreshAuth } from "@/lib/socket/useSocket";
 import {
-  accessCodeApi,
+  tableOpenRequestsApi,
   tableSessionsApi,
   queueApi,
   ordersApi,
@@ -140,8 +140,6 @@ export default function MesaPage({
     undefined,
   );
   const [bill, setBill] = useState<BillView | null>(null);
-  const [openingSession, setOpeningSession] = useState(false);
-  const [openError, setOpenError] = useState<string | null>(null);
   // Mirrors session.opened_at so socket-driven callbacks (which capture
   // their `session` value at registration time) can still scope queue
   // filtering by the current session start.
@@ -172,62 +170,56 @@ export default function MesaPage({
   // token has expired or been revoked; we cannot keep operating, so we render
   // a recovery card asking the user to scan the QR again.
   const [sessionInvalid, setSessionInvalid] = useState(false);
-  // Per-device gate: every customer device must validate the current
-  // 4-digit bar code before opening/joining a session. We persist the
-  // ID of the validated code in sessionStorage; on every visit we read
-  // the current code id from the backend and compare. If the staff has
-  // rotated the code since this device validated, the IDs won't match
-  // and the gate reappears. This closes the bug where a stale
-  // sessionStorage flag let an old device skip the gate forever.
-  const [accessCodeOk, setAccessCodeOk] = useState<boolean>(false);
-  const [accessCodeChecking, setAccessCodeChecking] = useState<boolean>(true);
+  // F3 — apertura con código server-side + aprobación del admin.
+  //
+  // El gate viejo comparaba el código en el NAVEGADOR (contra un
+  // endpoint público que lo devolvía en claro) — puro teatro de
+  // seguridad. Ahora el código viaja al backend en
+  // POST /table-open-requests y este dispositivo nunca lo conoce.
+  //
+  // `openRequest` = solicitud pendiente (mesa cerrada, esperando al
+  // admin). El claim_token se persiste en sessionStorage para
+  // sobrevivir recargas mientras espera.
+  const [openRequest, setOpenRequest] = useState<null | {
+    claimToken: string;
+    expiresAt: string;
+  }>(null);
+  // Resultado terminal de la última solicitud (para el mensaje del gate).
+  const [openResolution, setOpenResolution] = useState<
+    null | "rejected" | "expired"
+  >(null);
+  // Contador de "nudges" del socket: cuando llega
+  // table-open-request:resolved reclamamos de inmediato en vez de
+  // esperar el próximo tick del polling.
+  const [claimNudge, setClaimNudge] = useState(0);
 
+  // Recuperar una solicitud pendiente tras recarga de página.
   useEffect(() => {
-    let cancelled = false;
-    accessCodeApi
-      .getForDisplay()
-      .then((current) => {
-        if (cancelled) return;
-        let storedId: number | null = null;
-        try {
-          const raw = sessionStorage.getItem("bar_access_ok");
-          if (raw && /^\d+$/.test(raw)) storedId = Number(raw);
-        } catch {
-          /* ignore — Safari private mode */
+    try {
+      const raw = sessionStorage.getItem("mesa_open_claim");
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          claimToken?: string;
+          expiresAt?: string;
+        };
+        if (parsed?.claimToken && parsed?.expiresAt) {
+          setOpenRequest({
+            claimToken: parsed.claimToken,
+            expiresAt: parsed.expiresAt,
+          });
         }
-        // Match? device already passed the gate for *this* code.
-        if (storedId === current.id) {
-          setAccessCodeOk(true);
-        } else {
-          // Either no flag, or the code rotated since validation. Wipe
-          // the stale value so we don't accidentally re-trust it on a
-          // race with a future rotation.
-          try {
-            sessionStorage.removeItem("bar_access_ok");
-          } catch {
-            /* ignore */
-          }
-          setAccessCodeOk(false);
-        }
-      })
-      .catch(() => {
-        // If the public endpoint fails, fall back to "ask for code".
-        setAccessCodeOk(false);
-      })
-      .finally(() => {
-        if (!cancelled) setAccessCodeChecking(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      }
+    } catch {
+      /* ignore — Safari private mode */
+    }
   }, []);
 
-  const markAccessCodeOk = useCallback((codeId: number) => {
-    setAccessCodeOk(true);
+  const clearOpenRequest = useCallback(() => {
+    setOpenRequest(null);
     try {
-      sessionStorage.setItem("bar_access_ok", String(codeId));
+      sessionStorage.removeItem("mesa_open_claim");
     } catch {
-      // ignore — Safari private mode etc.
+      /* ignore */
     }
   }, []);
   // Session-scoped OrderRequests (mine). Catalog / cart stay separated.
@@ -268,17 +260,9 @@ export default function MesaPage({
 
   const clearMesaSessionState = useCallback(() => {
     // Clear ONLY the session token. The table token survives so the same
-    // device can scan-less re-enter the entry view and start a new session.
+    // device can scan-less re-enter the entry view and request a new
+    // session (código server-side + aprobación otra vez).
     clearSessionToken();
-    // The bar access code gate must be re-validated for the next
-    // session — we cleared the session, so the device shouldn't carry
-    // the green light from the previous one.
-    try {
-      sessionStorage.removeItem("bar_access_ok");
-    } catch {
-      /* ignore */
-    }
-    setAccessCodeOk(false);
     setSession(null);
     setBill(null);
     setOrders([]);
@@ -480,6 +464,12 @@ export default function MesaPage({
     }
   }, [tableId, clearMesaSessionState, hydrateSessionData]);
 
+  // Nudge del flujo de aprobación: al resolverse nuestra solicitud,
+  // reclamar de inmediato (el resultado real viaja por HTTP).
+  const handleOpenRequestResolved = useCallback(() => {
+    setClaimNudge((n) => n + 1);
+  }, []);
+
   useSocket({
     sessionId: session?.id,
     onQueueUpdated: handleQueueUpdated,
@@ -493,6 +483,7 @@ export default function MesaPage({
     onTableSessionUpdated: handleTableSessionUpdated,
     onTableSessionClosed: handleSessionClosed,
     onProductUpdated: handleProductUpdated,
+    onTableOpenRequestResolved: handleOpenRequestResolved,
     onReconnect: handleSocketReconnect,
   });
 
@@ -642,47 +633,74 @@ export default function MesaPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, setOrders, hydrateSessionData]);
 
-  async function handleStartSession() {
-    setOpenError(null);
-    setOpeningSession(true);
-    try {
-      const created = await tableSessionsApi.open(tableId);
-      // Persist the session token BEFORE marking the session as live so that
-      // - subsequent customerApi requests carry the bearer
-      // - the socket's auth callback (re-)resolves to a session token
-      //   when reconectamos abajo.
-      setSessionToken(created.session_token);
-      const { session_token: _ignored, ...session } = created;
-      void _ignored;
-      // ORDEN CRÍTICO: primero setSession(...) para que useSocket
-      // observe el sessionId nuevo y dispare un joinRooms del room
-      // `tableSession:{id}`. Recién después reconectamos el socket
-      // para que el handshake lleve la auth fresca. Antes hacíamos
-      // reconnect → setSession y el `connect` event llegaba antes
-      // de que useSocket conociera el sessionId, dejando al cliente
-      // fuera del room — los eventos del admin nunca llegaban.
-      setSession(session);
-      // Forzar reconnect después del setState. Doble propósito:
-      //   1) Refrescar la auth (de anonymous → session token).
-      //   2) Disparar `connect` que vuelve a invocar joinRooms con
-      //      el sessionId ya seteado.
+  /**
+   * Aplica una sesión recién concedida (join directo o aprobación).
+   * ORDEN CRÍTICO: primero setSessionToken (para que customerApi y el
+   * auth del socket la vean), luego setSession (para que useSocket
+   * conozca el sessionId antes del `connect`), y al final reconectar
+   * el socket para que el handshake lleve la auth fresca.
+   */
+  const applyGrantedSession = useCallback(
+    (granted: TableSession, sessionToken: string) => {
+      setSessionToken(sessionToken);
+      setOpenResolution(null);
+      clearOpenRequest();
+      setSession(granted);
       reconnectSocketWithFreshAuth();
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 401 || status === 403) {
-        // Table token was rejected — likely the secret was rotated.
-        setSessionInvalid(true);
-        return;
+    },
+    [clearOpenRequest],
+  );
+
+  const handleOpenPending = useCallback(
+    (info: { claimToken: string; expiresAt: string }) => {
+      setOpenResolution(null);
+      setOpenRequest(info);
+      try {
+        sessionStorage.setItem("mesa_open_claim", JSON.stringify(info));
+      } catch {
+        /* ignore */
       }
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data
-          ?.message ?? "No se pudo iniciar la mesa. Intenta de nuevo.";
-      setOpenError(msg);
-    } finally {
-      setOpeningSession(false);
-    }
-  }
+    },
+    [],
+  );
+
+  // Polling del resultado de la solicitud pendiente (cada 3s) +
+  // reclamo inmediato cuando el socket avisa que se resolvió
+  // (`claimNudge`). El session_token SOLO llega por este claim HTTP.
+  useEffect(() => {
+    if (!openRequest || session) return;
+    let cancelled = false;
+    const doClaim = async () => {
+      try {
+        const res = await tableOpenRequestsApi.claim(openRequest.claimToken);
+        if (cancelled) return;
+        if (res.status === "pending") return;
+        if (res.status === "approved") {
+          applyGrantedSession(res.session, res.session_token);
+          return;
+        }
+        clearOpenRequest();
+        setOpenResolution(res.status === "rejected" ? "rejected" : "expired");
+      } catch (err) {
+        if (cancelled) return;
+        const status = (err as { response?: { status?: number } })?.response
+          ?.status;
+        // 404 (borrada) / 410 (ya reclamada en otro dispositivo):
+        // tratamos como expirada — el gate reaparece.
+        if (status === 404 || status === 410) {
+          clearOpenRequest();
+          setOpenResolution("expired");
+        }
+        // Errores transitorios (red): el próximo tick reintenta.
+      }
+    };
+    void doClaim();
+    const interval = setInterval(() => void doClaim(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [openRequest, session, claimNudge, applyGrantedSession, clearOpenRequest]);
 
   // Per-session song-credit ledger (shipped in the table snapshot via
   // socket). Mirrors the backend rule: 5 base slots + 1 extra per
@@ -751,43 +769,31 @@ export default function MesaPage({
 
   // ─── Entry state — no open session yet ───────────────────────────────────
   if (session === null) {
-    // Avoid a flash of the gate while we're still resolving whether
-    // sessionStorage already has a valid id. Once `accessCodeChecking`
-    // flips to false, we know whether to render gate or entry view.
-    if (accessCodeChecking) {
+    // Solicitud pendiente: pantalla de espera con polling + nudge socket.
+    if (openRequest) {
       return (
-        <div
-          style={{
-            minHeight: "100dvh",
-            background: C.cream,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: C.mute,
-            fontFamily: FONT_MONO,
-            letterSpacing: 3,
-            fontSize: 11,
-            textTransform: "uppercase",
-          }}
-        >
-          Verificando acceso...
-        </div>
-      );
-    }
-    if (!accessCodeOk) {
-      return (
-        <AccessCodeGate
+        <OpenRequestWaitingView
           tableNumber={currentTable.number ?? tableId}
-          onSuccess={markAccessCodeOk}
+          expiresAt={openRequest.expiresAt}
+          onCancel={clearOpenRequest}
         />
       );
     }
+    // Siempre el código PRIMERO (validado server-side): mesa abierta →
+    // entra directo; mesa cerrada → solicitud pendiente de aprobación.
     return (
-      <TableEntryView
-        table={currentTable}
-        onStart={handleStartSession}
-        loading={openingSession}
-        error={openError}
+      <AccessCodeGate
+        tableId={tableId}
+        tableNumber={currentTable.number ?? tableId}
+        resolutionNotice={
+          openResolution === "rejected"
+            ? "El bar no autorizó la apertura. Habla con el staff si crees que es un error."
+            : openResolution === "expired"
+              ? "La solicitud venció sin respuesta. Intenta de nuevo."
+              : null
+        }
+        onJoined={applyGrantedSession}
+        onPending={handleOpenPending}
       />
     );
   }
@@ -1980,34 +1986,54 @@ function OrderProductsCTA({
 // every 24h (or on-demand from /admin), so a customer who screenshots
 // the URL after their visit can't keep coming back next week.
 function AccessCodeGate({
+  tableId,
   tableNumber,
-  onSuccess,
+  resolutionNotice,
+  onJoined,
+  onPending,
 }: {
+  tableId: number;
   tableNumber: number;
-  onSuccess: (codeId: number) => void;
+  /** Mensaje del desenlace de la solicitud anterior (rechazada/vencida). */
+  resolutionNotice: string | null;
+  onJoined: (session: TableSession, sessionToken: string) => void;
+  onPending: (info: { claimToken: string; expiresAt: string }) => void;
 }) {
   const [digits, setDigits] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // F3: el código viaja al backend — este dispositivo nunca conoce el
+  // código correcto. Mesa abierta → session_token directo; mesa
+  // cerrada → solicitud pendiente de aprobación del admin.
   const submit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (digits.length !== 4 || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      await accessCodeApi.validate(digits);
-      // Re-read the current id so the device pins to the right code,
-      // even if the cashier rotated between us reading and validating.
-      const current = await accessCodeApi.getForDisplay();
-      onSuccess(current.id);
+      const result = await tableOpenRequestsApi.create(tableId, digits);
+      if (result.mode === "joined") {
+        onJoined(result.session, result.session_token);
+      } else {
+        onPending({
+          claimToken: result.claim_token,
+          expiresAt: result.expires_at,
+        });
+      }
     } catch (err) {
       const code = (err as { response?: { data?: { code?: string } } })
         ?.response?.data?.code;
       const status = (err as { response?: { status?: number } })?.response
         ?.status;
-      if (code === "BAR_CODE_INVALID") {
+      if (code === "ACCESS_CODE_INVALID") {
         setError("Código incorrecto. Pídeselo al staff.");
+      } else if (code === "TABLE_OPEN_REQUEST_PENDING") {
+        setError(
+          "Ya hay una solicitud en curso para esta mesa. Espera un momento.",
+        );
+      } else if (code === "CASH_REGISTER_CLOSED" || status === 412) {
+        setError("El bar no está recibiendo clientes en este momento.");
       } else if (status === 429) {
         setError(
           "Demasiados intentos. Espera un momento e intenta de nuevo.",
@@ -2106,6 +2132,23 @@ function AccessCodeGate({
           </p>
         </div>
 
+        {resolutionNotice && (
+          <div
+            role="status"
+            style={{
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: C.terracottaSoft,
+              color: C.terracotta,
+              fontFamily: FONT_UI,
+              fontSize: 12.5,
+              lineHeight: 1.4,
+            }}
+          >
+            {resolutionNotice}
+          </div>
+        )}
+
         <input
           type="text"
           inputMode="numeric"
@@ -2182,21 +2225,31 @@ function AccessCodeGate({
   );
 }
 
-// ─── Table entry state ───────────────────────────────────────────────────────
-// Rendered when there is no open session for this table. Explicit CTA calls
-// POST /table-sessions/open; no auto-open to avoid spawning sessions from
-// crawlers, link previews or double-renders.
-function TableEntryView({
-  table,
-  onStart,
-  loading,
-  error,
+// ─── Espera de autorización (F3) ────────────────────────────────────────────
+// La mesa estaba cerrada: el código ya fue validado server-side y la
+// solicitud quedó pending. El resultado llega por polling del claim
+// (y un nudge por socket lo acelera). El session_token JAMÁS llega por
+// socket — solo por el claim HTTP.
+function OpenRequestWaitingView({
+  tableNumber,
+  expiresAt,
+  onCancel,
 }: {
-  table: Table;
-  onStart: () => void;
-  loading: boolean;
-  error: string | null;
+  tableNumber: number;
+  expiresAt: string;
+  onCancel: () => void;
 }) {
+  // Countdown visual — el server es quien decide la expiración real.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const remainingSec = Math.max(
+    0,
+    Math.floor((new Date(expiresAt).getTime() - now) / 1000),
+  );
+
   return (
     <main
       style={{
@@ -2209,7 +2262,7 @@ function TableEntryView({
         alignItems: "center",
         justifyContent: "center",
         padding: "40px 24px",
-        gap: 28,
+        gap: 24,
         textAlign: "center",
       }}
     >
@@ -2222,103 +2275,77 @@ function TableEntryView({
           textTransform: "uppercase",
         }}
       >
-        — Bienvenido
+        — Mesa {pad(tableNumber)}
       </span>
 
       <div
+        aria-hidden
         style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 4,
+          width: 54,
+          height: 54,
+          border: `3px solid ${C.sand}`,
+          borderTopColor: C.gold,
+          borderRadius: "50%",
+          animation: "spin 1s linear infinite",
+        }}
+      />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+      <h1
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 26,
+          letterSpacing: 2,
+          margin: 0,
+          textTransform: "uppercase",
         }}
       >
-        <span
-          style={{
-            fontFamily: FONT_MONO,
-            fontSize: 11,
-            letterSpacing: 4,
-            color: C.cacao,
-            textTransform: "uppercase",
-          }}
-        >
-          Mesa
-        </span>
-        <span
-          style={{
-            fontFamily: FONT_DISPLAY,
-            fontSize: "clamp(96px, 22vw, 180px)",
-            lineHeight: 0.85,
-            color: C.ink,
-            letterSpacing: -6,
-          }}
-        >
-          {pad(table.number ?? table.id)}
-        </span>
-      </div>
-
+        Esperando autorización
+      </h1>
       <p
         style={{
           fontFamily: FONT_UI,
-          fontSize: 16,
+          fontSize: 15,
           color: C.cacao,
-          maxWidth: 380,
+          maxWidth: 360,
           lineHeight: 1.5,
           margin: 0,
         }}
       >
-        Toca abajo para empezar tu experiencia. Podrás pedir, elegir canciones
-        y ver tu cuenta en vivo.
+        El bar está confirmando la apertura de tu mesa. Esto toma unos
+        segundos.
       </p>
-
-      <div
+      <span
         style={{
-          width: "100%",
-          maxWidth: 360,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
+          fontFamily: FONT_MONO,
+          fontSize: 12,
+          letterSpacing: 2,
+          color: remainingSec <= 20 ? C.terracotta : C.mute,
         }}
       >
-        <button
-          type="button"
-          onClick={onStart}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "18px 24px",
-            border: "none",
-            borderRadius: 999,
-            background: loading
-              ? C.sand
-              : `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
-            color: loading ? C.mute : C.paper,
-            fontFamily: FONT_DISPLAY,
-            fontSize: 17,
-            letterSpacing: 4,
-            textTransform: "uppercase",
-            cursor: loading ? "not-allowed" : "pointer",
-            boxShadow: loading ? "none" : C.shadow,
-          }}
-        >
-          {loading ? "Iniciando..." : "Empezar pedido"}
-        </button>
-        {error && (
-          <p
-            role="alert"
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              color: C.terracotta,
-              letterSpacing: 1.5,
-              margin: 0,
-              textTransform: "uppercase",
-            }}
-          >
-            {error}
-          </p>
-        )}
-      </div>
+        {Math.floor(remainingSec / 60)}:
+        {String(remainingSec % 60).padStart(2, "0")}
+      </span>
+
+      <button
+        type="button"
+        onClick={onCancel}
+        style={{
+          padding: "10px 22px",
+          border: `1px solid ${C.sand}`,
+          background: "transparent",
+          color: C.cacao,
+          borderRadius: 999,
+          fontFamily: FONT_MONO,
+          fontSize: 11,
+          letterSpacing: 2,
+          cursor: "pointer",
+          textTransform: "uppercase",
+          fontWeight: 700,
+        }}
+      >
+        Cancelar
+      </button>
     </main>
   );
 }

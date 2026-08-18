@@ -23,6 +23,12 @@ const rules: RuleSet = {
   // we cap at 8 attempts/min/IP to make brute-force impractical without
   // hurting real customers who typo once.
   "/api/access-code/validate": { windowMs: 60_000, max: 8 },
+  // Solicitudes de apertura de mesa (F3). El create también valida el
+  // código de 4 dígitos, así que hereda el mismo criterio anti brute
+  // force que /validate. El claim es un GET de polling cada ~3s → una
+  // ventana más generosa pero acotada.
+  "/api/table-open-requests/claim": { windowMs: 60_000, max: 40 },
+  "/api/table-open-requests": { windowMs: 60_000, max: 8 },
   // Forgot-password is a public surface; cap to 3/min/IP so a single
   // address can't be used to spam reset emails to a victim's inbox.
   "/api/auth/forgot-password": { windowMs: 60_000, max: 3 },
@@ -97,6 +103,17 @@ function findRule(path: string): { rule: RateLimitRule; bucketPath: string } | n
     return {
       rule: rules["/api/access-code/validate"],
       bucketPath: "/api/access-code/validate",
+    };
+  // El match del claim va ANTES del prefijo genérico (es más específico).
+  if (path.startsWith("/api/table-open-requests/claim"))
+    return {
+      rule: rules["/api/table-open-requests/claim"],
+      bucketPath: "/api/table-open-requests/claim",
+    };
+  if (path.startsWith("/api/table-open-requests"))
+    return {
+      rule: rules["/api/table-open-requests"],
+      bucketPath: "/api/table-open-requests",
     };
   if (path.startsWith("/api/auth/forgot-password"))
     return {

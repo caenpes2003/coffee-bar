@@ -6,6 +6,7 @@ import type { SocketEvents } from "@coffee-bar/shared";
 import {
   getAdminToken,
   getSessionToken,
+  getTableToken,
 } from "@/lib/auth/token-storage";
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
@@ -50,6 +51,12 @@ function resolveSocketAuth(): { token?: string } {
   if (isMesaSurface) {
     const session = getSessionToken();
     if (session) return { token: session };
+    // Sin sesión aún: autenticar con el TABLE token del QR. El backend
+    // une estos sockets al room `table:{id}`, que es el canal de aviso
+    // del flujo de aprobación de apertura (F3) — sin esto el cliente
+    // en espera solo se enteraría por polling.
+    const table = getTableToken();
+    if (table) return { token: table };
     return {};
   }
   const admin = getAdminToken();
@@ -179,6 +186,25 @@ interface UseSocketOptions {
       quantity: number;
     }>;
   }) => void;
+  /**
+   * F3 — flujo de aprobación de apertura de mesa. `created` llega al
+   * staff (modal de autorización); `resolved` llega al room de la mesa
+   * (nudge para reclamar por HTTP) y al staff (cerrar el modal en
+   * otras pestañas). Los payloads jamás llevan tokens.
+   */
+  onTableOpenRequestCreated?: (payload: {
+    id: number;
+    table_id: number;
+    table_number: number;
+    created_at: string;
+    expires_at: string;
+  }) => void;
+  onTableOpenRequestResolved?: (payload: {
+    id: number;
+    table_id: number;
+    table_number: number;
+    status: "approved" | "rejected";
+  }) => void;
   onReconnect?: () => void;
 }
 
@@ -200,6 +226,8 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionClosed,
     onProductUpdated,
     onPriceMismatch,
+    onTableOpenRequestCreated,
+    onTableOpenRequestResolved,
     onReconnect,
   } = options;
   const socketRef = useRef<Socket | null>(null);
@@ -307,6 +335,21 @@ export function useSocket(options: UseSocketOptions = {}) {
       const handler = onPriceMismatch as (payload: unknown) => void;
       s.off("price-mismatch", handler).on("price-mismatch", handler);
     }
+    // Ad-hoc como price-mismatch: eventos F3 sin tipo en SocketEvents.
+    if (onTableOpenRequestCreated) {
+      const handler = onTableOpenRequestCreated as (payload: unknown) => void;
+      s.off("table-open-request:created", handler).on(
+        "table-open-request:created",
+        handler,
+      );
+    }
+    if (onTableOpenRequestResolved) {
+      const handler = onTableOpenRequestResolved as (payload: unknown) => void;
+      s.off("table-open-request:resolved", handler).on(
+        "table-open-request:resolved",
+        handler,
+      );
+    }
 
     return () => {
       s.off("connect", joinRooms);
@@ -335,6 +378,18 @@ export function useSocket(options: UseSocketOptions = {}) {
           onPriceMismatch as (payload: unknown) => void,
         );
       }
+      if (onTableOpenRequestCreated) {
+        s.off(
+          "table-open-request:created",
+          onTableOpenRequestCreated as (payload: unknown) => void,
+        );
+      }
+      if (onTableOpenRequestResolved) {
+        s.off(
+          "table-open-request:resolved",
+          onTableOpenRequestResolved as (payload: unknown) => void,
+        );
+      }
     };
   }, [
     sessionId,
@@ -353,6 +408,8 @@ export function useSocket(options: UseSocketOptions = {}) {
     onTableSessionClosed,
     onProductUpdated,
     onPriceMismatch,
+    onTableOpenRequestCreated,
+    onTableOpenRequestResolved,
     onReconnect,
   ]);
 
