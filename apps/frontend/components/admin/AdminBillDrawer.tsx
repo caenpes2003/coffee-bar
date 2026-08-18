@@ -173,6 +173,16 @@ export function AdminBillDrawer({
       setPaymentError(null);
       setReverseTarget(null);
       setReverseError(null);
+      // Los modales anidados también se resetean: si el drawer se
+      // cierra con un modal abierto (click en el backdrop del drawer),
+      // ese estado quedaba vivo y al reabrir CUALQUIER mesa aparecían
+      // el drawer Y el último modal (pago parcial, productos, etc.).
+      setActionOpen(null);
+      setConfirmOpen(null);
+      setVoidOpen(false);
+      setTransferOpen(false);
+      setRepeatPicker(null);
+      setRepeatBusyId(null);
     }
   }, [open, sessionId, load]);
 
