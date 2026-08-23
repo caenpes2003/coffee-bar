@@ -126,6 +126,14 @@ export function CustomerBillModal({
 
   // Los pagos parciales tienen su propia sección — un pago NO es un
   // "ajuste" y mostrarlo ahí confundía al cliente.
+  //
+  // Los REFUNDS tampoco se muestran: son correcciones internas del bar
+  // (cargo equivocado, devolución) y el cliente solo debe ver lo que
+  // efectivamente le sirvieron. Ocultarlos no descuadra nada porque
+  // cada refund anula exactamente a su línea original (que también
+  // está oculta por reversed_at) — el par suma cero. El resumen de
+  // abajo se recalcula desde las líneas VISIBLES para que los números
+  // que ve el cliente siempre cuadren entre sí.
   const adjustmentLines = useMemo<Line[]>(() => {
     if (!bill) return [];
     return bill.items
@@ -133,6 +141,7 @@ export function CustomerBillModal({
         (c) =>
           c.type !== "product" &&
           c.type !== "partial_payment" &&
+          c.type !== "refund" &&
           c.reversed_at == null,
       )
       .map((c) => ({
@@ -167,6 +176,22 @@ export function CustomerBillModal({
         reason: c.reason,
       }));
   }, [bill]);
+
+  // Resumen calculado desde las líneas VISIBLES (sin reversadas ni
+  // refunds). El "Pendiente/Total" sí viene del backend — es la cifra
+  // autoritativa de cobro, y coincide con la suma visible porque cada
+  // par oculto (original reversada + su refund) suma cero.
+  const displaySummary = useMemo(() => {
+    const subtotal = productLines.reduce((s, l) => s + l.amount, 0);
+    const discounts = adjustmentLines
+      .filter((l) => l.type === "discount")
+      .reduce((s, l) => s + l.amount, 0);
+    const adjustments = adjustmentLines
+      .filter((l) => l.type !== "discount")
+      .reduce((s, l) => s + l.amount, 0);
+    const partials = paymentLines.reduce((s, l) => s + l.amount, 0);
+    return { subtotal, discounts, adjustments, partials };
+  }, [productLines, adjustmentLines, paymentLines]);
 
   if (!open) return null;
 
@@ -596,31 +621,27 @@ export function CustomerBillModal({
                 gap: 6,
               }}
             >
-              <SummaryRow label="Subtotal" value={bill.summary.subtotal} />
-              {bill.summary.discounts_total !== 0 && (
+              <SummaryRow label="Subtotal" value={displaySummary.subtotal} />
+              {displaySummary.discounts !== 0 && (
                 <SummaryRow
                   label="Descuentos"
-                  value={bill.summary.discounts_total}
+                  value={displaySummary.discounts}
                 />
               )}
-              {bill.summary.adjustments_total !== 0 && (
+              {displaySummary.adjustments !== 0 && (
                 <SummaryRow
                   label="Ajustes"
-                  value={bill.summary.adjustments_total}
+                  value={displaySummary.adjustments}
                 />
               )}
-              {bill.summary.partial_payments_total !== 0 && (
+              {displaySummary.partials !== 0 && (
                 <SummaryRow
                   label="Pagos parciales"
-                  value={bill.summary.partial_payments_total}
+                  value={displaySummary.partials}
                 />
               )}
               <SummaryRow
-                label={
-                  bill.summary.partial_payments_total !== 0
-                    ? "Pendiente"
-                    : "Total"
-                }
+                label={displaySummary.partials !== 0 ? "Pendiente" : "Total"}
                 value={bill.summary.total}
                 emphasis
               />
