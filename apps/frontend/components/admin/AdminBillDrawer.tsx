@@ -143,6 +143,16 @@ export function AdminBillDrawer({
     productName: string;
     slots: ProductRecipeSlotView[];
   }>(null);
+  // Editar el armado de una unidad servida (swap de cervezas del
+  // cubetazo): abre el CompositionPicker precargado con la mezcla
+  // actual de esa unidad y envía el recompose al confirmar.
+  const [recomposeTarget, setRecomposeTarget] = useState<null | {
+    consumptionId: number;
+    unitIndex: number;
+    productName: string;
+    slots: ProductRecipeSlotView[];
+    initial?: CompositionPick[];
+  }>(null);
 
   const load = useCallback(() => {
     if (sessionId == null) return;
@@ -183,6 +193,7 @@ export function AdminBillDrawer({
       setTransferOpen(false);
       setRepeatPicker(null);
       setRepeatBusyId(null);
+      setRecomposeTarget(null);
     }
   }, [open, sessionId, load]);
 
@@ -249,6 +260,33 @@ export function AdminBillDrawer({
       setPaymentError(getErrorMessage(err));
     } finally {
       setRepeatBusyId(null);
+    }
+  }
+
+  /**
+   * "✎ Cambiar armado": abre el picker precargado con la mezcla REAL
+   * de esa unidad. Si la receta cambió desde la venta y la mezcla ya
+   * no mapea, el picker arranca en los defaults (el server valida
+   * contra la receta fresca de todos modos).
+   */
+  async function handleEditComposition(c: Consumption, unitIndex: number) {
+    if (c.product_id == null || !c.composition) return;
+    setPaymentError(null);
+    try {
+      const slots = await adminProductsApi.getRecipe(c.product_id);
+      const unit = c.composition.find((u) => u.unit_index === unitIndex);
+      const initialUnits = unit
+        ? buildUnitsFromComposition(slots, [unit])
+        : null;
+      setRecomposeTarget({
+        consumptionId: c.id,
+        unitIndex,
+        productName: c.description,
+        slots,
+        initial: initialUnits?.[0]?.composition,
+      });
+    } catch (err) {
+      setPaymentError(getErrorMessage(err));
     }
   }
 
@@ -447,6 +485,9 @@ export function AdminBillDrawer({
                   })
                 }
                 onRepeat={(c) => void handleRepeatLine(c)}
+                onEditComposition={(c, unitIndex) =>
+                  void handleEditComposition(c, unitIndex)
+                }
                 repeatBusyId={repeatBusyId}
               />
               {payments.length > 0 && (
@@ -645,6 +686,28 @@ export function AdminBillDrawer({
           onClose={() => setActionOpen(null)}
           onDone={() => {
             setActionOpen(null);
+          }}
+        />
+      )}
+
+      {recomposeTarget && (
+        <CompositionPicker
+          productName={`${recomposeTarget.productName} — unidad ${recomposeTarget.unitIndex + 1}`}
+          slots={recomposeTarget.slots}
+          showStock
+          initial={recomposeTarget.initial}
+          confirmLabel="Guardar cambio"
+          onCancel={() => setRecomposeTarget(null)}
+          onPick={(composition) => {
+            const target = recomposeTarget;
+            setRecomposeTarget(null);
+            void billApi
+              .recomposeConsumption(target.consumptionId, {
+                unit_index: target.unitIndex,
+                composition,
+              })
+              .catch((e: unknown) => setPaymentError(getErrorMessage(e)));
+            // El bill se refresca solo vía socket bill:updated.
           }}
         />
       )}
@@ -938,6 +1001,7 @@ function LedgerList({
   readOnly,
   onRefund,
   onRepeat,
+  onEditComposition,
   repeatBusyId,
 }: {
   items: Consumption[];
@@ -945,6 +1009,8 @@ function LedgerList({
   onRefund: (c: Consumption) => void;
   /** Repetir la línea: agrega 1 unidad igual (misma composición). */
   onRepeat: (c: Consumption) => void;
+  /** Editar el armado de una unidad servida (swap de cervezas). */
+  onEditComposition: (c: Consumption, unitIndex: number) => void;
   repeatBusyId: number | null;
 }) {
   const typeMeta: Record<
@@ -1151,6 +1217,47 @@ function LedgerList({
                             </div>
                           ))}
                         </details>
+                      )}
+                      {/* Swap de cervezas de un cubetazo servido: los
+                          clientes cambian la mezcla a mitad de noche.
+                          Un botón por unidad (o uno solo si hay una). */}
+                      {!readOnly && !reversed && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 6,
+                            marginTop: 4,
+                          }}
+                        >
+                          {c.composition.length === 1 ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onEditComposition(
+                                  c,
+                                  c.composition![0].unit_index,
+                                )
+                              }
+                              style={editCompositionBtnStyle}
+                            >
+                              ✎ Cambiar armado
+                            </button>
+                          ) : (
+                            c.composition.map((u) => (
+                              <button
+                                key={u.unit_index}
+                                type="button"
+                                onClick={() =>
+                                  onEditComposition(c, u.unit_index)
+                                }
+                                style={editCompositionBtnStyle}
+                              >
+                                ✎ U{u.unit_index + 1}
+                              </button>
+                            ))
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
@@ -1923,6 +2030,18 @@ const inputStyle: React.CSSProperties = {
   fontFamily: FONT_UI,
   fontSize: 14,
   outline: "none",
+};
+
+const editCompositionBtnStyle: React.CSSProperties = {
+  padding: "2px 9px",
+  border: `1px solid ${C.sandDark}`,
+  background: "transparent",
+  color: C.cacao,
+  borderRadius: 999,
+  fontFamily: FONT_UI,
+  fontSize: 10.5,
+  fontWeight: 700,
+  cursor: "pointer",
 };
 
 function stepperBtnStyle(disabled: boolean): React.CSSProperties {

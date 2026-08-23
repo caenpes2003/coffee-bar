@@ -10,6 +10,7 @@ import {
 import { ConsumptionsService, AuditActor } from "./consumptions.service";
 import { CreateAdjustmentDto } from "./dto/create-adjustment.dto";
 import { CreatePartialPaymentDto } from "./dto/create-partial-payment.dto";
+import { RecomposeConsumptionDto } from "./dto/recompose-consumption.dto";
 import { RefundConsumptionDto } from "./dto/refund-consumption.dto";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import { AuthKinds } from "../auth/guards/decorators";
@@ -99,6 +100,36 @@ export class ConsumptionsController {
       });
     }
     return this.service.serialize(created);
+  }
+
+  /**
+   * Editar el armado de UNA unidad de un compuesto ya servido (swap
+   * de cervezas del cubetazo). Solo mueve inventario y el registro de
+   * composición — el precio de la línea no cambia.
+   */
+  @Post("consumptions/:id/recompose")
+  @UseGuards(JwtGuard, RequireOpenCashRegisterGuard)
+  @AuthKinds("admin")
+  async recompose(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: RecomposeConsumptionDto,
+    @CurrentAuth() auth: AuthPayload,
+  ) {
+    const result = await this.service.recomposeConsumption(id, dto);
+    if (auth && auth.kind === "admin") {
+      void this.audit.record({
+        kind: "composition_edited",
+        actor_id: auth.sub,
+        actor_label: auth.name,
+        session_id: result.session_id,
+        consumption_id: id,
+        product_name: result.product_name,
+        unit_index: dto.unit_index,
+        from_label: result.from_label,
+        to_label: result.to_label,
+      });
+    }
+    return { ok: true };
   }
 
   @Post("consumptions/:id/refund")

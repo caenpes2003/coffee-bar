@@ -785,6 +785,226 @@ export class ConsumptionsService {
     return result.created;
   }
 
+  /**
+   * Editar el armado de UNA unidad de un compuesto ya servido.
+   * Caso real: se sirve el cubetazo, a mitad de noche cambian 2
+   * águilas por 2 pokers. El precio NO cambia (precio único); lo que
+   * cambia es el inventario (vuelven las que salen del balde, se
+   * descuentan las que entran) y el registro OrderItemComponent, que
+   * debe reflejar lo que FÍSICAMENTE se sirvió al final — de él
+   * dependen reposiciones de refund, tickets y el detalle de la
+   * cuenta.
+   *
+   * Todo en una tx: validación de receta fresca, diff de stock con
+   * guard (STOCK_CONFLICT si no alcanza lo nuevo), replace de las
+   * filas de la unidad, y audit.
+   */
+  async recomposeConsumption(
+    consumptionId: number,
+    dto: {
+      unit_index: number;
+      composition: Array<{
+        slot_id: number;
+        options: Array<{ option_id: number; quantity: number }>;
+      }>;
+    },
+  ): Promise<{
+    ok: true;
+    session_id: number;
+    product_name: string;
+    from_label: string;
+    to_label: string;
+  }> {
+    const original = await this.prisma.consumption.findUnique({
+      where: { id: consumptionId },
+      include: {
+        table_session: { select: { id: true, table_id: true, status: true } },
+      },
+    });
+    if (!original) {
+      throw new NotFoundException(`Consumption ${consumptionId} not found`);
+    }
+    if (
+      original.type !== ConsumptionType.product ||
+      original.reversed_at !== null ||
+      original.order_id == null ||
+      original.product_id == null
+    ) {
+      throw new BadRequestException({
+        message: "Solo se puede re-armar una línea de producto activa",
+        code: "RECOMPOSE_INVALID_TARGET",
+      });
+    }
+    if (original.table_session.status === TableSessionStatus.closed) {
+      throw new BadRequestException({
+        message: "Session is closed",
+        code: "TABLE_SESSION_CLOSED",
+      });
+    }
+
+    const affected = await this.prisma.$transaction(async (tx) => {
+      const orderItem = await tx.orderItem.findFirst({
+        where: {
+          order_id: original.order_id!,
+          product_id: original.product_id!,
+        },
+        include: {
+          components: true,
+          product: { select: { name: true } },
+        },
+      });
+      if (!orderItem || orderItem.components.length === 0) {
+        throw new BadRequestException({
+          message: "La línea no es un compuesto con armado registrado",
+          code: "RECOMPOSE_NOT_COMPOSITE",
+        });
+      }
+      const oldUnitRows = orderItem.components.filter(
+        (c) => c.unit_index === dto.unit_index,
+      );
+      if (oldUnitRows.length === 0) {
+        throw new BadRequestException({
+          message: `La unidad ${dto.unit_index + 1} no existe en esta línea`,
+          code: "RECOMPOSE_INVALID_UNIT",
+        });
+      }
+
+      // Validar la composición nueva contra la receta FRESCA (misma
+      // filosofía que resolveCompositionPlan: la receta pudo cambiar).
+      const slots = await tx.productRecipeSlot.findMany({
+        where: { product_id: original.product_id! },
+        include: { options: true },
+      });
+      if (slots.length === 0) {
+        throw new BadRequestException({
+          message: "El producto ya no tiene receta",
+          code: "RECOMPOSE_NO_RECIPE",
+        });
+      }
+      const newComponents = new Map<number, number>();
+      for (const slot of slots) {
+        const pick = dto.composition.find((c) => c.slot_id === slot.id);
+        const options = pick?.options ?? [];
+        let sum = 0;
+        for (const opt of options) {
+          const option = slot.options.find((o) => o.id === opt.option_id);
+          if (!option) {
+            throw new BadRequestException({
+              message: `Opción ${opt.option_id} no pertenece al slot "${slot.label}"`,
+              code: "RECOMPOSE_INVALID_OPTION",
+            });
+          }
+          sum += opt.quantity;
+          newComponents.set(
+            option.component_id,
+            (newComponents.get(option.component_id) ?? 0) + opt.quantity,
+          );
+        }
+        if (sum !== slot.quantity) {
+          throw new BadRequestException({
+            message: `El slot "${slot.label}" debe sumar ${slot.quantity} (van ${sum})`,
+            code: "RECOMPOSE_SLOT_QUANTITY_MISMATCH",
+          });
+        }
+      }
+
+      const oldComponents = new Map<number, number>();
+      for (const row of oldUnitRows) {
+        oldComponents.set(
+          row.component_product_id,
+          (oldComponents.get(row.component_product_id) ?? 0) + row.quantity,
+        );
+      }
+
+      // Diff de stock: lo que sale del balde vuelve a bodega; lo que
+      // entra se descuenta con guard (otro pedido pudo llevarse las
+      // últimas mientras editábamos).
+      const touched = new Set<number>([
+        ...oldComponents.keys(),
+        ...newComponents.keys(),
+      ]);
+      for (const componentId of touched) {
+        const delta =
+          (newComponents.get(componentId) ?? 0) -
+          (oldComponents.get(componentId) ?? 0);
+        if (delta > 0) {
+          const dec = await tx.product.updateMany({
+            where: { id: componentId, stock: { gte: delta } },
+            data: { stock: { decrement: delta } },
+          });
+          if (dec.count === 0) {
+            const p = await tx.product.findUnique({
+              where: { id: componentId },
+              select: { name: true },
+            });
+            throw new ConflictException({
+              message: `${p?.name ?? `Producto ${componentId}`} sin disponibilidad`,
+              code: "STOCK_CONFLICT",
+              product_id: componentId,
+            });
+          }
+        } else if (delta < 0) {
+          await tx.product.update({
+            where: { id: componentId },
+            data: { stock: { increment: -delta } },
+          });
+        }
+      }
+
+      // Replace del registro de la unidad.
+      await tx.orderItemComponent.deleteMany({
+        where: {
+          order_item_id: orderItem.id,
+          unit_index: dto.unit_index,
+        },
+      });
+      await tx.orderItemComponent.createMany({
+        data: Array.from(newComponents.entries()).map(
+          ([component_product_id, quantity]) => ({
+            order_item_id: orderItem.id,
+            component_product_id,
+            quantity,
+            unit_index: dto.unit_index,
+          }),
+        ),
+      });
+
+      // Etiquetas legibles para el audit (nombres de componentes).
+      const names = await tx.product.findMany({
+        where: { id: { in: Array.from(touched) } },
+        select: { id: true, name: true },
+      });
+      const nameById = new Map(names.map((p) => [p.id, p.name]));
+      const label = (m: Map<number, number>) =>
+        Array.from(m.entries())
+          .map(([id, q]) => `${q}× ${nameById.get(id) ?? id}`)
+          .join(" + ");
+      return {
+        touched: Array.from(touched),
+        productName: orderItem.product?.name ?? original.description,
+        fromLabel: label(oldComponents),
+        toLabel: label(newComponents),
+      };
+    });
+
+    this.emitBillUpdates(
+      original.table_session_id,
+      original.table_session.table_id,
+    );
+    if (affected.touched.length > 0) {
+      void this.products.broadcastChanged(affected.touched);
+    }
+    // El audit lo registra el controller (mismo patrón que refund y
+    // partial-payment en este módulo).
+    return {
+      ok: true,
+      session_id: original.table_session_id,
+      product_name: affected.productName,
+      from_label: affected.fromLabel,
+      to_label: affected.toLabel,
+    };
+  }
+
   // ─── internals ────────────────────────────────────────────────────────────
 
   private describeAdjustment(type: ConsumptionType, reason: string): string {

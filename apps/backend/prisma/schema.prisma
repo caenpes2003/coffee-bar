@@ -145,6 +145,8 @@ enum AuditEventKind {
   table_open_requested
   session_open_approved
   session_open_rejected
+  // Edición del armado de un compuesto ya servido (swap de cervezas)
+  composition_edited
 }
 
 model User {

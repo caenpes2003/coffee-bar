@@ -211,6 +211,19 @@ type RecordInput =
       table_id: number;
       table_number: number;
       request_id: number;
+    }
+  | {
+      // Swap de componentes de un compuesto ya servido (ej. cambiar
+      // 2 águilas por 2 pokers en un cubetazo a mitad de noche).
+      kind: "composition_edited";
+      actor_id: number;
+      actor_label: string;
+      session_id: number;
+      consumption_id: number;
+      product_name: string;
+      unit_index: number;
+      from_label: string;
+      to_label: string;
     };
 
 @Injectable()
@@ -498,6 +511,18 @@ export class AuditLogService {
             table_id: input.table_id,
             table_number: input.table_number,
             request_id: input.request_id,
+          },
+        };
+      case "composition_edited":
+        return {
+          summary: `Armado editado: ${input.product_name} (unidad ${input.unit_index + 1}) — ${input.from_label} → ${input.to_label}`,
+          metadata: {
+            session_id: input.session_id,
+            consumption_id: input.consumption_id,
+            product_name: input.product_name,
+            unit_index: input.unit_index,
+            from_label: input.from_label,
+            to_label: input.to_label,
           },
         };
     }

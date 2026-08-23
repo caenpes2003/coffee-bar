@@ -49,6 +49,15 @@ interface Props {
    * cambia si el número se muestra explícitamente o no.
    */
   showStock?: boolean;
+  /**
+   * Composición inicial. Sin ella el picker arranca en los defaults
+   * de la receta; con ella arranca en la mezcla dada — se usa para
+   * EDITAR el armado de una unidad ya servida (los clientes cambian
+   * cervezas a mitad de noche).
+   */
+  initial?: CompositionPick[];
+  /** Texto del botón de confirmar (default "Agregar"). */
+  confirmLabel?: string;
 }
 
 type SlotState = Map<number, number>; // option_id -> quantity
@@ -59,14 +68,32 @@ export function CompositionPicker({
   onCancel,
   onPick,
   showStock = false,
+  initial,
+  confirmLabel,
 }: Props) {
-  // Estado: por cada slot, un map option_id → quantity inicializado con defaults.
+  // Estado: por cada slot, un map option_id → quantity. Arranca en la
+  // composición `initial` (modo edición) o en los defaults de la receta.
   const [state, setState] = useState<Map<number, SlotState>>(() => {
+    const initialBySlot = new Map<number, Map<number, number>>();
+    if (initial) {
+      for (const pick of initial) {
+        initialBySlot.set(
+          pick.slot_id,
+          new Map(pick.options.map((o) => [o.option_id, o.quantity])),
+        );
+      }
+    }
     const init = new Map<number, SlotState>();
     for (const slot of slots) {
+      const fromInitial = initialBySlot.get(slot.id);
       const inner = new Map<number, number>();
       for (const opt of slot.options) {
-        inner.set(opt.id, opt.default_quantity);
+        inner.set(
+          opt.id,
+          fromInitial !== undefined
+            ? (fromInitial.get(opt.id) ?? 0)
+            : opt.default_quantity,
+        );
       }
       init.set(slot.id, inner);
     }
@@ -405,7 +432,7 @@ export function CompositionPicker({
               textTransform: "uppercase",
             }}
           >
-            Agregar al carrito
+            {confirmLabel ?? "Agregar al carrito"}
           </button>
         </footer>
       </div>

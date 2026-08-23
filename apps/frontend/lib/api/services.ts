@@ -371,6 +371,24 @@ export const billApi = {
       .post<Consumption>(`/consumptions/${consumptionId}/refund`, payload)
       .then((r) => r.data),
   /**
+   * Editar el armado de UNA unidad de un compuesto ya servido (swap
+   * de cervezas del cubetazo). El precio no cambia; el backend mueve
+   * inventario por diferencia y actualiza el registro de composición.
+   */
+  recomposeConsumption: (
+    consumptionId: number,
+    payload: {
+      unit_index: number;
+      composition: Array<{
+        slot_id: number;
+        options: Array<{ option_id: number; quantity: number }>;
+      }>;
+    },
+  ): Promise<{ ok: true }> =>
+    adminApi
+      .post<{ ok: true }>(`/consumptions/${consumptionId}/recompose`, payload)
+      .then((r) => r.data),
+  /**
    * Admin records mid-session payment. Lands como Consumption con
    * type=partial_payment + amount negativo, y AHORA TAMBIÉN un
    * Payment(kind=partial) con el método de pago, para que la
