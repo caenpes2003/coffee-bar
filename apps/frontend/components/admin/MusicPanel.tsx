@@ -229,11 +229,15 @@ function ExpandedView({
   actionInProgress,
   onCollapse,
   hideCollapse,
+  fullWidth,
 }: Props & { onCollapse: () => void; hideCollapse?: boolean }) {
   const isPlaying = playback?.status === "playing" && Boolean(playback.song);
+  // En móvil (fullWidth) este panel es EL pane de música: la cola es
+  // la protagonista y se muestran más filas que en la columna angosta
+  // de desktop.
   const pendingQueue = queue
     .filter((q) => q.status === "pending")
-    .slice(0, 5);
+    .slice(0, fullWidth ? 12 : 5);
   const hasPending = pendingQueue.length > 0;
 
   return (
@@ -376,29 +380,34 @@ function ExpandedView({
               ⤢
             </a>
           </div>
-          <AccessCodeWidget />
-
-          {/* Discreet shortcut to manage the bar's fallback playlist
-              (the "house" songs that auto-fill when no customer queues
-              anything). Lives here so it's contextually grouped with all
-              music actions, but it's a secondary action so it goes ghost. */}
-          <a
-            href="/admin/musica-base"
-            className="crown-btn crown-btn-ghost"
-            style={{
-              ...btnGhost({ fg: C.mute, border: C.sand }),
-              textDecoration: "none",
-              fontSize: 10,
-              letterSpacing: 1.5,
-              padding: "6px 10px",
-              textAlign: "center",
-              fontFamily: FONT_MONO,
-              fontWeight: 700,
-              textTransform: "uppercase",
-            }}
-          >
-            ♪ Música base del bar
-          </a>
+          {/* En móvil el código del bar y el link a música base bajan
+              DESPUÉS de la cola: lo operativo del pane es qué suena y
+              qué sigue — el código se consulta esporádicamente. */}
+          {!fullWidth && (
+            <>
+              <AccessCodeWidget />
+              {/* Discreet shortcut to manage the bar's fallback playlist
+                  (the "house" songs that auto-fill when no customer
+                  queues anything). Secondary action → ghost. */}
+              <a
+                href="/admin/musica-base"
+                className="crown-btn crown-btn-ghost"
+                style={{
+                  ...btnGhost({ fg: C.mute, border: C.sand }),
+                  textDecoration: "none",
+                  fontSize: 10,
+                  letterSpacing: 1.5,
+                  padding: "6px 10px",
+                  textAlign: "center",
+                  fontFamily: FONT_MONO,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                }}
+              >
+                ♪ Música base del bar
+              </a>
+            </>
+          )}
         </div>
 
         {/* Cola corta */}
@@ -432,7 +441,8 @@ function ExpandedView({
               }}
             >
               {pendingQueue.length}
-              {queue.filter((q) => q.status === "pending").length > 5
+              {queue.filter((q) => q.status === "pending").length >
+              pendingQueue.length
                 ? "/" + queue.filter((q) => q.status === "pending").length
                 : ""}
             </span>
@@ -489,6 +499,32 @@ function ExpandedView({
             </ul>
           )}
         </div>
+
+        {/* Móvil: código del bar y música base al final del scroll. */}
+        {fullWidth && (
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: 6 }}
+          >
+            <AccessCodeWidget />
+            <a
+              href="/admin/musica-base"
+              className="crown-btn crown-btn-ghost"
+              style={{
+                ...btnGhost({ fg: C.mute, border: C.sand }),
+                textDecoration: "none",
+                fontSize: 10,
+                letterSpacing: 1.5,
+                padding: "6px 10px",
+                textAlign: "center",
+                fontFamily: FONT_MONO,
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              ♪ Música base del bar
+            </a>
+          </div>
+        )}
       </div>
     </motion.div>
   );

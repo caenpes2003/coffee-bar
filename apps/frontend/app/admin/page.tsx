@@ -1592,19 +1592,25 @@ export default function AdminPage() {
               Auditoría →
             </Link>
           </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: isMobile ? 8 : 16,
-              flexWrap: "wrap",
-              minWidth: 0,
-              width: isMobile ? "100%" : undefined,
-            }}
-          >
-            <BarBalanceTile />
-            <KpiStrip kpis={kpis} compact={isMobile} />
-          </div>
+          {/* Saldo del bar y KPIs son tableros de oficina: en el
+              teléfono (operación en vivo) solo roban media pantalla —
+              feedback del dueño: "en el teléfono lo principal son las
+              mesas, asignar productos y ver la música". Viven en
+              desktop; en móvil el header queda en 2 filas. */}
+          {!isMobile && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                flexWrap: "wrap",
+                minWidth: 0,
+              }}
+            >
+              <BarBalanceTile />
+              <KpiStrip kpis={kpis} compact={false} />
+            </div>
+          )}
         </div>
 
         <LowStockBanner products={products} />

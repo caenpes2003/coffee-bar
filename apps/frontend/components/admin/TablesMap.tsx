@@ -199,12 +199,16 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
                 ... | ... | BARRA
               Las posiciones viven en MAP_LAYOUT — si el bar se
               reorganiza, se edita esa constante y listo. */}
+          {/* En móvil (fullWidth) el mapa es EL pane principal: celdas
+              más altas y tipografía mayor — los tiles de 56px con
+              texto de 8.5px eran incómodos de tocar y leer en el
+              teléfono. */}
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, 1fr)",
-              gridAutoRows: "minmax(56px, auto)",
-              gap: 6,
+              gridAutoRows: fullWidth ? "minmax(88px, auto)" : "minmax(56px, auto)",
+              gap: fullWidth ? 8 : 6,
               padding: 8,
               background: `linear-gradient(180deg, ${C.parchment} 0%, ${C.cream} 100%)`,
               border: `1px solid ${C.sand}`,
@@ -223,6 +227,7 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
                   key={table.id}
                   table={table}
                   onSelect={handleSelect}
+                  large={fullWidth}
                 />
               );
             })}
@@ -1042,9 +1047,12 @@ function FloorTile() {
 function MapTableTile({
   table,
   onSelect,
+  large = false,
 }: {
   table: Table;
   onSelect: Props["onSelect"];
+  /** Móvil: tile más grande (tap target y tipografía cómodos). */
+  large?: boolean;
 }) {
   const isAvailable = table.status === "available";
   const needsAttention = table.pending_request_count > 0;
@@ -1108,7 +1116,7 @@ function MapTableTile({
       <span
         style={{
           fontFamily: FONT_DISPLAY,
-          fontSize: 19,
+          fontSize: large ? 27 : 19,
           color: numberColor,
           lineHeight: 1,
         }}
@@ -1119,7 +1127,7 @@ function MapTableTile({
         <span
           style={{
             fontFamily: FONT_MONO,
-            fontSize: 8.5,
+            fontSize: large ? 11.5 : 8.5,
             color: C.gold,
             fontWeight: 700,
             lineHeight: 1,
@@ -1133,10 +1141,10 @@ function MapTableTile({
         <span
           style={{
             position: "absolute",
-            top: 3,
-            right: 5,
+            top: large ? 5 : 3,
+            right: large ? 8 : 5,
             fontFamily: FONT_MONO,
-            fontSize: 8,
+            fontSize: large ? 11 : 8,
             fontWeight: 800,
             color: needsAttention ? C.terracotta : C.gold,
           }}
