@@ -581,11 +581,12 @@ export function ExtrasDock() {
                 pointerEvents: "auto",
                 width: 52,
                 height: 52,
-                background: C.gold,
+                background: `linear-gradient(135deg, ${C.gold} 0%, #C9944F 100%)`,
                 color: C.paper,
-                border: "none",
+                border: `1px solid rgba(255,253,248,0.35)`,
                 borderRadius: "50%",
-                fontSize: 22,
+                fontFamily: FONT_DISPLAY,
+                fontSize: 24,
                 lineHeight: 1,
                 cursor: "pointer",
                 boxShadow: "0 10px 24px -8px rgba(184,137,74,0.55)",
@@ -594,7 +595,7 @@ export function ExtrasDock() {
                 justifyContent: "center",
               }}
             >
-              💵
+              $
             </motion.button>
           )}
         </AnimatePresence>
