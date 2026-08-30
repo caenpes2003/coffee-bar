@@ -1613,7 +1613,10 @@ export default function AdminPage() {
           )}
         </div>
 
-        <LowStockBanner products={products} />
+        {/* El banner de stock bajo es de gestión (reponer bodega): en
+            el teléfono, en pleno servicio, solo robaba una franja roja
+            permanente. Vive en desktop; el detalle sigue en /admin/products. */}
+        {!isMobile && <LowStockBanner products={products} />}
 
         {/* Layout principal.
             Desktop: mapa de mesas (sidebar) + columnas de operación

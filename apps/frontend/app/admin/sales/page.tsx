@@ -3468,6 +3468,12 @@ function ExtrasTab({ range }: { range: DateRange }) {
   const [incidentTarget, setIncidentTarget] = useState<LuggageTicketApi | null>(
     null,
   );
+  // Sub-sección visible. La lista de baños puede traer cientos de
+  // filas y llegar a las maletas era scrollear todo eso — un chip y
+  // listo. Los MiniStats de arriba siempre se ven.
+  const [section, setSection] = useState<"banos" | "maletas" | "otros">(
+    "banos",
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3579,7 +3585,50 @@ function ExtrasTab({ range }: { range: DateRange }) {
         />
       </div>
 
-      {extras && (
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {(
+          [
+            {
+              value: "banos",
+              label: `Baños (${extras?.restroom.total.count ?? 0})`,
+            },
+            {
+              value: "maletas",
+              label: `Maletas (${active.length})`,
+            },
+            {
+              value: "otros",
+              label: `Otros (${manualList.length})`,
+            },
+          ] as const
+        ).map((tab) => {
+          const isActive = section === tab.value;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              onClick={() => setSection(tab.value)}
+              style={{
+                padding: "8px 16px",
+                border: `1px solid ${isActive ? C.gold : C.sand}`,
+                background: isActive ? C.goldSoft : C.paper,
+                borderRadius: 999,
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                letterSpacing: 1.5,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                color: isActive ? C.cacao : C.mute,
+                cursor: "pointer",
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {section === "banos" && extras && (
         <Panel title="Servicio de baño">
           <div
             style={{
@@ -3640,11 +3689,12 @@ function ExtrasTab({ range }: { range: DateRange }) {
         </Panel>
       )}
 
-      {/* Ingresos manuales (rentas, bodegaje, sponsoreos). Vacío si
-          no hubo ninguno en el rango — no consume espacio visual al
-          pedo. */}
-      {manualList.length > 0 && (
+      {/* Ingresos manuales (rentas, bodegaje, sponsoreos). */}
+      {section === "otros" && (
         <Panel title="Otros ingresos">
+          {manualList.length === 0 ? (
+            <Empty text="Sin ingresos manuales en el rango" />
+          ) : (
           <div style={{ overflowX: "auto" }}>
             <table
               style={{
@@ -3675,9 +3725,12 @@ function ExtrasTab({ range }: { range: DateRange }) {
               </tbody>
             </table>
           </div>
+          )}
         </Panel>
       )}
 
+      {section === "maletas" && (
+      <>
       <Panel title={`Maletas activas (${active.length})`}>
         {active.length === 0 ? (
           <Empty text="Sin maletas activas" />
@@ -3750,6 +3803,8 @@ function ExtrasTab({ range }: { range: DateRange }) {
           </div>
         )}
       </Panel>
+      </>
+      )}
 
       {reverseTarget && (
         <ReverseExtraIncomeModal
