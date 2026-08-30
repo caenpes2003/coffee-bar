@@ -563,6 +563,10 @@ export function ExtrasDock() {
               </a>
             </motion.div>
           ) : (
+            // Colapsado: FAB circular compacto. La pastilla ancha con
+            // texto + total tapaba la lista de música en desktop y
+            // media pantalla en móvil (feedback del dueño). El total
+            // del día ya se ve dentro del panel expandido.
             <motion.button
               key="collapsed"
               type="button"
@@ -572,40 +576,25 @@ export function ExtrasDock() {
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: DUR_BASE / 1000 }}
               aria-label="Abrir cobros rápidos"
+              title="Cobros rápidos"
               style={{
                 pointerEvents: "auto",
+                width: 52,
+                height: 52,
                 background: C.gold,
                 color: C.paper,
                 border: "none",
-                borderRadius: 999,
-                padding: "12px 18px",
-                fontFamily: FONT_DISPLAY,
-                fontSize: 13,
-                letterSpacing: 2,
-                fontWeight: 700,
-                textTransform: "uppercase",
+                borderRadius: "50%",
+                fontSize: 22,
+                lineHeight: 1,
                 cursor: "pointer",
-                boxShadow: "0 12px 28px -8px rgba(184,137,74,0.55)",
+                boxShadow: "0 10px 24px -8px rgba(184,137,74,0.55)",
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
+                justifyContent: "center",
               }}
             >
-              <span style={{ fontSize: 16 }}>＋</span> Cobros rápidos
-              {todayRevenue > 0 && (
-                <span
-                  style={{
-                    fontFamily: FONT_MONO,
-                    fontSize: 11,
-                    letterSpacing: 0.5,
-                    background: "rgba(255,253,248,0.25)",
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                  }}
-                >
-                  {fmt(todayRevenue)}
-                </span>
-              )}
+              💵
             </motion.button>
           )}
         </AnimatePresence>

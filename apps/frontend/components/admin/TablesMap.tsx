@@ -110,6 +110,13 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
   const [openingWalkin, setOpeningWalkin] = useState(false);
   const [openingTable, setOpeningTable] = useState<number | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  // Móvil (fullWidth): con las celdas grandes del mapa, "Cuentas sin
+  // mesa" quedaba muy abajo y llegar era pura fricción de scroll —
+  // en su lugar, un selector Salón/Cuentas muestra una sección a la
+  // vez. Desktop no cambia (ambas apiladas).
+  const [mobileSection, setMobileSection] = useState<"salon" | "cuentas">(
+    "salon",
+  );
 
   const handleSelect: Props["onSelect"] = async (sessionId, number, table) => {
     if (sessionId != null) {
@@ -177,6 +184,51 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
         </div>
       </header>
 
+      {fullWidth && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            padding: "10px 12px 0",
+          }}
+        >
+          {(
+            [
+              {
+                value: "salon",
+                label: `Salón ${realTables.filter((t) => t.status === "occupied").length}/${realTables.length}`,
+              },
+              { value: "cuentas", label: `Cuentas (${bars.length})` },
+            ] as const
+          ).map((tab) => {
+            const active = mobileSection === tab.value;
+            return (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setMobileSection(tab.value)}
+                style={{
+                  flex: 1,
+                  padding: "9px 10px",
+                  border: `1px solid ${active ? C.gold : C.sand}`,
+                  background: active ? C.goldSoft : C.paper,
+                  borderRadius: 10,
+                  fontFamily: FONT_MONO,
+                  fontSize: 11,
+                  letterSpacing: 1.5,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  color: active ? C.cacao : C.mute,
+                  cursor: "pointer",
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div
         style={{
           flex: 1,
@@ -187,6 +239,7 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
           gap: 16,
         }}
       >
+        {(!fullWidth || mobileSection === "salon") && (
         <Section
           label="Salón"
           count={`${realTables.filter((t) => t.status === "occupied").length}/${realTables.length}`}
@@ -267,7 +320,9 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
             );
           })()}
         </Section>
+        )}
 
+        {(!fullWidth || mobileSection === "cuentas") && (
         <Section
           label="Cuentas sin mesa"
           count={`${bars.length}`}
@@ -327,6 +382,7 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
             </div>
           )}
         </Section>
+        )}
       </div>
 
       {openError && (
