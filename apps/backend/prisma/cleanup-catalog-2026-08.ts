@@ -40,6 +40,17 @@ const RENAMES: Array<{ sku: string; to: string }> = [
 // ─── Productos a eliminar (borrado físico o desactivación) ───────────────
 const REMOVALS: Array<{ sku: string; label: string }> = [
   { sku: "more_mtf7rj1w", label: "MORE (categoría Cigarillos duplicada)" },
+  { sku: "bon_fiest_plus_mqbs6xlv", label: "BON FIEST PLUS (Medicamentos)" },
+];
+
+// ─── Borrado FORZADO (decisión explícita del dueño 2026-08-31) ───────────
+// Estos se eliminan AUNQUE tengan ventas: se borran también sus
+// OrderItem históricos (con sus OrderItemComponent en cascada). Las
+// facturas/cuentas viejas NO pierden la línea — el Consumption guarda
+// nombre y monto en texto y no tiene FK al producto — pero el ticket
+// de sesiones cerradas ya no podrá mostrar "ver composición" de esas
+// ventas puntuales. Aceptado.
+const FORCE_REMOVALS: Array<{ sku: string; label: string }> = [
   {
     sku: "cubetazo_aguila_lata_aguila_botella_msl0hoxe",
     label: "Cubetazo Aguila lata + Aguila Botella",
@@ -56,8 +67,39 @@ const REMOVALS: Array<{ sku: string; label: string }> = [
     sku: "de_todito_paqueton_165_gr_mszg0mba",
     label: "DE TODITO PAQUETON (categoría GALGUERIA duplicada)",
   },
-  { sku: "bon_fiest_plus_mqbs6xlv", label: "BON FIEST PLUS (Medicamentos)" },
 ];
+
+async function forceRemoveProduct(sku: string, label: string) {
+  const product = await prisma.product.findUnique({ where: { sku } });
+  if (!product) {
+    console.log(`  · ${label}: no existe (¿ya eliminado?)`);
+    return;
+  }
+  // Sí protegemos UNA cosa: si el producto es COMPONENTE en recetas de
+  // otros productos vivos, borrarlo rompería esos armables — eso no es
+  // "historial", es catálogo activo. Ninguno de los targets lo es.
+  const inRecipes = await prisma.productRecipeOption.count({
+    where: { component_id: product.id },
+  });
+  if (inRecipes > 0) {
+    console.log(
+      `  ⚠ ${label}: es componente de ${inRecipes} receta(s) activa(s) — NO se fuerza. Revisar a mano.`,
+    );
+    return;
+  }
+  await prisma.$transaction(async (tx) => {
+    // OrderItemComponent cae en cascada al borrar los OrderItem.
+    const items = await tx.orderItem.deleteMany({
+      where: { product_id: product.id },
+    });
+    // El delete del producto se lleva en cascada su receta propia y
+    // sus movimientos de inventario.
+    await tx.product.delete({ where: { id: product.id } });
+    console.log(
+      `  ✓ ${label}: ELIMINADO forzado (${items.count} línea(s) de pedido histórico borradas; los consumos de las facturas conservan nombre y monto)`,
+    );
+  });
+}
 
 async function removeProduct(sku: string, label: string) {
   const product = await prisma.product.findUnique({ where: { sku } });
@@ -121,6 +163,10 @@ async function main() {
   console.log("\nPaso 2: eliminar productos...");
   for (const r of REMOVALS) {
     await removeProduct(r.sku, r.label);
+  }
+  console.log("\nPaso 2b: eliminaciones FORZADAS (con historial)...");
+  for (const r of FORCE_REMOVALS) {
+    await forceRemoveProduct(r.sku, r.label);
   }
 
   // 3) AGUILA LIGHT LATA como opción del Cubetazo Águila Light.
