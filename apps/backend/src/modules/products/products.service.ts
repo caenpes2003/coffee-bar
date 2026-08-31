@@ -145,6 +145,18 @@ export class ProductsService {
   }
 
   // ─── Admin writes ───────────────────────────────────────────────────────
+  /**
+   * Nombres y categorías del catálogo viven en MAYÚSCULAS. Se
+   * normaliza acá (server-side) sin importar cómo lo escriba el
+   * operador — así "galgueria", "Galgueria" y "GALGUERIA" no vuelven
+   * a crear tres categorías distintas (cicatriz real del catálogo,
+   * limpiada en cleanup-catalog-2026-08). También colapsa espacios
+   * dobles y bordes.
+   */
+  private normalizeCatalogText(value: string): string {
+    return value.trim().replace(/\s+/g, " ").toUpperCase();
+  }
+
   async create(dto: CreateProductDto): Promise<SerializedProduct> {
     // SKU es @unique + NOT NULL en la DB. Si el operador no manda uno
     // (la UI actual no expone el campo), lo generamos desde un slug
@@ -153,12 +165,12 @@ export class ProductsService {
     const product = await this.prisma.product.create({
       data: {
         sku,
-        name: dto.name,
+        name: this.normalizeCatalogText(dto.name),
         description: dto.description ?? null,
         price: dto.price,
         stock: dto.stock ?? 0,
         low_stock_threshold: dto.low_stock_threshold ?? 0,
-        category: dto.category,
+        category: this.normalizeCatalogText(dto.category),
         is_active: dto.is_active ?? true,
       },
     });
@@ -188,11 +200,17 @@ export class ProductsService {
     const product = await this.prisma.product.update({
       where: { id },
       data: {
-        name: dto.name,
+        name:
+          dto.name !== undefined
+            ? this.normalizeCatalogText(dto.name)
+            : undefined,
         description: dto.description,
         price: dto.price,
         low_stock_threshold: dto.low_stock_threshold,
-        category: dto.category,
+        category:
+          dto.category !== undefined
+            ? this.normalizeCatalogText(dto.category)
+            : undefined,
       },
     });
     return this.serialize(product);
