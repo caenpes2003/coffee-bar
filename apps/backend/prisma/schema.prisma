@@ -951,6 +951,10 @@ model OutboxEvent {
   pushed_at       DateTime?
   push_attempts   Int          @default(0)
   last_error      String?
+  // Backoff del worker: el drain solo toma eventos con
+  // next_attempt_at NULL o vencido. Se calcula al fallar un push
+  // (1s, 5s, 30s, 2min, 10min, 1h según push_attempts).
+  next_attempt_at DateTime?
 
   // Deduplicación cross-nodo: el cloud rechaza un INSERT con misma
   // (node_id, idempotency_key) — equivale a "ya procesé este evento".
@@ -958,6 +962,52 @@ model OutboxEvent {
   // El worker filtra por (status, occurred_at) para drenar en orden.
   @@index([status, occurred_at])
   // Para postmortem: "dame todos los eventos de esta sesión".
+  @@index([aggregate_type, aggregate_id])
+}
+
+// ─── Inbox de sync (lado receptor — cloud) ────────────────────────────────
+//
+// Mitad receptora de la idempotencia del §4.1 de ARQUITECTURA: el
+// nodo local POSTea lotes a /sync/ingest y cada evento aterriza acá
+// con INSERT ... ON CONFLICT (node_id, idempotency_key) DO NOTHING.
+// Un reintento tras un ACK perdido colisiona con el unique y se
+// responde "duplicate" — el local marca pushed y sigue.
+//
+// Fase 1 del transporte: los eventos SOLO se almacenan (status
+// received) — zona de aterrizaje durable, cero mutación del estado
+// del cloud. Los "appliers" que materializan cada event_type en sus
+// tablas (upsert por aggregate) son la Fase 2 y trabajarán sobre
+// esta misma tabla (received → applied | quarantined).
+
+enum InboxStatus {
+  received
+  applied
+  quarantined
+}
+
+model InboxEvent {
+  id              BigInt      @id @default(autoincrement())
+  // Nodo emisor (viene del body del ingest, validado contra
+  // NodeRegistry.is_active).
+  node_id         String
+  idempotency_key String
+  event_type      String
+  aggregate_type  String
+  aggregate_id    String
+  payload         Json
+  schema_version  String
+  app_version     String
+  // Cuándo ocurrió en el nodo emisor vs cuándo llegó acá — la brecha
+  // entre ambos es la métrica de lag del sync.
+  occurred_at     DateTime
+  received_at     DateTime    @default(now())
+  status          InboxStatus @default(received)
+  applied_at      DateTime?
+  apply_attempts  Int         @default(0)
+  last_error      String?
+
+  @@unique([node_id, idempotency_key])
+  @@index([status, occurred_at])
   @@index([aggregate_type, aggregate_id])
 }
 

@@ -25,6 +25,7 @@ import { ExpensesModule } from "./modules/expenses/expenses.module";
 import { ExtraIncomeModule } from "./modules/extra-income/extra-income.module";
 import { LuggageModule } from "./modules/luggage/luggage.module";
 import { OutboxModule } from "./modules/outbox/outbox.module";
+import { SyncModule } from "./modules/sync/sync.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
 import { rateLimitMiddleware } from "./common/rate-limit.middleware";
 import { loggingMiddleware } from "./common/logging.middleware";
@@ -54,6 +55,7 @@ import { PlaybackModule } from "./modules/playback/playback.module";
     ExtraIncomeModule,
     LuggageModule,
     OutboxModule,
+    SyncModule,
     CashRegisterModule,
     PaymentsModule,
     ExpensesModule,

@@ -211,6 +211,48 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     return errors;
   },
 
+  // ─── ExtraIncome (baños, ingresos manuales) ──────────────────────────
+  // Autoridad local (operación). El reverso es un update de status —
+  // no una fila nueva — así que viaja como evento propio.
+  "extra_income.created": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireString(payload, "type", errors);
+    requireString(payload, "method", errors);
+    requireNumber(payload, "total_amount", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    return errors;
+  },
+  "extra_income.reversed": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireString(payload, "reverse_reason", errors);
+    return errors;
+  },
+
+  // ─── LuggageTicket (guardarropa) ─────────────────────────────────────
+  // created = alta de la ficha; updated = cualquier transición
+  // posterior (pago, entrega, incidente) con `change` declarando cuál.
+  "luggage.created": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireNumber(payload, "ticket_number", errors);
+    requireNumber(payload, "amount", errors);
+    requireString(payload, "payment_status", errors);
+    requireNumber(payload, "cash_register_session_id", errors);
+    return errors;
+  },
+  "luggage.updated": (payload) => {
+    const errors: string[] = [];
+    if (!isObject(payload)) return ["payload must be an object"];
+    requireExternalId(payload, "external_id", errors);
+    requireString(payload, "change", errors);
+    return errors;
+  },
+
   // ─── Payment (Fase A+) ───────────────────────────────────────────────
   // Cada cobro del bar con método. kind=partial (anticipo durante sesión)
   // o kind=final (cobro al cierre, puede haber N por TableSession en

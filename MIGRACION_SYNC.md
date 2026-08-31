@@ -4,10 +4,10 @@
 > momento del último commit. Se actualiza con cada paso significativo
 > del roadmap. Documento ancla: [ARQUITECTURA.md](./ARQUITECTURA.md).
 
-**Última actualización:** 2026-06-09
+**Última actualización:** 2026-08-31
 **Versión MVP en curso:** MVP 2 (sincronización Local → Cloud)
-**Próximo hito:** Fase A+ (Payment + CashRegisterSession) antes de
-seguir con productores.
+**Próximo hito:** Fase 2 del transporte — appliers en el cloud
+(materializar InboxEvent → tablas por aggregate).
 
 ---
 
@@ -357,18 +357,47 @@ las 12:00 sin que el sistema cambie de día en medio del turno.
    `ProductAvailabilityService` desde componentes + bottleneck, exponer
    en serializer, ocultar el campo legacy en UI. Aplicar también en
    editor de receta. **Siguiente en cola** (acordado 2026-06-14).
-3. **Retomar roadmap MVP 2 — productores faltantes**:
-   - Registrados sin productor: `order.status_changed`,
-     `inventory.recorded`.
-   - Sin registrar ni productor: `extra_income.*`, `luggage.*`,
-     `audit_log.*`.
-   - Ya emitiendo (11 event types): consumption.created, session.*,
-     payment.*, cash_register.*, expense.*.
-4. **Construir el worker de drain del outbox** (MVP 2 completo
-   requiere worker + endpoint cloud `/sync/ingest`). Hoy NADIE procesa
-   los OutboxEvent status=pending — solo se acumulan.
-5. **MVP 1 deployment del local** (mini-PC físico).
-6. **MVP 3 failover + QR inteligente**.
+3. ✅ **Productores completados** (2026-08-31): `order.status_changed`
+   e `inventory.recorded` conectados; `extra_income.created/reversed`
+   y `luggage.created/updated` registrados y emitiendo (con sus
+   services envueltos en tx para la invariante del outbox). Total:
+   **19 event types registrados, todos con productor** salvo
+   `audit_log.*` (decidido diferir: el AuditLog es observabilidad,
+   no estado de negocio).
+4. ✅ **Transporte de sync — Fase 1 COMPLETA** (2026-08-31):
+   - **Worker de drain** (`modules/sync/sync-worker.service.ts`):
+     polling 5s, lotes de 50 en orden `occurred_at`, backoff
+     1s/5s/30s/2min/10min/1h vía `OutboxEvent.next_attempt_at`,
+     `pushed` al confirmar, `quarantined` tras 10 intentos con error
+     permanente. Se activa SOLO con `SYNC_CLOUD_URL` +
+     `SYNC_INGEST_KEY` (el cloud no las tiene → apagado).
+   - **`POST /sync/ingest`** (`modules/sync/sync.controller.ts`):
+     auth por header `x-sync-key`, valida el nodo contra
+     `NodeRegistry.is_active`, actualiza `last_seen_at` (heartbeat
+     gratis), y aterriza en **`InboxEvent`** con
+     `createMany skipDuplicates` sobre `(node_id, idempotency_key)`
+     — el reintento tras ACK perdido responde "duplicate" (§4.1).
+     Fase 1 = solo almacenamiento durable; NO muta estado del cloud.
+   - **`/health` real**: node_id, schema_version, app_version,
+     `outbox_pending`, y 503 si la BD no responde (antes era un stub
+     que siempre decía 200).
+   - **Validado en dev** (self-loop `SYNC_CLOUD_URL=localhost`):
+     1.161 eventos drenados outbox→inbox sin pérdida; re-push de 50
+     ya enviados → "0 nuevos, 50 duplicados", cero filas repetidas.
+   - Envs nuevas: `SYNC_CLOUD_URL` (incluye el prefijo `/api`, ej.
+     `https://coffee-music-production.up.railway.app/api`),
+     `SYNC_INGEST_KEY` (compartida emisor/receptor),
+     `SYNC_POLL_MS` y `SYNC_BATCH_SIZE` opcionales.
+5. **Fase 2 — appliers en el cloud**: consumer que toma InboxEvent
+   `received` y materializa cada event_type en sus tablas (upsert por
+   `(aggregate_type, aggregate_id)`), con quarantine por
+   schema_version incompatible.
+6. **MVP 1 deployment del local** (PC del bar: docker-compose,
+   `NODE_ID=local-crown-001`, fila en NodeRegistry, catálogo
+   read-only). Decisiones del dueño 2026-08-31: hay PC disponible en
+   el bar; alcance offline de la primera etapa = admin + TV (los
+   celulares de clientes esperan al internet).
+7. **MVP 3 failover + QR inteligente**.
 
 ---
 

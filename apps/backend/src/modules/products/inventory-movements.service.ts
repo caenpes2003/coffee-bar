@@ -10,6 +10,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { CreateStockMovementDto } from "./dto/create-stock-movement.dto";
 
 /** Same shape we use elsewhere — server is the only source for created_by. */
@@ -20,7 +21,10 @@ export type InventoryActor = {
 
 @Injectable()
 export class InventoryMovementsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly outbox: OutboxEventService,
+  ) {}
 
   /**
    * Record a manual stock change. The whole flow runs inside a transaction
@@ -84,6 +88,25 @@ export class InventoryMovementsService {
         where: { id: productId },
         data: { stock: nextStock },
         select: { id: true, stock: true },
+      });
+
+      // Sync: los InventoryMovement son el LEDGER del stock (§5.5 de
+      // ARQUITECTURA: Product.stock nunca viaja cross-nodo, solo los
+      // movimientos). Sin este evento, la reconciliación de inventario
+      // por replay es imposible. Misma tx — invariante del outbox.
+      await this.outbox.enqueue(tx, {
+        event_type: "inventory.recorded",
+        aggregate_type: "InventoryMovement",
+        aggregate_id: movement.external_id,
+        payload: {
+          external_id: movement.external_id,
+          product_id: movement.product_id,
+          type: movement.type,
+          quantity: movement.quantity,
+          reason: movement.reason,
+          created_by: movement.created_by,
+          created_at: movement.created_at.toISOString(),
+        },
       });
 
       return { ...movement, product: updated };

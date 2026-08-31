@@ -12,14 +12,12 @@ import { OutboxEventService } from "./outbox-event.service";
  *
  * Misma filosofía que AuthModule en este repo (también @Global).
  *
- * Esta primera versión solo exporta el service de enqueue. El worker
- * de drain (consume pending → push al cloud) entra en un commit
- * posterior; al hacerlo, vivirá en este mismo módulo y se exportará
- * desde acá.
+ * Exporta también OutboxConfigService: el worker de drain (módulo
+ * sync) y el health check necesitan node_id/schema_version.
  */
 @Global()
 @Module({
   providers: [OutboxConfigService, OutboxEventService],
-  exports: [OutboxEventService],
+  exports: [OutboxEventService, OutboxConfigService],
 })
 export class OutboxModule {}

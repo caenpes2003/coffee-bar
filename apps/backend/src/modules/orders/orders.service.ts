@@ -135,6 +135,23 @@ export class OrdersService {
         });
       }
 
+      // Sync: el ciclo de vida del pedido viaja al cloud. Sin esto la
+      // reconstrucción del estado en el backoffice solo veía nacer los
+      // Consumption al entregar, nunca las transiciones intermedias ni
+      // las cancelaciones (evento registrado desde MVP 0, emitido
+      // desde MVP 2).
+      await this.outbox.enqueue(tx, {
+        event_type: "order.status_changed",
+        aggregate_type: "Order",
+        aggregate_id: order.external_id,
+        payload: {
+          external_id: order.external_id,
+          table_session_id: order.table_session_id,
+          from_status: order.status,
+          to_status: nextStatus,
+        },
+      });
+
       if (nextStatus === OrderStatus.delivered) {
         await this.emitConsumptions(tx, order);
         await this.projection.onOrderLeftActive(

@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { CashRegisterService } from "../cash-register/cash-register.service";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { CreateLuggageDto } from "./dto/create-luggage.dto";
 import { IncidentLuggageDto } from "./dto/incident-luggage.dto";
 import { UpdateLuggagePaymentDto } from "./dto/update-luggage-payment.dto";
@@ -42,7 +43,37 @@ export class LuggageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cashRegister: CashRegisterService,
+    private readonly outbox: OutboxEventService,
   ) {}
+
+  /**
+   * Evento de transición del ticket (pago / entrega / incidente).
+   * `change` declara cuál fue — el aplicador del cloud upsertea por
+   * external_id con el snapshot completo que va en el payload.
+   */
+  private async enqueueUpdated(
+    tx: Prisma.TransactionClient,
+    row: LuggageTicket,
+    change: "payment" | "delivered" | "incident",
+  ) {
+    await this.outbox.enqueue(tx, {
+      event_type: "luggage.updated",
+      aggregate_type: "LuggageTicket",
+      aggregate_id: row.external_id,
+      payload: {
+        external_id: row.external_id,
+        change,
+        status: row.status,
+        payment_status: row.payment_status,
+        method: row.method,
+        delivered_at: row.delivered_at?.toISOString() ?? null,
+        delivered_by: row.delivered_by,
+        incident_at: row.incident_at?.toISOString() ?? null,
+        incident_by: row.incident_by,
+        incident_reason: row.incident_reason,
+      },
+    });
+  }
 
   /**
    * Crear ticket. La unicidad de ficha activa la enforce el partial
@@ -66,25 +97,47 @@ export class LuggageService {
     }
     try {
       const cashSession = await this.cashRegister.requireOpen();
-      const created = await this.prisma.luggageTicket.create({
-        data: {
-          ticket_number: dto.ticket_number,
-          customer_first_name: dto.customer_first_name.trim(),
-          customer_last_name: dto.customer_last_name.trim(),
-          customer_phone: dto.customer_phone.trim(),
-          amount: new Prisma.Decimal(LUGGAGE_PRICE),
-          payment_status:
-            dto.payment_status === "paid"
-              ? LuggagePaymentStatus.paid
-              : LuggagePaymentStatus.pending,
-          // default efectivo solo por retrocompat de deploy — la UI
-          // siempre manda el método explícito cuando se cobra.
-          method: dto.method ?? PaymentMethod.efectivo,
-          status: LuggageStatus.active,
-          cash_register_session_id: cashSession.id,
-          notes: dto.notes?.trim() || null,
-          created_by: actor?.name ?? null,
-        },
+      // Tx: alta + evento de sync juntos (invariante del outbox, MVP 2).
+      const created = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.luggageTicket.create({
+          data: {
+            ticket_number: dto.ticket_number,
+            customer_first_name: dto.customer_first_name.trim(),
+            customer_last_name: dto.customer_last_name.trim(),
+            customer_phone: dto.customer_phone.trim(),
+            amount: new Prisma.Decimal(LUGGAGE_PRICE),
+            payment_status:
+              dto.payment_status === "paid"
+                ? LuggagePaymentStatus.paid
+                : LuggagePaymentStatus.pending,
+            // default efectivo solo por retrocompat de deploy — la UI
+            // siempre manda el método explícito cuando se cobra.
+            method: dto.method ?? PaymentMethod.efectivo,
+            status: LuggageStatus.active,
+            cash_register_session_id: cashSession.id,
+            notes: dto.notes?.trim() || null,
+            created_by: actor?.name ?? null,
+          },
+        });
+        await this.outbox.enqueue(tx, {
+          event_type: "luggage.created",
+          aggregate_type: "LuggageTicket",
+          aggregate_id: row.external_id,
+          payload: {
+            external_id: row.external_id,
+            ticket_number: row.ticket_number,
+            customer_first_name: row.customer_first_name,
+            customer_last_name: row.customer_last_name,
+            customer_phone: row.customer_phone,
+            amount: Number(row.amount),
+            payment_status: row.payment_status,
+            method: row.method,
+            cash_register_session_id: row.cash_register_session_id,
+            created_by: row.created_by,
+            created_at: row.created_at.toISOString(),
+          },
+        });
+        return row;
       });
       return this.serialize(created);
     } catch (err) {
@@ -196,22 +249,26 @@ export class LuggageService {
         code: "LUGGAGE_PAYMENT_PENDING",
       });
     }
-    const result = await this.prisma.luggageTicket.updateMany({
-      where: { id, status: LuggageStatus.active },
-      data: {
-        status: LuggageStatus.delivered,
-        delivered_at: new Date(),
-        delivered_by: actor?.name ?? null,
-      },
-    });
-    if (result.count === 0) {
-      throw new ConflictException({
-        message: `LuggageTicket ${id} was modified concurrently`,
-        code: "LUGGAGE_RACE",
+    const fresh = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.luggageTicket.updateMany({
+        where: { id, status: LuggageStatus.active },
+        data: {
+          status: LuggageStatus.delivered,
+          delivered_at: new Date(),
+          delivered_by: actor?.name ?? null,
+        },
       });
-    }
-    const fresh = await this.prisma.luggageTicket.findUniqueOrThrow({
-      where: { id },
+      if (result.count === 0) {
+        throw new ConflictException({
+          message: `LuggageTicket ${id} was modified concurrently`,
+          code: "LUGGAGE_RACE",
+        });
+      }
+      const row = await tx.luggageTicket.findUniqueOrThrow({
+        where: { id },
+      });
+      await this.enqueueUpdated(tx, row, "delivered");
+      return row;
     });
     return this.serialize(fresh);
   }
@@ -238,23 +295,27 @@ export class LuggageService {
         code: "LUGGAGE_NOT_ACTIVE",
       });
     }
-    const result = await this.prisma.luggageTicket.updateMany({
-      where: { id, status: LuggageStatus.active },
-      data: {
-        status: LuggageStatus.incident,
-        incident_at: new Date(),
-        incident_by: actor?.name ?? null,
-        incident_reason: dto.reason.trim(),
-      },
-    });
-    if (result.count === 0) {
-      throw new ConflictException({
-        message: `LuggageTicket ${id} was modified concurrently`,
-        code: "LUGGAGE_RACE",
+    const fresh = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.luggageTicket.updateMany({
+        where: { id, status: LuggageStatus.active },
+        data: {
+          status: LuggageStatus.incident,
+          incident_at: new Date(),
+          incident_by: actor?.name ?? null,
+          incident_reason: dto.reason.trim(),
+        },
       });
-    }
-    const fresh = await this.prisma.luggageTicket.findUniqueOrThrow({
-      where: { id },
+      if (result.count === 0) {
+        throw new ConflictException({
+          message: `LuggageTicket ${id} was modified concurrently`,
+          code: "LUGGAGE_RACE",
+        });
+      }
+      const row = await tx.luggageTicket.findUniqueOrThrow({
+        where: { id },
+      });
+      await this.enqueueUpdated(tx, row, "incident");
+      return row;
     });
     return this.serialize(fresh);
   }
@@ -279,17 +340,21 @@ export class LuggageService {
         code: "LUGGAGE_NOT_ACTIVE",
       });
     }
-    const updated = await this.prisma.luggageTicket.update({
-      where: { id },
-      data: {
-        payment_status:
-          dto.payment_status === "paid"
-            ? LuggagePaymentStatus.paid
-            : LuggagePaymentStatus.pending,
-        // El método viaja junto con el paso a paid. Si no viene (deploy
-        // viejo), se conserva el que tenga la fila.
-        ...(dto.method !== undefined ? { method: dto.method } : {}),
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.luggageTicket.update({
+        where: { id },
+        data: {
+          payment_status:
+            dto.payment_status === "paid"
+              ? LuggagePaymentStatus.paid
+              : LuggagePaymentStatus.pending,
+          // El método viaja junto con el paso a paid. Si no viene (deploy
+          // viejo), se conserva el que tenga la fila.
+          ...(dto.method !== undefined ? { method: dto.method } : {}),
+        },
+      });
+      await this.enqueueUpdated(tx, row, "payment");
+      return row;
     });
     return this.serialize(updated);
   }

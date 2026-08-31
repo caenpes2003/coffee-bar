@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { CashRegisterService } from "../cash-register/cash-register.service";
+import { OutboxEventService } from "../outbox/outbox-event.service";
 import { CreateManualIncomeDto } from "./dto/create-manual-income.dto";
 import { CreateRestroomIncomeDto } from "./dto/create-restroom-income.dto";
 import { ReverseExtraIncomeDto } from "./dto/reverse-extra-income.dto";
@@ -44,7 +45,25 @@ export class ExtraIncomeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cashRegister: CashRegisterService,
+    private readonly outbox: OutboxEventService,
   ) {}
+
+  /** Payload de sync para extra_income.created (MVP 2). */
+  private serializeForOutbox(row: ExtraIncome) {
+    return {
+      external_id: row.external_id,
+      type: row.type,
+      subtype: row.subtype,
+      method: row.method,
+      amount: Number(row.amount),
+      quantity: row.quantity,
+      total_amount: Number(row.total_amount),
+      cash_register_session_id: row.cash_register_session_id,
+      concept: row.concept,
+      created_by: row.created_by,
+      created_at: row.created_at.toISOString(),
+    };
+  }
 
   /**
    * Registrar cobro de baño. El precio se decide acá según el subtype;
@@ -58,21 +77,32 @@ export class ExtraIncomeService {
   ): Promise<SerializedExtraIncome> {
     const amount = RESTROOM_PRICES[dto.subtype];
     const cashSession = await this.cashRegister.requireOpen();
-    const created = await this.prisma.extraIncome.create({
-      data: {
-        type: ExtraIncomeType.restroom,
-        subtype: dto.subtype,
-        // default efectivo solo por retrocompat de deploy — la UI
-        // siempre manda el método explícito.
-        method: dto.method ?? PaymentMethod.efectivo,
-        amount: new Prisma.Decimal(amount),
-        quantity: 1,
-        total_amount: new Prisma.Decimal(amount),
-        status: ExtraIncomeStatus.active,
-        cash_register_session_id: cashSession.id,
-        notes: dto.notes?.trim() || null,
-        created_by: actor?.name ?? null,
-      },
+    // Tx para mantener la invariante del outbox: el ingreso y su
+    // evento de sync aterrizan juntos o ninguno (MVP 2).
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.extraIncome.create({
+        data: {
+          type: ExtraIncomeType.restroom,
+          subtype: dto.subtype,
+          // default efectivo solo por retrocompat de deploy — la UI
+          // siempre manda el método explícito.
+          method: dto.method ?? PaymentMethod.efectivo,
+          amount: new Prisma.Decimal(amount),
+          quantity: 1,
+          total_amount: new Prisma.Decimal(amount),
+          status: ExtraIncomeStatus.active,
+          cash_register_session_id: cashSession.id,
+          notes: dto.notes?.trim() || null,
+          created_by: actor?.name ?? null,
+        },
+      });
+      await this.outbox.enqueue(tx, {
+        event_type: "extra_income.created",
+        aggregate_type: "ExtraIncome",
+        aggregate_id: row.external_id,
+        payload: this.serializeForOutbox(row),
+      });
+      return row;
     });
     return this.serialize(created);
   }
@@ -89,20 +119,29 @@ export class ExtraIncomeService {
     actor: Actor,
   ): Promise<SerializedExtraIncome> {
     const cashSession = await this.cashRegister.requireOpen();
-    const created = await this.prisma.extraIncome.create({
-      data: {
-        type: ExtraIncomeType.manual,
-        subtype: null,
-        method: dto.method ?? PaymentMethod.efectivo,
-        amount: new Prisma.Decimal(dto.amount),
-        quantity: 1,
-        total_amount: new Prisma.Decimal(dto.amount),
-        status: ExtraIncomeStatus.active,
-        cash_register_session_id: cashSession.id,
-        concept: dto.concept.trim(),
-        notes: dto.notes?.trim() || null,
-        created_by: actor?.name ?? null,
-      },
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.extraIncome.create({
+        data: {
+          type: ExtraIncomeType.manual,
+          subtype: null,
+          method: dto.method ?? PaymentMethod.efectivo,
+          amount: new Prisma.Decimal(dto.amount),
+          quantity: 1,
+          total_amount: new Prisma.Decimal(dto.amount),
+          status: ExtraIncomeStatus.active,
+          cash_register_session_id: cashSession.id,
+          concept: dto.concept.trim(),
+          notes: dto.notes?.trim() || null,
+          created_by: actor?.name ?? null,
+        },
+      });
+      await this.outbox.enqueue(tx, {
+        event_type: "extra_income.created",
+        aggregate_type: "ExtraIncome",
+        aggregate_id: row.external_id,
+        payload: this.serializeForOutbox(row),
+      });
+      return row;
     });
     return this.serialize(created);
   }
@@ -158,23 +197,38 @@ export class ExtraIncomeService {
     // updateMany con guarda en `status` para evitar race conditions:
     // dos staff intentando reversar el mismo registro al mismo tiempo
     // solo deja pasar uno. El segundo recibe el ConflictException.
-    const result = await this.prisma.extraIncome.updateMany({
-      where: { id, status: ExtraIncomeStatus.active },
-      data: {
-        status: ExtraIncomeStatus.reversed,
-        reversed_at: new Date(),
-        reversed_by: actor?.name ?? null,
-        reverse_reason: dto.reason.trim(),
-      },
-    });
-    if (result.count === 0) {
-      throw new ConflictException({
-        message: `ExtraIncome ${id} was modified concurrently`,
-        code: "EXTRA_INCOME_RACE",
+    // Tx: el reverso y su evento de sync viajan juntos (MVP 2).
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.extraIncome.updateMany({
+        where: { id, status: ExtraIncomeStatus.active },
+        data: {
+          status: ExtraIncomeStatus.reversed,
+          reversed_at: new Date(),
+          reversed_by: actor?.name ?? null,
+          reverse_reason: dto.reason.trim(),
+        },
       });
-    }
-    const updated = await this.prisma.extraIncome.findUniqueOrThrow({
-      where: { id },
+      if (result.count === 0) {
+        throw new ConflictException({
+          message: `ExtraIncome ${id} was modified concurrently`,
+          code: "EXTRA_INCOME_RACE",
+        });
+      }
+      const row = await tx.extraIncome.findUniqueOrThrow({
+        where: { id },
+      });
+      await this.outbox.enqueue(tx, {
+        event_type: "extra_income.reversed",
+        aggregate_type: "ExtraIncome",
+        aggregate_id: row.external_id,
+        payload: {
+          external_id: row.external_id,
+          reverse_reason: row.reverse_reason ?? "",
+          reversed_by: row.reversed_by,
+          reversed_at: row.reversed_at?.toISOString() ?? null,
+        },
+      });
+      return row;
     });
     return this.serialize(updated);
   }
