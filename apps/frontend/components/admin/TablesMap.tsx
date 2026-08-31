@@ -243,6 +243,7 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
         <Section
           label="Salón"
           count={`${realTables.filter((t) => t.status === "occupied").length}/${realTables.length}`}
+          fill={fullWidth}
         >
           {/* Mapa físico del bar: cada mesa en su posición real.
               Layout (visto desde arriba):
@@ -252,15 +253,21 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
                 ... | ... | BARRA
               Las posiciones viven en MAP_LAYOUT — si el bar se
               reorganiza, se edita esa constante y listo. */}
-          {/* En móvil (fullWidth) el mapa es EL pane principal: celdas
-              más altas y tipografía mayor — los tiles de 56px con
-              texto de 8.5px eran incómodos de tocar y leer en el
-              teléfono. */}
+          {/* En móvil (fullWidth) el mapa es EL pane principal y ocupa
+              la pantalla completa SIN scroll: las filas del plano se
+              reparten el alto disponible (1fr). En desktop, filas de
+              56px como siempre. */}
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, 1fr)",
-              gridAutoRows: fullWidth ? "minmax(88px, auto)" : "minmax(56px, auto)",
+              ...(fullWidth
+                ? {
+                    flex: 1,
+                    minHeight: 0,
+                    gridTemplateRows: `repeat(${MAP_LAYOUT.length}, 1fr)`,
+                  }
+                : { gridAutoRows: "minmax(56px, auto)" }),
               gap: fullWidth ? 8 : 6,
               padding: 8,
               background: `linear-gradient(180deg, ${C.parchment} 0%, ${C.cream} 100%)`,
@@ -295,9 +302,16 @@ export function TablesMap({ tables, onSelect, onMutated, fullWidth }: Props) {
                 (c): c is number => typeof c === "number",
               ),
             );
-            const unmapped = sortedTables.filter(
+            let unmapped = sortedTables.filter(
               (t) => !mapped.has(t.number ?? -1),
             );
+            // Móvil a pantalla fija: solo mesas fuera del plano que
+            // estén OCUPADAS (una mesa legacy libre no es operación y
+            // rompería el layout sin scroll). En desktop se listan
+            // todas, como siempre.
+            if (fullWidth) {
+              unmapped = unmapped.filter((t) => t.status !== "available");
+            }
             if (unmapped.length === 0) return null;
             return (
               <div
@@ -421,14 +435,29 @@ function Section({
   count,
   action,
   children,
+  fill = false,
 }: {
   label: string;
   count: string;
   action?: React.ReactNode;
   children: React.ReactNode;
+  /** Estirarse para llenar el alto disponible (mapa a pantalla fija
+   *  en móvil: las filas del plano se reparten el espacio, sin scroll). */
+  fill?: boolean;
 }) {
   return (
-    <section>
+    <section
+      style={
+        fill
+          ? {
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+            }
+          : undefined
+      }
+    >
       <div
         style={{
           display: "flex",
