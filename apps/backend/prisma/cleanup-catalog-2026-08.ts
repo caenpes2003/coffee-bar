@@ -74,6 +74,13 @@ const FORCE_REMOVALS: Array<{ sku: string; label: string }> = [
     sku: "1_2_lucky_alaska_mq4icj05",
     label: "1/2 LUCKY ALASKA (categoría CIGARILLO duplicada)",
   },
+  {
+    // Mix viejo, reemplazado por bucket_v2_mix (que además permite
+    // lata). Estaba desactivado desde el seed v2; el dueño lo quiere
+    // fuera del todo.
+    sku: "bucket_aguila_poker_mix",
+    label: "CUBETAZO AGUILA + POKER (MIX) viejo",
+  },
 ];
 
 async function forceRemoveProduct(sku: string, label: string) {
