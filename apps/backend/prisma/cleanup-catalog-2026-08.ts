@@ -67,6 +67,13 @@ const FORCE_REMOVALS: Array<{ sku: string; label: string }> = [
     sku: "de_todito_paqueton_165_gr_mszg0mba",
     label: "DE TODITO PAQUETON (categoría GALGUERIA duplicada)",
   },
+  {
+    // Único habitante de la categoría "CIGARILLO" mal escrita (ya
+    // estaba inactivo; el equivalente vivo es LUCKY ALASKA en
+    // CIGARRILLOS). Borrarlo hace desaparecer la categoría.
+    sku: "1_2_lucky_alaska_mq4icj05",
+    label: "1/2 LUCKY ALASKA (categoría CIGARILLO duplicada)",
+  },
 ];
 
 async function forceRemoveProduct(sku: string, label: string) {
