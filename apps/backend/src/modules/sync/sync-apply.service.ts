@@ -137,6 +137,36 @@ export class SyncApplyService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
+    // Guardia anti-regresión para snapshots: si ya se aplicó un evento
+    // MÁS NUEVO (occurred_at mayor) del mismo aggregate, aplicar este
+    // pisaría el estado final con uno viejo. Se marca applied como
+    // stale sin tocar datos. Cubre desorden real de llegada (lotes con
+    // fallas parciales, reintentos cruzados), no solo replay.
+    if (SNAPSHOT_EVENT_TYPES.has(event.event_type)) {
+      const newerApplied = await this.prisma.inboxEvent.findFirst({
+        where: {
+          node_id: event.node_id,
+          aggregate_id: event.aggregate_id,
+          status: InboxStatus.applied,
+          occurred_at: { gt: event.occurred_at },
+        },
+        select: { id: true },
+      });
+      if (newerApplied) {
+        await this.prisma.inboxEvent.update({
+          where: { id: eventId },
+          data: {
+            status: InboxStatus.applied,
+            applied_at: new Date(),
+            last_error:
+              "stale: ya se aplicó un snapshot más nuevo del mismo aggregate — este no toca datos",
+            next_attempt_at: null,
+          },
+        });
+        return true;
+      }
+    }
+
     try {
       await this.prisma.$transaction(async (tx) => {
         await applier(tx, event.payload as Record<string, unknown>);
