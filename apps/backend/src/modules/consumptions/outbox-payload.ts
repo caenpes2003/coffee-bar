@@ -35,6 +35,21 @@ export type ConsumptionCreatedPayload = {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  // ─── Referencias cross-nodo (Fase 2 de sync) ─────────────────────
+  // Los ints de arriba son PKs LOCALES del nodo emisor — el applier
+  // del cloud no puede resolverlos. Los padres OPERATIVOS viajan por
+  // external_id (los de catálogo — product_id — son estables entre
+  // nodos porque el catálogo se replica por PK, §7).
+  table_session_external_id: string;
+  cash_register_session_external_id: string | null;
+  reverses_external_id: string | null;
+};
+
+/** Referencias de padres operativos que el applier cross-nodo necesita. */
+export type ConsumptionOutboxRefs = {
+  table_session_external_id: string;
+  cash_register_session_external_id?: string | null;
+  reverses_external_id?: string | null;
 };
 
 /**
@@ -45,6 +60,7 @@ export type ConsumptionCreatedPayload = {
  */
 export function serializeConsumptionForOutbox(
   consumption: Consumption,
+  refs: ConsumptionOutboxRefs,
 ): ConsumptionCreatedPayload {
   return {
     id: consumption.id,
@@ -62,6 +78,10 @@ export function serializeConsumptionForOutbox(
     notes: consumption.notes,
     created_by: consumption.created_by,
     created_at: consumption.created_at.toISOString(),
+    table_session_external_id: refs.table_session_external_id,
+    cash_register_session_external_id:
+      refs.cash_register_session_external_id ?? null,
+    reverses_external_id: refs.reverses_external_id ?? null,
   };
 }
 

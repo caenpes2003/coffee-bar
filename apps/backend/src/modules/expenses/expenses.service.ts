@@ -87,7 +87,7 @@ export class ExpensesService {
         event_type: "expense.created",
         aggregate_type: "Expense",
         aggregate_id: created.external_id,
-        payload: serializeExpenseForOutbox(created),
+        payload: serializeExpenseForOutbox(created, cashSession.external_id),
       });
 
       return created;
@@ -180,6 +180,7 @@ export class ExpensesService {
         payload: serializeExpenseReversalForOutbox(
           reversal,
           original.external_id,
+          cashSession.external_id,
         ),
       });
 

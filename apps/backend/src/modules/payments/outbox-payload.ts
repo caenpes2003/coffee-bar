@@ -26,10 +26,22 @@ export type PaymentCreatedPayload = {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  // Referencias cross-nodo (Fase 2 de sync): los ints de arriba son
+  // PKs locales del emisor; el applier del cloud resuelve por estos.
+  table_session_external_id: string;
+  cash_register_session_external_id: string;
+  consumption_external_id: string | null;
+};
+
+export type PaymentOutboxRefs = {
+  table_session_external_id: string;
+  cash_register_session_external_id: string;
+  consumption_external_id?: string | null;
 };
 
 export function serializePaymentForOutbox(
   payment: Payment,
+  refs: PaymentOutboxRefs,
 ): PaymentCreatedPayload {
   return {
     id: payment.id,
@@ -44,6 +56,10 @@ export function serializePaymentForOutbox(
     notes: payment.notes,
     created_by: payment.created_by,
     created_at: payment.created_at.toISOString(),
+    table_session_external_id: refs.table_session_external_id,
+    cash_register_session_external_id:
+      refs.cash_register_session_external_id,
+    consumption_external_id: refs.consumption_external_id ?? null,
   };
 }
 
@@ -66,11 +82,15 @@ export type PaymentReversedPayload = {
   reverse_reason_detail: string | null;
   created_by: string | null;
   created_at: string;
+  // Referencias cross-nodo (Fase 2 de sync).
+  table_session_external_id: string;
+  cash_register_session_external_id: string;
 };
 
 export function serializePaymentReversalForOutbox(
   reversal: Payment,
   reversesExternalId: string,
+  refs: PaymentOutboxRefs,
 ): PaymentReversedPayload {
   return {
     id: reversal.id,
@@ -84,5 +104,8 @@ export function serializePaymentReversalForOutbox(
     reverse_reason_detail: reversal.reverse_reason_detail,
     created_by: reversal.created_by,
     created_at: reversal.created_at.toISOString(),
+    table_session_external_id: refs.table_session_external_id,
+    cash_register_session_external_id:
+      refs.cash_register_session_external_id,
   };
 }

@@ -291,6 +291,14 @@ export class OrdersService {
     // transaccional (no por race entre check del guard y commit).
     const cashSession = await this.cashRegister.requireOpen(tx);
 
+    // external_id de la sesión para las referencias cross-nodo del
+    // payload (los ints locales no significan nada en el cloud). Un
+    // select puntual por entrega — despreciable.
+    const sessionRef = await tx.tableSession.findUniqueOrThrow({
+      where: { id: order.table_session_id },
+      select: { external_id: true },
+    });
+
     let totalDelta = new Prisma.Decimal(0);
     // Acumulamos mismatches detectados para reportarlos UNA vez al final
     // del ciclo (un solo AuditLog + un solo emit por order). Reportar
@@ -333,7 +341,10 @@ export class OrdersService {
         event_type: "consumption.created",
         aggregate_type: "Consumption",
         aggregate_id: created.external_id,
-        payload: serializeConsumptionForOutbox(created),
+        payload: serializeConsumptionForOutbox(created, {
+          table_session_external_id: sessionRef.external_id,
+          cash_register_session_external_id: cashSession.external_id,
+        }),
       });
 
       // Comparación de seguridad: el OrderItem se creó con `unit_price`

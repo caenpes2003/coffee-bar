@@ -1005,6 +1005,9 @@ model InboxEvent {
   applied_at      DateTime?
   apply_attempts  Int         @default(0)
   last_error      String?
+  // Backoff del applier: eventos con padre aún no aplicado (o error
+  // transitorio) esperan hasta next_attempt_at antes de reintentar.
+  next_attempt_at DateTime?
 
   @@unique([node_id, idempotency_key])
   @@index([status, occurred_at])

@@ -49,7 +49,10 @@ export class ExtraIncomeService {
   ) {}
 
   /** Payload de sync para extra_income.created (MVP 2). */
-  private serializeForOutbox(row: ExtraIncome) {
+  private serializeForOutbox(
+    row: ExtraIncome,
+    cashRegisterSessionExternalId: string,
+  ) {
     return {
       external_id: row.external_id,
       type: row.type,
@@ -59,6 +62,8 @@ export class ExtraIncomeService {
       quantity: row.quantity,
       total_amount: Number(row.total_amount),
       cash_register_session_id: row.cash_register_session_id,
+      // Referencia cross-nodo: el int de arriba es PK local del emisor.
+      cash_register_session_external_id: cashRegisterSessionExternalId,
       concept: row.concept,
       created_by: row.created_by,
       created_at: row.created_at.toISOString(),
@@ -100,7 +105,7 @@ export class ExtraIncomeService {
         event_type: "extra_income.created",
         aggregate_type: "ExtraIncome",
         aggregate_id: row.external_id,
-        payload: this.serializeForOutbox(row),
+        payload: this.serializeForOutbox(row, cashSession.external_id),
       });
       return row;
     });
@@ -139,7 +144,7 @@ export class ExtraIncomeService {
         event_type: "extra_income.created",
         aggregate_type: "ExtraIncome",
         aggregate_id: row.external_id,
-        payload: this.serializeForOutbox(row),
+        payload: this.serializeForOutbox(row, cashSession.external_id),
       });
       return row;
     });

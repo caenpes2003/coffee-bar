@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { SyncApplyService } from "./sync-apply.service";
 import { SyncController } from "./sync.controller";
 import { SyncIngestService } from "./sync-ingest.service";
 import { SyncWorkerService } from "./sync-worker.service";
@@ -15,6 +16,6 @@ import { SyncWorkerService } from "./sync-worker.service";
  */
 @Module({
   controllers: [SyncController],
-  providers: [SyncIngestService, SyncWorkerService],
+  providers: [SyncIngestService, SyncWorkerService, SyncApplyService],
 })
 export class SyncModule {}

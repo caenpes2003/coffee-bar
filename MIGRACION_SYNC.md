@@ -4,10 +4,11 @@
 > momento del último commit. Se actualiza con cada paso significativo
 > del roadmap. Documento ancla: [ARQUITECTURA.md](./ARQUITECTURA.md).
 
-**Última actualización:** 2026-08-31
-**Versión MVP en curso:** MVP 2 (sincronización Local → Cloud)
-**Próximo hito:** Fase 2 del transporte — appliers en el cloud
-(materializar InboxEvent → tablas por aggregate).
+**Última actualización:** 2026-08-31 (2)
+**Versión MVP en curso:** MVP 2 (sincronización Local → Cloud) — COMPLETO
+**Próximo hito:** MVP 1 deployment — el PC del bar como nodo local
+(docker-compose, NODE_ID propio, fila en NodeRegistry, catálogo
+read-only en modo local).
 
 ---
 
@@ -388,15 +389,38 @@ las 12:00 sin que el sistema cambie de día en medio del turno.
      `https://coffee-music-production.up.railway.app/api`),
      `SYNC_INGEST_KEY` (compartida emisor/receptor),
      `SYNC_POLL_MS` y `SYNC_BATCH_SIZE` opcionales.
-5. **Fase 2 — appliers en el cloud**: consumer que toma InboxEvent
-   `received` y materializa cada event_type en sus tablas (upsert por
-   `(aggregate_type, aggregate_id)`), con quarantine por
-   schema_version incompatible.
+5. ✅ **Fase 2 — appliers COMPLETA** (2026-08-31):
+   - **Payloads enriquecidos con referencias cross-nodo**: los padres
+     OPERATIVOS viajan por external_id
+     (`table_session_external_id`, `cash_register_session_external_id`,
+     `consumption_external_id`, `reverses_external_id`) — los ints son
+     PKs locales del emisor y solo sirven para debug. El catálogo
+     (product_id, table_id) usa PKs directos: son estables entre nodos
+     porque el catálogo se replica por PK (§7).
+   - **`sync-appliers.ts`**: 19 event types → upserts idempotentes por
+     external_id (crear-si-no-existe; las filas conservan el
+     external_id del emisor). Snapshots (session.*, cash_register.*)
+     pisan estado completo — último gana. `order.status_changed` es
+     no-op documentado hasta que Orders se repliquen. §5.5 respetado:
+     `inventory.recorded` solo materializa el ledger, jamás toca
+     Product.stock.
+   - **`sync-apply.service.ts`**: procesa InboxEvent `received` en
+     orden de llegada, cada evento en su propia tx; MissingParent →
+     backoff corto (2s..5min); errores → quarantine tras 20 intentos;
+     **superseded**: un snapshot intermedio que choca con un unique
+     parcial (una-sesión-activa-por-mesa, una-jornada-abierta) se
+     marca applied si hay un evento más nuevo del mismo aggregate en
+     cola. Activo solo donde `SYNC_INGEST_KEY` existe (cloud).
+   - **Validado en dev** (replay masivo): 1.161 eventos históricos
+     re-aplicados sobre la BD que ya contenía esas entidades →
+     conteos idénticos (0 duplicados, 0 corrupción), 99 snapshots en
+     conflicto resueltos como superseded.
 6. **MVP 1 deployment del local** (PC del bar: docker-compose,
    `NODE_ID=local-crown-001`, fila en NodeRegistry, catálogo
    read-only). Decisiones del dueño 2026-08-31: hay PC disponible en
    el bar; alcance offline de la primera etapa = admin + TV (los
-   celulares de clientes esperan al internet).
+   celulares de clientes esperan al internet). LISTEN/NOTIFY diferido
+   a la fase de hot standby Cloud→Local.
 7. **MVP 3 failover + QR inteligente**.
 
 ---

@@ -50,6 +50,35 @@ export class PaymentsService {
   ) {}
 
   /**
+   * external_ids de los padres operativos para las referencias
+   * cross-nodo del payload (Fase 2 de sync). Selects puntuales dentro
+   * de la tx del caller — los ints locales no viajan solos al cloud.
+   */
+  private async loadOutboxRefs(
+    tx: Tx,
+    tableSessionId: number,
+    cashRegisterSessionId: number,
+  ): Promise<{
+    table_session_external_id: string;
+    cash_register_session_external_id: string;
+  }> {
+    const [session, cash] = await Promise.all([
+      tx.tableSession.findUniqueOrThrow({
+        where: { id: tableSessionId },
+        select: { external_id: true },
+      }),
+      tx.cashRegisterSession.findUniqueOrThrow({
+        where: { id: cashRegisterSessionId },
+        select: { external_id: true },
+      }),
+    ]);
+    return {
+      table_session_external_id: session.external_id,
+      cash_register_session_external_id: cash.external_id,
+    };
+  }
+
+  /**
    * Registrar un pago parcial dentro de la transacción del caller.
    *
    * Asume que ya existe un Consumption(type=partial_payment) creado
@@ -81,11 +110,23 @@ export class PaymentsService {
         created_by: input.actor?.name ?? null,
       },
     });
+    const refs = await this.loadOutboxRefs(
+      tx,
+      input.table_session_id,
+      input.cash_register_session_id,
+    );
+    const consumption = await tx.consumption.findUniqueOrThrow({
+      where: { id: input.consumption_id },
+      select: { external_id: true },
+    });
     await this.outbox.enqueue(tx, {
       event_type: "payment.created",
       aggregate_type: "Payment",
       aggregate_id: created.external_id,
-      payload: serializePaymentForOutbox(created),
+      payload: serializePaymentForOutbox(created, {
+        ...refs,
+        consumption_external_id: consumption.external_id,
+      }),
     });
     return created;
   }
@@ -114,6 +155,11 @@ export class PaymentsService {
       actor: Actor;
     },
   ): Promise<Payment[]> {
+    const refs = await this.loadOutboxRefs(
+      tx,
+      input.table_session_id,
+      input.cash_register_session_id,
+    );
     const created: Payment[] = [];
     for (const p of input.payments) {
       const row = await tx.payment.create({
@@ -133,7 +179,7 @@ export class PaymentsService {
         event_type: "payment.created",
         aggregate_type: "Payment",
         aggregate_id: row.external_id,
-        payload: serializePaymentForOutbox(row),
+        payload: serializePaymentForOutbox(row, refs),
       });
       created.push(row);
     }
@@ -248,6 +294,11 @@ export class PaymentsService {
         },
       });
 
+      const refs = await this.loadOutboxRefs(
+        tx,
+        reversal.table_session_id,
+        reversal.cash_register_session_id,
+      );
       await this.outbox.enqueue(tx, {
         event_type: "payment.reversed",
         aggregate_type: "Payment",
@@ -255,6 +306,7 @@ export class PaymentsService {
         payload: serializePaymentReversalForOutbox(
           reversal,
           original.external_id,
+          refs,
         ),
       });
 

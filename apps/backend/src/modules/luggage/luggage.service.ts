@@ -133,6 +133,8 @@ export class LuggageService {
             payment_status: row.payment_status,
             method: row.method,
             cash_register_session_id: row.cash_register_session_id,
+            // Referencia cross-nodo: el int es PK local del emisor.
+            cash_register_session_external_id: cashSession.external_id,
             created_by: row.created_by,
             created_at: row.created_at.toISOString(),
           },

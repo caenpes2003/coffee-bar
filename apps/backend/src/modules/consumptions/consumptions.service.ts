@@ -331,7 +331,10 @@ export class ConsumptionsService {
         event_type: "consumption.created",
         aggregate_type: "Consumption",
         aggregate_id: created.external_id,
-        payload: serializeConsumptionForOutbox(created),
+        payload: serializeConsumptionForOutbox(created, {
+          table_session_external_id: session.external_id,
+          cash_register_session_external_id: cashSession.external_id,
+        }),
       });
       await tx.tableSession.update({
         where: { id: sessionId },
@@ -442,7 +445,10 @@ export class ConsumptionsService {
         event_type: "consumption.created",
         aggregate_type: "Consumption",
         aggregate_id: created.external_id,
-        payload: serializeConsumptionForOutbox(created),
+        payload: serializeConsumptionForOutbox(created, {
+          table_session_external_id: session.external_id,
+          cash_register_session_external_id: cashSession.external_id,
+        }),
       });
       // Asignaciones a líneas específicas ("cada quien paga lo suyo"),
       // validadas y calculadas server-side dentro de la misma tx.
@@ -651,7 +657,12 @@ export class ConsumptionsService {
       where: { id: consumptionId },
       include: {
         table_session: {
-          select: { id: true, table_id: true, status: true },
+          select: {
+            id: true,
+            table_id: true,
+            status: true,
+            external_id: true,
+          },
         },
       },
     });
@@ -738,13 +749,18 @@ export class ConsumptionsService {
       });
       // Enqueue dentro de la misma tx. El refund es una fila NUEVA de
       // Consumption (no un update del original), así que emite
-      // consumption.created — el cloud verá reverses_id != null y sabrá
-      // que es un refund.
+      // consumption.created — el cloud ve reverses_external_id y sabe
+      // exactamente a qué línea anula.
       await this.outbox.enqueue(tx, {
         event_type: "consumption.created",
         aggregate_type: "Consumption",
         aggregate_id: created.external_id,
-        payload: serializeConsumptionForOutbox(created),
+        payload: serializeConsumptionForOutbox(created, {
+          table_session_external_id: original.table_session.external_id,
+          cash_register_session_external_id:
+            cashSession?.external_id ?? null,
+          reverses_external_id: original.external_id,
+        }),
       });
 
       await tx.tableSession.update({

@@ -104,6 +104,9 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "type", errors);
     requireString(payload, "description", errors);
     requireNumber(payload, "amount", errors);
+    // Referencia cross-nodo (Fase 2): el applier del cloud resuelve
+    // la sesión por external_id, no por el int local.
+    requireExternalId(payload, "table_session_external_id", errors);
     return errors;
   },
 
@@ -222,6 +225,7 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "method", errors);
     requireNumber(payload, "total_amount", errors);
     requireNumber(payload, "cash_register_session_id", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
   "extra_income.reversed": (payload) => {
@@ -243,6 +247,7 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireNumber(payload, "amount", errors);
     requireString(payload, "payment_status", errors);
     requireNumber(payload, "cash_register_session_id", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
   "luggage.updated": (payload) => {
@@ -266,6 +271,8 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "method", errors);
     requireString(payload, "kind", errors);
     requireNumber(payload, "amount", errors);
+    requireExternalId(payload, "table_session_external_id", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
 
@@ -284,6 +291,8 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "method", errors);
     requireNumber(payload, "amount", errors);
     requireString(payload, "reverse_reason", errors);
+    requireExternalId(payload, "table_session_external_id", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
 
@@ -324,6 +333,7 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "category", errors);
     requireNumber(payload, "amount", errors);
     requireString(payload, "concept", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
 
@@ -339,6 +349,7 @@ export const OUTBOX_EVENT_REGISTRY: Record<string, PayloadValidator> = {
     requireString(payload, "method", errors);
     requireNumber(payload, "amount", errors);
     requireString(payload, "reverse_reason", errors);
+    requireExternalId(payload, "cash_register_session_external_id", errors);
     return errors;
   },
 };

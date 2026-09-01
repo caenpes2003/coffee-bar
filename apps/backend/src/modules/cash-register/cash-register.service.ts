@@ -297,13 +297,12 @@ export class CashRegisterService {
             event_type: "expense.created",
             aggregate_type: "Expense",
             aggregate_id: expense.external_id,
-            payload: serializeExpenseForOutbox(expense),
+            payload: serializeExpenseForOutbox(expense, closed.external_id),
           });
         } else {
           // Sobrante: entró plata que el ledger no explica → ingreso
-          // extra manual. (ExtraIncome aún no emite outbox — igual que
-          // los demás ingresos extra, pendiente de MVP 2.)
-          await tx.extraIncome.create({
+          // extra manual.
+          const extra = await tx.extraIncome.create({
             data: {
               type: "manual",
               // El sobrante es plata FÍSICA contada en la caja.
@@ -316,6 +315,25 @@ export class CashRegisterService {
               notes: `Conciliación automática al cerrar. Esperado ${expected.toString()}, declarado ${declared.toString()}.`,
               created_by: actor?.name ?? null,
               cash_register_session_id: closed.id,
+            },
+          });
+          await this.outbox.enqueue(tx, {
+            event_type: "extra_income.created",
+            aggregate_type: "ExtraIncome",
+            aggregate_id: extra.external_id,
+            payload: {
+              external_id: extra.external_id,
+              type: extra.type,
+              subtype: extra.subtype,
+              method: extra.method,
+              amount: Number(extra.amount),
+              quantity: extra.quantity,
+              total_amount: Number(extra.total_amount),
+              cash_register_session_id: extra.cash_register_session_id,
+              cash_register_session_external_id: closed.external_id,
+              concept: extra.concept,
+              created_by: extra.created_by,
+              created_at: extra.created_at.toISOString(),
             },
           });
         }

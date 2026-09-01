@@ -25,10 +25,14 @@ export type ExpenseCreatedPayload = {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  // Referencia cross-nodo (Fase 2 de sync): el int de arriba es PK
+  // local del emisor; el applier del cloud resuelve por este.
+  cash_register_session_external_id: string;
 };
 
 export function serializeExpenseForOutbox(
   expense: Expense,
+  cashRegisterSessionExternalId: string,
 ): ExpenseCreatedPayload {
   return {
     id: expense.id,
@@ -44,6 +48,7 @@ export function serializeExpenseForOutbox(
     notes: expense.notes,
     created_by: expense.created_by,
     created_at: expense.created_at.toISOString(),
+    cash_register_session_external_id: cashRegisterSessionExternalId,
   };
 }
 
@@ -63,11 +68,13 @@ export type ExpenseReversedPayload = {
   reverse_reason: string;
   created_by: string | null;
   created_at: string;
+  cash_register_session_external_id: string;
 };
 
 export function serializeExpenseReversalForOutbox(
   reversal: Expense,
   reversesExternalId: string,
+  cashRegisterSessionExternalId: string,
 ): ExpenseReversedPayload {
   return {
     id: reversal.id,
@@ -80,5 +87,6 @@ export function serializeExpenseReversalForOutbox(
     reverse_reason: reversal.reverse_reason ?? "",
     created_by: reversal.created_by,
     created_at: reversal.created_at.toISOString(),
+    cash_register_session_external_id: cashRegisterSessionExternalId,
   };
 }
