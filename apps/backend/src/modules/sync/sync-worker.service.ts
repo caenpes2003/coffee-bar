@@ -15,14 +15,22 @@ import { OutboxConfigService } from "../outbox/outbox-config.service";
  * (que no tiene upstream) la env no existe y el worker queda apagado
  * — mismo binario para ambos roles, como manda ARQUITECTURA §1.
  *
- * Política (§4): polling cada 5s (sin Kafka, §15), lotes en orden
- * occurred_at ASC, backoff exponencial 1s/5s/30s/2min/10min/1h por
- * evento vía next_attempt_at, `pushed` al confirmar, `quarantined`
- * tras 10 intentos con error PERMANENTE (4xx) — nunca descartar
+ * Política (§4): polling cada 1s (sin Kafka, §15) con drain continuo
+ * — mientras los lotes salgan LLENOS y el push confirme, el siguiente
+ * lote sale de inmediato sin esperar el intervalo (una ráfaga de N
+ * eventos viaja completa en un tick). Lotes en orden occurred_at ASC,
+ * backoff exponencial 1s/5s/30s/2min/10min/1h por evento vía
+ * next_attempt_at, `pushed` al confirmar, `quarantined` tras 10
+ * intentos con error PERMANENTE (4xx) — nunca descartar
  * silenciosamente. Errores transitorios (red, 5xx) mantienen pending
- * con backoff.
+ * con backoff (y cortan la ráfaga: el próximo tick reintenta).
+ *
+ * Latencia ~0 real (LISTEN/NOTIFY de Postgres, que entrega la
+ * notificación exactamente al commit): DIFERIDA a propósito para la
+ * fase de hot standby Cloud→Local, donde la reducción de RPO sí paga
+ * la complejidad. Decisión del dueño 2026-08-31.
  */
-const POLL_MS = Number(process.env.SYNC_POLL_MS ?? 5_000);
+const POLL_MS = Number(process.env.SYNC_POLL_MS ?? 1_000);
 const BATCH_SIZE = Number(process.env.SYNC_BATCH_SIZE ?? 50);
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_ATTEMPTS = 10;
@@ -66,22 +74,33 @@ export class SyncWorkerService implements OnModuleInit, OnModuleDestroy {
     if (this.interval) clearInterval(this.interval);
   }
 
-  /** Un ciclo de drain. Reentrada bloqueada (ticks lentos no se apilan). */
+  /**
+   * Un ciclo de drain. Reentrada bloqueada (ticks lentos no se
+   * apilan). Ráfaga: mientras el lote salga LLENO y el push confirme,
+   * el siguiente sale de inmediato — un backlog grande se drena
+   * completo en un solo tick en vez de gotear a 50/intervalo.
+   */
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      const now = new Date();
-      const batch = await this.prisma.outboxEvent.findMany({
-        where: {
-          status: OutboxStatus.pending,
-          OR: [{ next_attempt_at: null }, { next_attempt_at: { lte: now } }],
-        },
-        orderBy: { occurred_at: "asc" },
-        take: BATCH_SIZE,
-      });
-      if (batch.length === 0) return;
-      await this.pushBatch(batch);
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const now = new Date();
+        const batch = await this.prisma.outboxEvent.findMany({
+          where: {
+            status: OutboxStatus.pending,
+            OR: [{ next_attempt_at: null }, { next_attempt_at: { lte: now } }],
+          },
+          orderBy: { occurred_at: "asc" },
+          take: BATCH_SIZE,
+        });
+        if (batch.length === 0) break;
+        const pushed = await this.pushBatch(batch);
+        // Falla → los eventos quedaron con next_attempt_at futuro; el
+        // próximo tick reintenta. Lote corto → la cola quedó vacía.
+        if (!pushed || batch.length < BATCH_SIZE) break;
+      }
     } catch (err) {
       // El tick jamás tumba el proceso: el próximo lo reintenta.
       this.logger.error(
@@ -92,7 +111,8 @@ export class SyncWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async pushBatch(batch: OutboxEvent[]): Promise<void> {
+  /** @returns true si el lote quedó `pushed` (habilita la ráfaga). */
+  private async pushBatch(batch: OutboxEvent[]): Promise<boolean> {
     const ids = batch.map((e) => e.id);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -129,7 +149,7 @@ export class SyncWorkerService implements OnModuleInit, OnModuleDestroy {
         `network: ${err instanceof Error ? err.message : String(err)}`,
         false,
       );
-      return;
+      return false;
     } finally {
       clearTimeout(timeout);
     }
@@ -145,7 +165,7 @@ export class SyncWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       });
       this.logger.log(`Push OK: ${ids.length} evento(s) → pushed`);
-      return;
+      return true;
     }
 
     const body = await response.text().catch(() => "");
@@ -159,6 +179,7 @@ export class SyncWorkerService implements OnModuleInit, OnModuleDestroy {
       `HTTP ${response.status}: ${body.slice(0, 300)}`,
       permanent,
     );
+    return false;
   }
 
   private async markFailed(
