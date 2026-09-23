@@ -69,14 +69,14 @@ primero.
 
 ## 2. Autoridad por dominio
 
-| Dominio | Fuente de verdad | Dirección de sync |
-|---|---|---|
-| **Catálogo** (Product, Recipe, User, Setting, HousePlaylistItem, Category, Table config) | Cloud | Cloud → Local (pull al iniciar + webhook al editar) |
-| **Operación** (TableSession, Order*, Consumption, **Payment**, **PartialPayment**, **CashMovement**, InventoryMovement, ExtraIncome, LuggageTicket, AuditLog) | Local | Local → Cloud (outbox asíncrono) |
-| **Runtime musical** (QueueItem, Song, PlaybackState, fairness) | Local | No se replica al cloud (cloud-only opera con su propio set) |
-| **Búsqueda externa** (YouTube/Spotify Search API) | Solo disponible online | No aplica — proxy externo, no se cachea |
-| **Códigos de acceso** (BarAccessCode) | Cloud | Cloud → Local (pull) — local NO rota |
-| **Tokens JWT** | Cada nodo emite los suyos | No se replican |
+| Dominio                                                                                                                                                        | Fuente de verdad          | Dirección de sync                                           |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------- |
+| **Catálogo** (Product, Recipe, User, Setting, HousePlaylistItem, Category, Table config)                                                                       | Cloud                     | Cloud → Local (pull al iniciar + webhook al editar)         |
+| **Operación** (TableSession, Order\*, Consumption, **Payment**, **PartialPayment**, **CashMovement**, InventoryMovement, ExtraIncome, LuggageTicket, AuditLog) | Local                     | Local → Cloud (outbox asíncrono)                            |
+| **Runtime musical** (QueueItem, Song, PlaybackState, fairness)                                                                                                 | Local                     | No se replica al cloud (cloud-only opera con su propio set) |
+| **Búsqueda externa** (YouTube/Spotify Search API)                                                                                                              | Solo disponible online    | No aplica — proxy externo, no se cachea                     |
+| **Códigos de acceso** (BarAccessCode)                                                                                                                          | Cloud                     | Cloud → Local (pull) — local NO rota                        |
+| **Tokens JWT**                                                                                                                                                 | Cada nodo emite los suyos | No se replican                                              |
 
 ### Reglas de autoridad
 
@@ -99,7 +99,7 @@ Hoy estos conceptos viven materializados dentro de entidades
 existentes:
 
 - **Payment** (cobro al cierre de la cuenta) → `TableSession.paid_at`
-  + monto en `TableSession.total_consumption`.
+  - monto en `TableSession.total_consumption`.
 - **PartialPayment** (anticipo durante la operación) →
   `Consumption.type='partial_payment'` (monto negativo).
 - **CashMovement** (apertura/cierre de caja, retiros, depósitos) →
@@ -205,7 +205,7 @@ model NodeRegistry {
 Usos:
 
 - **Validación de tokens:** el guard JWT verifica `iss ∈ NodeRegistry
-  WHERE is_active = true`. Si un nodo se retira (`is_active=false`),
+WHERE is_active = true`. Si un nodo se retira (`is_active=false`),
   sus tokens emitidos dejan de aceptarse.
 - **Dashboard cloud:** "qué locales tengo activos, cuál fue el último
   heartbeat, cuál está en schema desactualizado".
@@ -613,12 +613,12 @@ Comunicación visible al cliente solo cuando aplica:
 
 ## 12. Pagos
 
-| Tipo | Cloud caído | Internet del local caído |
-|---|---|---|
-| Efectivo | ✅ Funciona | ✅ Funciona |
-| Pagos parciales | ✅ Funciona (queda en local) | ✅ Funciona |
-| Tarjeta con datafono físico | ✅ Funciona (es independiente) | ✅ Funciona (datafono usa su propio 4G) |
-| Pagos online (PSE, Bold, Nequi) | ⚠️ Webhooks no llegan | ❌ No funciona |
+| Tipo                            | Cloud caído                    | Internet del local caído                |
+| ------------------------------- | ------------------------------ | --------------------------------------- |
+| Efectivo                        | ✅ Funciona                    | ✅ Funciona                             |
+| Pagos parciales                 | ✅ Funciona (queda en local)   | ✅ Funciona                             |
+| Tarjeta con datafono físico     | ✅ Funciona (es independiente) | ✅ Funciona (datafono usa su propio 4G) |
+| Pagos online (PSE, Bold, Nequi) | ⚠️ Webhooks no llegan          | ❌ No funciona                          |
 
 Todos los pagos quedan registrados en `Consumption` (efectivo y
 parciales) o `TableSession.paid_at` (cierre). Cuando cloud vuelva, los
@@ -784,14 +784,14 @@ Términos estándar de continuidad de negocio aplicados a Crown Bar:
 
 ### Objetivos comprometidos
 
-| Falla | RTO objetivo | RPO objetivo | Cómo se garantiza |
-|---|---|---|---|
-| **Cloud caído** (Railway no responde) | < 30 s | 0 | Local sigue operando standalone; transición automática a `LOCAL_PRIMARY` por health check. |
-| **Internet del local caído** | < 30 s | 0 | Operación 100% local; los clientes en mesa siguen conectados al WiFi del bar. Búsqueda externa de YouTube deshabilitada (degradación controlada). |
-| **Mini-PC del local apagado** (corte de luz, falla hardware) | 1-5 min con UPS · varias horas sin UPS | 0 si el UPS soportó la transición · hasta 5 min sin UPS | UPS obligatorio. Postgres con `fsync=on` (default). Outbox transaccional garantiza atomicidad. |
-| **Postgres local corrupto** | 30-60 min | 24 h máximo | Restore desde snapshot diario a S3 (RPO = ventana hasta el último snapshot). Snapshots probados mensualmente. |
-| **Mini-PC físicamente destruido** | 4-8 h (compra + setup + restore) | 24 h | Snapshot diario en S3 + script de provisionamiento documentado. |
-| **Cloud destruido completamente** | 1-4 h | 0 | Los datos de operación viven en local. Cloud se reconstruye desde último snapshot + el outbox local replica el resto. |
+| Falla                                                        | RTO objetivo                           | RPO objetivo                                            | Cómo se garantiza                                                                                                                                 |
+| ------------------------------------------------------------ | -------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloud caído** (Railway no responde)                        | < 30 s                                 | 0                                                       | Local sigue operando standalone; transición automática a `LOCAL_PRIMARY` por health check.                                                        |
+| **Internet del local caído**                                 | < 30 s                                 | 0                                                       | Operación 100% local; los clientes en mesa siguen conectados al WiFi del bar. Búsqueda externa de YouTube deshabilitada (degradación controlada). |
+| **Mini-PC del local apagado** (corte de luz, falla hardware) | 1-5 min con UPS · varias horas sin UPS | 0 si el UPS soportó la transición · hasta 5 min sin UPS | UPS obligatorio. Postgres con `fsync=on` (default). Outbox transaccional garantiza atomicidad.                                                    |
+| **Postgres local corrupto**                                  | 30-60 min                              | 24 h máximo                                             | Restore desde snapshot diario a S3 (RPO = ventana hasta el último snapshot). Snapshots probados mensualmente.                                     |
+| **Mini-PC físicamente destruido**                            | 4-8 h (compra + setup + restore)       | 24 h                                                    | Snapshot diario en S3 + script de provisionamiento documentado.                                                                                   |
+| **Cloud destruido completamente**                            | 1-4 h                                  | 0                                                       | Los datos de operación viven en local. Cloud se reconstruye desde último snapshot + el outbox local replica el resto.                             |
 
 ### Lo que NO se compromete
 
@@ -823,14 +823,14 @@ arriba, revisar arquitectura o ajustar objetivos.
 
 ## 14. Plan de roadmap
 
-| MVP | Alcance | Horas estimadas |
-|---|---|---|
-| **MVP 0** (este documento) | Documento ancla + migration `external_id` | 4-8 h |
-| **MVP 1** | Local básico standalone: mini-PC operativo sin sync, reconciliación manual al cierre | 60-100 h |
-| **MVP 2** | OutboxEvent + sync worker + endpoint cloud `/sync/ingest` + `OperationalMode` + `PlaybackState` persistido + schema versioning + auth con `iss` | 120-180 h |
-| **MVP 3** | Edge gateway con health check + autoswitch del cliente + reconciliación bidireccional de catálogo + pool de fichas Luggage | 100-160 h |
-| **MVP 4** | Snapshots a S3 + restore verificable + dashboard de salud del sync + caos testing | 80-140 h |
-| **Total** | | **360-580 h** |
+| MVP                        | Alcance                                                                                                                                         | Horas estimadas |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **MVP 0** (este documento) | Documento ancla + migration `external_id`                                                                                                       | 4-8 h           |
+| **MVP 1**                  | Local básico standalone: mini-PC operativo sin sync, reconciliación manual al cierre                                                            | 60-100 h        |
+| **MVP 2**                  | OutboxEvent + sync worker + endpoint cloud `/sync/ingest` + `OperationalMode` + `PlaybackState` persistido + schema versioning + auth con `iss` | 120-180 h       |
+| **MVP 3**                  | Edge gateway con health check + autoswitch del cliente + reconciliación bidireccional de catálogo + pool de fichas Luggage                      | 100-160 h       |
+| **MVP 4**                  | Snapshots a S3 + restore verificable + dashboard de salud del sync + caos testing                                                               | 80-140 h        |
+| **Total**                  |                                                                                                                                                 | **360-580 h**   |
 
 ---
 
@@ -877,25 +877,17 @@ por qué se invierte la decisión:
 
 ---
 
-_Última actualización: 2026-06-08 — versión 1.2.0. Toda PR de
+_Última actualización: 2026-05-18 — versión 1.1.0. Toda PR de
 sincronización, deployment o continuidad debe referenciar la sección
 de este documento que aplica._
 
 ### Changelog
 
-- **1.2.0** (2026-06-08): aplicados 4 refuerzos — (A) `NodeRegistry`
-  como catálogo formal de nodos con heartbeat, versionado y pool de
-  fichas Luggage por nodo (§3.5); (B) `idempotency_key` UUID en
-  `OutboxEvent` con unique `(node_id, idempotency_key)` para
-  deduplicar reintentos de transporte (§4.1); (C) ownership de stock
-  declarado inviolable — `Product.stock` materialización, no autoridad;
-  prohibido `UPDATE stock=X` directo (§5.5); (D) objetivos RTO/RPO
-  explícitos por tipo de falla (§13.5).
 - **1.1.0** (2026-05-18): aplicados 5 ajustes — (1) música no muere en
   modo local: cola/playback/fairness siguen, solo búsqueda externa se
   deshabilita si no hay internet; (2) migrations no automáticas al
   arrancar contenedor — flujo `MAINTENANCE` explícito y `deploy-local.sh
-  migrate` manual; (3) sin Watchtower — updates manuales en ventanas
+migrate` manual; (3) sin Watchtower — updates manuales en ventanas
   programadas; (4) agregado `LocalHealthSnapshot` cada 5 min; (5) Payment,
   PartialPayment, CashMovement declarados explícitamente como dominio
   operativo aunque hoy se materialicen vía Consumption + TableSession.

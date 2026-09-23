@@ -19,7 +19,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
  * check `stock > 0` y la UI muestra `stock` directo.
  *
  * `derived_stock`: unidades completas del compuesto armables con el
- * stock actual de componentes (0 si el gating estricto lo bloquea).
+ * stock actual de componentes (0 si no alcanza para una unidad).
  * Reemplaza en UI al `stock` legacy que para compuestos no significa
  * nada (suele estar fijo en 999).
  */
